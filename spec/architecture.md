@@ -26,8 +26,8 @@
 | E2E testing | Playwright | `@playwright/test`, chromium, config at repo root, tests in `tests/e2e/` |
 | Backend testing | pytest | `tests/unit/`, `tests/integration/` |
 | LLM provider — help-desk (Phase 4) | OpenRouter | key: `OPENROUTER_API_KEY` (exact name — project convention); default model `anthropic/claude-sonnet-4-6` via `WORKSHOP0_AI_MODEL`. Unchanged by the trainer network; not migrated (§Key decisions). **Code truth (grep of `src/`, 2026-11-09):** only the settings fields and the `ai_usage`/`ai_state` schema exist — the pipeline module is absent (agent.md header) |
-| LLM provider — trainer network (Phase 11+) | **Anthropic, direct** (user decision) | `anthropic` Python SDK; key `ANTHROPIC_API_KEY` + `ANTHROPIC_WORKSPACE_ID`, the latter sent on **every** request as header `anthropic-workspace-id` (hard requirement — agent.md §Provider); models `claude-sonnet-5-5` (`WORKSHOP0_AI_NETWORK_MODEL`, extraction + ranking) and `claude-haiku-5-5` (`WORKSHOP0_AI_NETWORK_FAST_MODEL`, cheap calls); cost = tokens × `ai/pricing.py` table |
-| LLM SDK (Phase 11) | `anthropic` ≥0.40 | Added to `pyproject.toml` + `uv.lock` in the Phase-11 scaffold (Phase 10 adds no dependency). Constructed only in `src/workshop0/ai/anthropic_client.py` |
+| LLM provider — trainer network (Phase 11+) | **Anthropic, direct** (user decision) | `anthropic` Python SDK; key `ANTHROPIC_API_KEY` + `ANTHROPIC_WORKSPACE_ID`, the latter sent on **every** request as header `anthropic-workspace-id` (hard requirement — agent.md §Provider); models `claude-sonnet-5-5` (`WORKSHOP0_AI_NETWORK_MODEL`, CV extraction, opportunity drafting (P11b) + ranking) and `claude-haiku-5-5` (`WORKSHOP0_AI_NETWORK_FAST_MODEL`, cheap calls); cost = tokens × `ai/pricing.py` table |
+| LLM SDK (Phase 11) | `anthropic` ≥2.6.0 (brings its own httpx fork, `httpx2`) | Added to `pyproject.toml` + `uv.lock` in the Phase-11 scaffold (Phase 10 adds no dependency). Constructed only in `src/workshop0/ai/anthropic_client.py`; structured output via `output_config` json_schema (agent.md §Shared client) |
 | Deploy (production, Phase 7+) | **Cloud Run + Cloud SQL**, GitHub Actions + Workload Identity Federation | see §Production topology. Supersedes the Phase-5 VM path (Docker Compose + Caddy + SQLite on GCE), removed from the repo in Phase 8 (recoverable from git tag `vm-deploy-final`) |
 | Deploy (local) | Docker Compose (`deploy/docker-compose.yml`) | SQLite + volume; kept for local dev and self-hosters |
 | OIDC / sessions (Phase 11) | `pyjwt[crypto]` ≥2.9 (ID-token + JWKS verification via `PyJWKClient`), `itsdangerous` ≥2.2 (signed short-lived OIDC state cookie), httpx (discovery + code exchange) | No auth SDK: a ~300-line OIDC client inside `src/workshop0/auth/` keeps the module swappable for a central smallTech identity service |
@@ -131,6 +131,8 @@ src/workshop0/
 ├── api/
 │   ├── board_public.py        ← P10: /api/public/topics, /api/public/opportunities[/{id}]
 │   ├── board_admin.py         ← P10: /api/admin/opportunities…, /api/admin/topics…
+│   ├── partners_admin.py      ← P11b: /api/admin/partners…
+│   ├── board_ai_admin.py      ← P11b: /api/admin/opportunity-draft[/config] (paste-to-fill)
 │   ├── network_me.py          ← P11: /api/me/* (profile, CV, deletion); P12 applications/matches; P13 searches/prefs/workshops
 │   ├── network_admin.py       ← P11: /api/admin/network/* (pool, invites, CSV, ai-spend); P12 pipeline/shortlist/outbox
 │   ├── outbox_admin.py        ← P12: /api/admin/outbox…
@@ -138,20 +140,21 @@ src/workshop0/
 │   └── directory_public.py    ← P13: /api/public/trainers[/{id}]
 ├── auth/                      ← P11: THE identity module (swap seam) — oidc.py, sessions.py, deps.py, routes.py
 ├── services/
-│   ├── topics.py · opportunities.py   ← P10 (effective_status lives here)
+│   ├── topics.py · opportunities.py   ← P10 (effective_status lives here) · partners.py ← P11b
 │   ├── profiles.py · invites.py · ratelimit.py · cv_text.py   ← P11
 │   ├── applications.py · matching.py  ← P12
 │   └── alerts.py · directory.py · tiein.py   ← P13
 ├── storage/                   ← P11: blobstore.py (BlobStore, LocalDiskStore, GcsStore)
-├── ai/                        ← P11: anthropic_client.py (the only Anthropic client), pricing.py, usage.py, profile_draft.py, prompts/profile_draft_*.md · P12: shortlist_rank.py, prompts/shortlist_rank_*.md (network AI = Anthropic; the help-desk's openrouter.py is a separate, future Phase-4 file)
+├── ai/                        ← P11: anthropic_client.py (the only Anthropic client), pricing.py, usage.py, profile_draft.py, prompts/profile_draft_*.md · P11b: opportunity_draft.py, prompts/opportunity_draft_*.md · P12: shortlist_rank.py, prompts/shortlist_rank_*.md (network AI = Anthropic; the help-desk's openrouter.py is a separate, future Phase-4 file)
 └── email/                     ← P12: outbox.py (enqueue — P12 schema slice), sender.py, smtp.py, templates/*.txt|*.html
 frontend/
 ├── app/opportunities/{page,view/page}.tsx        ← P10 public board
-├── app/admin/{opportunities/{page,edit/page},topics/page}.tsx   ← P10 admin
+├── app/admin/{opportunities/{page,edit/page},topics/page}.tsx   ← P10 admin · app/admin/partners/page.tsx ← P11b
+├── components/admin/{partners,drafting}/        ← P11b (PartnerSelect; PasteToFill, DraftedChip)
 ├── app/signin/page.tsx, app/network/{page,join/page,me/page}.tsx   ← P11 (P12: applications/, matches/; P13: directory/, trainer/, searches/, unsubscribed/)
 ├── app/admin/network/{page,trainer/page}.tsx     ← P11 (P12: app/admin/outbox/, app/admin/opportunities/pipeline/)
 ├── components/{board,admin,network}/
-└── lib/{board,adminBoard}.ts (P10) · lib/{network,adminNetwork}.ts (P11)
+└── lib/{board,adminBoard}.ts (P10) · lib/{network,adminNetwork}.ts (P11) · lib/{adminPartners,adminDraft,compensation}.ts (P11b; compensation.ts is the only compensation formatter)
 tests/support/fake_oidc.py     ← P11
 ```
 
@@ -236,6 +239,7 @@ Two constraints the frontend slice must honour so this is safe (a generator must
 | `/opportunities` → 307 `/app/opportunities/` | Public board | none | 10 |
 | `/opportunities/{id}` → 307 `/app/opportunities/view/?id={id}` | Public listing | none | 10 |
 | `/app/admin/opportunities/`, `/app/admin/opportunities/edit/`, `/app/admin/topics/` | Admin board tooling | admin key (P11+: or admin session) | 10 |
+| `/app/admin/partners/` | Partner list | admin | 11b |
 | `/app/signin/`, `/app/network/`, `/app/network/join/`, `/app/network/me/` | Sign-in, network home, onboarding, my profile | session | 11 |
 | `/invite/{token}` → 307 `/app/network/join/?invite={token}`; `/network` → 307 `/app/network/` | Invite + pretty network link | none | 11 |
 | `/app/admin/network/`, `/app/admin/network/trainer/` | Trainer pool | admin | 11 |
@@ -249,18 +253,21 @@ Pretty redirects live in `src/workshop0/api/__init__.py` with the existing ones 
 - **Allow-list serializers.** `board_public.py` builds public payloads from an explicit field list; the internal partner name and notes are structurally unreachable from public code. The gate proves it on serialized JSON and rendered HTML.
 - **Admin actions are audited in the existing `facilitator_action` table** (actor `admin`, `workshop_id` null, `subject_type`/`subject_id` set) — one audit store for the whole instance.
 - **No caching, no search engine.** Tens of listings: indexed filters + offset pagination are instant on db-f1-micro.
+- **Partners (Phase 11b).** `partner` is an admin-only table. A listing's public partner text is still its own `partner_display_name`, which the editor copies from the partner's default when the partner is chosen. Public serializers never join or load `partner`, so a partner's internal name and notes are structurally unreachable from public code, like the Phase-10 internal fields. `opportunity.partner_internal_name` is kept as a write-only mirror for rollback safety (data-model.md §Phase 11b).
+- **Paste-to-fill (Phase 11b)** is a synchronous admin call through the shared Anthropic client (agent.md §Opportunity drafter). It is rate-limited at 60/h globally, and it writes nothing except its `ai_usage` row.
 
 ### Network identity (Phase 11) — the swap seam
 
 - **One module owns identity: `src/workshop0/auth/`.** `oidc.py` (discovery from `WORKSHOP0_OIDC_ISSUER`, default `https://accounts.google.com`; authorization URL with PKCE S256 + state + nonce; code exchange; ID-token verification against the issuer's JWKS — RS256, `iss`, `aud` = client id, `exp` with 60 s leeway, `nonce`), `sessions.py` (opaque 256-bit cookie token, SHA-256 hash stored in `auth_session`, 30-day expiry, revocation), `deps.py`, `routes.py`. **Product code may import only `auth.deps`**: `current_user(request) -> CurrentUser | None`, `require_user` (401 `not_signed_in`; on non-GET also checks the CSRF header), `require_admin` (valid `X-Admin-Key` **or** a session whose user is an admin; returns an `AdminActor(by="admin-key" | <email>)`). `CurrentUser` = `{id, email, display_name, avatar_url, is_admin}`. Nothing outside `auth/` reads `auth_session` or OIDC claims. Moving to a central smallTech identity service later = replacing `oidc.py`/`sessions.py` behind the same `deps.py`.
 - **`security.require_admin_key` delegates to `auth.deps.require_admin`** from Phase 11, so every existing admin router (workshops, templates, board) accepts an admin session with no router edits; key behaviour is byte-for-byte unchanged and `WORKSHOP0_ADMIN_KEY` is still required at startup.
+- **Empty key header = absent.** Existing frontend clients always send `X-Admin-Key`, as `""` when no key is stored. `require_admin` treats an empty `X-Admin-Key` exactly like a missing header, so a session admin falls through and passes. Order: (1) non-empty header matching `WORKSHOP0_ADMIN_KEY` → `AdminActor(by="admin-key")`; (2) else an admin session → `AdminActor(by=<email>)` (CSRF header required on non-GET); (3) else a signed-in non-admin with no/empty key → 403 `not_admin`; (4) else (no session, or a non-empty wrong key) → 401 `invalid_admin_key`.
 - **Admin role** is derived per request from `WORKSHOP0_ADMIN_EMAILS` (comma-separated, case-insensitive) and `email_verified` — no stored role.
 - **Cookies:** `workshop0_session` (HttpOnly, SameSite=Lax, Path=/, Max-Age 30 d, `Secure` when the effective base URL is https) and `workshop0_oidc` (signed with `WORKSHOP0_SESSION_SECRET` via itsdangerous, 10 min, cleared at callback).
 - **CSRF (changes the old rationale):** until Phase 10 no endpoint was cookie-authenticated. From Phase 11 every cookie-authenticated mutation requires the header `X-Requested-With: workshop0` (a custom header forces a CORS preflight, and the app serves no CORS headers, so a cross-site page cannot send it) in addition to SameSite=Lax. Missing → 403 `csrf_failed`. The frontend network client always sends it.
 - **Open-redirect guard:** `next` must start with `/app/`; anything else becomes `/app/network/`.
 - **Dev/test issuer:** `WORKSHOP0_OIDC_ISSUER` may be `http://` **only** for `localhost`/`127.0.0.1` (the test issuer, `tests/support/fake_oidc.py`); any other `http://` issuer fails startup.
 - **Sign-in disabled** when `WORKSHOP0_GOOGLE_CLIENT_ID` or `WORKSHOP0_GOOGLE_CLIENT_SECRET` is empty: `/api/auth/config` says so, `start` returns 503 `signin_not_configured`, the UI shows a labelled state. `WORKSHOP0_SESSION_SECRET` is required at startup only when sign-in is enabled.
-- **Rate limiting (stateless):** `services/ratelimit.py::hit(session, bucket, limit, window_s)` over `rate_limit_hit` (data-model.md) — the DB is the only shared state, so limits hold across Cloud Run instances. Limits: OIDC start 20/min/IP; CV upload/paste 10/h/user; profile drafting additionally 600/h global (cost guard); apply 30/h/user (P12); shortlist 20/h global (P12). Client IP = `request.client.host` (uvicorn already runs with `proxy_headers=True`).
+- **Rate limiting (stateless):** `services/ratelimit.py::hit(session, bucket, limit, window_s)` over `rate_limit_hit` (data-model.md) — the DB is the only shared state, so limits hold across Cloud Run instances. Limits: OIDC start 20/min/IP; CV upload/paste 10/h/user; profile drafting additionally 600/h global (cost guard); opportunity drafting 60/h global (P11b, bucket `opportunity_draft`); apply 30/h/user (P12); shortlist 20/h global (P12). Client IP = `request.client.host` (uvicorn already runs with `proxy_headers=True`).
 
 ### CV storage (Phase 11)
 
@@ -335,7 +342,7 @@ The credential table above is **unchanged**. Creation simply stops requiring the
 - **structlog → JSON on stdout.** Every line: `timestamp`, `level`, `event`, `request_id`, plus context.
 - **Request middleware:** method, token-masked path, status, `duration_ms`, `request_id` for every API request (poll endpoints log at DEBUG to keep INFO readable).
 - **Domain events at INFO:** `workshop.created`, `participant.joined`, `milestone.completed`, `help.created`, `help.answered`, `broadcast.sent`, `workshop.paused`, `undo.applied`, `ai.triage`, `ai.auto_answered`, `ai.draft_created`, `ai.failed` — each with ids and (for AI) latency, token counts, cost.
-- **Network events at INFO (Phases 10–13):** `opportunity.created`, `opportunity.updated`, `opportunity.status_changed`, `topic.created`, `topic.updated`, `auth.signin`, `auth.signin_failed` (with reason code), `auth.signout`, `profile.created`, `cv.uploaded`, `account.deleted`, `ai.profile_draft` and `ai.shortlist_rank` (model, latency, tokens, cost — the same `ai.*` shape as the help-desk events, emitted only by `ai/usage.py::record_usage`), `ai.call_failed` (ERROR: purpose, cause, HTTP status, Anthropic request-id), `ai.network_misconfigured` / `ai.pricing_unknown` (WARNING), `ratelimit.blocked`, `application.created`, `application.status_changed`, `email.sent`/`email.recorded`/`email.failed`. Emails masked; CV text never logged.
+- **Network events at INFO (Phases 10–13):** `opportunity.created`, `opportunity.updated`, `opportunity.status_changed`, `topic.created`, `topic.updated`, `auth.signin`, `auth.signin_failed` (with reason code), `auth.invite_accepted`, `auth.signout`, `profile.created`, `cv.uploaded`, `account.deleted`, `ai.profile_draft` and `ai.shortlist_rank` (model, latency, tokens, cost — the same `ai.*` shape as the help-desk events, emitted only by `ai/usage.py::record_usage`), `ai.call_failed` (ERROR: purpose, cause, HTTP status, Anthropic request-id), `ai.network_misconfigured` / `ai.pricing_unknown` (WARNING), `ratelimit.blocked`, `application.created`, `application.status_changed`, `email.sent`/`email.recorded`/`email.failed`. Emails masked; CV text never logged.
 - **No metrics endpoint, no ops UI** (vision non-goal). `GET /api/health` returns `{"status":"ok","db":"ok"}` for machines.
 
 ## Database configuration
@@ -353,7 +360,7 @@ The credential table above is **unchanged**. Creation simply stops requiring the
 - **XSS:** all facilitator/AI-authored markdown (milestones, broadcasts, answers) renders through react-markdown with **raw HTML disabled** — HTML in markdown source is not injected. Participant-authored text (names, help messages) is rendered as **plain text** (React text nodes, `whitespace-pre-wrap`), never as markdown or HTML.
 - **SQL injection:** SQLAlchemy ORM/parameterized queries only. The FTS5 `MATCH` query string is built from sanitized, quoted tokens (see agent.md).
 - **CSRF:** workshop state-changing endpoints are authenticated by unguessable URL tokens or the `X-Admin-Key` header — not by cookies — so cross-site form posts cannot forge them. The participant cookie is only ever *read* to resolve auto-resume on `GET /api/join/{slug}`. **From Phase 11** the network session cookie authenticates mutations, which therefore also require `X-Requested-With: workshop0` (§Network identity).
-- **Network privacy (Phases 10–13):** internal partner fields, trainer rates, emails, CV files/text, admin notes and tags are admin-only (rates and CV also visible to their owner). Every public serializer is an allow-list; gates assert absence on serialized JSON and rendered HTML. Logs mask emails (`as***@example.com`) and never contain CV text.
+- **Network privacy (Phases 10–13):** internal partner fields (incl. the Phase-11b `partner` table's internal name and notes, and `opportunity.partner_id`), trainer rates, emails, CV files/text, admin notes and tags are admin-only (rates, email and CV metadata also appear in the owner's own `/api/me/*` payloads; raw CV text, blob key and hash are returned to no one — api.md §Phase 11 → Privacy). Every public serializer is an allow-list; gates assert absence on serialized JSON and rendered HTML. Logs mask emails (`as***@example.com`) and never contain CV text.
 - **Secrets:** only in `.env` (gitignored). Logs and API responses never contain `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` or `WORKSHOP0_ADMIN_KEY`; key presence is logged as a boolean (`app.startup` gains `anthropic_key_present` and `anthropic_workspace_present` in Phase 11).
 - **Rate limiting:** none on the workshop surface (self-hosted, unguessable tokens, trusted room); the trainer network's sign-in, upload, drafting, apply and shortlist endpoints are rate-limited from Phase 11 (§Network identity). > **Assumed:** acceptable for a single-team instance; revisit if ever exposed as SaaS. From Phase 6 this extends to the keyless `POST /api/public/workshops` — see §Auth model → Accepted risk.
 - **Creator email (Phase 6):** stored, returned only on the admin list, masked in logs (`as***@example.com`), never rendered on a participant- or public-facing surface.
@@ -376,7 +383,7 @@ The credential table above is **unchanged**. Creation simply stops requiring the
 | `WORKSHOP0_AI_CONFIDENCE` | no | `0.75` | Auto-answer confidence threshold (see agent.md) |
 | `ANTHROPIC_API_KEY` | no (P11) | — | Anthropic key for network AI (drafter, ranker). Absent ⇒ drafting `skipped`, shortlists "Ranked by rules", zero errors. Local: `.env`; Cloud Run: secret `workshop0-anthropic-api-key` |
 | `ANTHROPIC_WORKSPACE_ID` | with the key (P11) | — | Sent as header `anthropic-workspace-id` on **every** Anthropic request (the key is not workspace-scoped; without it the API returns 400). Key set + this empty ⇒ network AI treated as unavailable + `ai.network_misconfigured` WARNING. Cloud Run: secret `workshop0-anthropic-workspace-id` |
-| `WORKSHOP0_AI_NETWORK_MODEL` | no (P11) | `claude-sonnet-5-5` | Anthropic model for CV extraction and shortlist ranking (agent.md §Network AI) |
+| `WORKSHOP0_AI_NETWORK_MODEL` | no (P11) | `claude-sonnet-5-5` | Anthropic model for CV extraction, opportunity drafting (P11b) and shortlist ranking (agent.md §Network AI) |
 | `WORKSHOP0_AI_NETWORK_FAST_MODEL` | no (P11) | `claude-haiku-5-5` | Anthropic model for cheap calls (only the client smoke tests in Phases 11–13) |
 | `WORKSHOP0_GOOGLE_CLIENT_ID` | no (P11) | — | Google OAuth web client id; with the secret, enables sign-in |
 | `WORKSHOP0_GOOGLE_CLIENT_SECRET` | no (P11) | — | Google OAuth client secret (Cloud Run: secret `workshop0-google-client-secret`) |

@@ -211,7 +211,7 @@ One row per OpenRouter call. Per-workshop spend = `SUM(cost_usd)`.
 | id | Integer | PK | |
 | workshop_id | Integer | FK workshop.id CASCADE, not null | |
 | help_request_id | Integer | FK help_request.id (SET NULL), nullable | |
-| purpose | String(16) | not null | `triage_answer` (single combined call; see agent.md) |
+| purpose | String(16) → **String(32)** from `0007` | not null | `triage_answer` (single combined call; see agent.md); network values in §Phase 11 / §Phase 11b |
 | model | String(120) | not null | |
 | prompt_tokens | Integer | not null, default 0 | |
 | completion_tokens | Integer | not null, default 0 | |
@@ -281,7 +281,7 @@ Bump `workshop.state_version` (same transaction) on: participant join, completio
 
 # Trainer Network & Opportunity Board (Phases 10–13)
 
-Capabilities C8–C19 ([capabilities.md](capabilities.md)). Unlike the core v0.2 schema (created up front by `0001`), these tables are **added phase by phase** — each phase has exactly one migration, owned by exactly one slice (see [roadmap.md](roadmap.md)): `0005` (Phase 10), `0006` (Phase 11), `0007` (Phase 12), `0008` (Phase 13). Each `down_revision` is the previous one; every migration uses `batch_alter_table` for ALTERs and has a working `downgrade()`. Scale target: hundreds of trainers, tens of listings, ~500 signups/day bursts — every list endpoint is paginated, no table needs more indexing than listed.
+Capabilities C8–C19 ([capabilities.md](capabilities.md)). Unlike the core v0.2 schema (created up front by `0001`), these tables are **added phase by phase** — each phase (or sub-step) has exactly one migration, owned by exactly one slice (see [roadmap.md](roadmap.md)): `0005` (Phase 10), `0006` (Phase 11), `0007` (Phase 11b), `0008` (Phase 12), `0009` (Phase 13). Each `down_revision` is the previous one; every migration uses `batch_alter_table` for ALTERs and has a working `downgrade()`. Scale target: hundreds of trainers, tens of listings, ~500 signups/day bursts — every list endpoint is paginated, no table needs more indexing than listed.
 
 ## Phase 10 — migration `0005_opportunity_board` (`down_revision = "0004"`)
 
@@ -322,10 +322,10 @@ Exactly 40 rows, 5 categories, 8 each. `downgrade()` drops the table (seed inclu
 | city | String(80) | nullable | Required when `onsite`/`hybrid`; forced `null` when `remote` |
 | starts_on / ends_on | Date | nullable | Engagement dates; `ends_on ≥ starts_on` when both set |
 | duration_text | String(80) | nullable | Free text, e.g. "2 days", "6 weeks · 4 h/week" |
-| compensation_text | String(120) | nullable | **Public** free text, e.g. "Paid — day rate", "Pro bono" |
+| compensation_text | String(120) | nullable | **Public** free text, e.g. "Paid — day rate", "Pro bono". From Phase 11b this is the optional **note** beside the structured compensation fields (§Phase 11b) |
 | deadline | DateTime(tz) | not null | Apply-by instant (UTC). Drives auto-expiry |
 | partner_display_name | String(160) | nullable | **Public**; null → UI shows "smallTech partner network" |
-| partner_internal_name | String(160) | nullable | **Admin-only. Never serialized by any public endpoint** |
+| partner_internal_name | String(160) | nullable | **Admin-only. Never serialized by any public endpoint.** From Phase 11b it is a legacy **mirror** of `partner.internal_name` (§Phase 11b) |
 | internal_notes | Text | nullable | **Admin-only**, ≤5000 (contacts, terms) |
 | status | String(16) | not null, default `'draft'` | Stored status: `draft` \| `open` \| `closed` |
 | published_at | DateTime(tz) | nullable | Set the first time the stored status becomes `open`; never cleared |
@@ -351,10 +351,10 @@ Index: ix(topic_id). 1–8 topics per listing (service-enforced).
 
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
-| subject_type | String(32) | nullable | `opportunity` \| `topic` (Phase 10); `trainer` \| `invite` \| `user` (Phase 11); `application` (Phase 12). Null for every pre-existing workshop-scoped row |
+| subject_type | String(32) | nullable | `opportunity` \| `topic` (Phase 10); `trainer` \| `invite` \| `user` (Phase 11); `partner` (Phase 11b); `application` (Phase 12). Null for every pre-existing workshop-scoped row |
 | subject_id | Integer | nullable | Id of the subject row (no FK — the audit row outlives the subject, e.g. after account deletion) |
 
-Index: ix(subject_type, subject_id, created_at). `actor` gains the value **`admin`** (Phase 10, admin-console actions; `workshop_id` is null) and **`user`** (Phase 11, a signed-in network user acting on their own account). New `action` codes: `opportunity.create`, `opportunity.update`, `opportunity.publish` (→ open from draft/closed), `opportunity.unpublish` (→ draft), `opportunity.close` (→ closed), `topic.create`, `topic.update`. `detail_json` for these: `{"title": "…", "changed_fields": ["deadline", "summary"], "from_status": "draft", "to_status": "open", "by": "admin-key"}` (`by` becomes the admin user's email from Phase 11). `services/audit.py::record_action` gains optional keyword args `subject_type`, `subject_id` (existing callers unchanged).
+Index: ix(subject_type, subject_id, created_at). `actor` gains the value **`admin`** (Phase 10, admin-console actions; `workshop_id` is null) and **`user`** (Phase 11, a signed-in network user acting on their own account). New `action` codes: `opportunity.create`, `opportunity.update`, `opportunity.publish` (→ open from draft/closed), `opportunity.unpublish` (→ draft), `opportunity.close` (→ closed), `topic.create`, `topic.update`. `detail_json` for these: `{"title": "…", "changed_fields": ["deadline", "summary"], "from_status": "draft", "to_status": "open", "by": "admin-key"}`. From Phase 11, `by` is `AdminActor.by` (`"admin-key"` or the admin user's email). Phase 11b wires this into the opportunity, topic and partner writes. Phase 11b adds the actions `partner.create` and `partner.update`. `services/audit.py::record_action` gains optional keyword args `subject_type`, `subject_id` (existing callers unchanged).
 
 ### Test-harness consequence (normative)
 
@@ -404,9 +404,9 @@ bucket String(120) + window_start DateTime → composite PK; count Integer not n
 | city | String(80) null · remote_ok Boolean default true | |
 | linkedin_url / github_url / website_url | String(300) null | `https://` only; LinkedIn must be a `linkedin.com` host, GitHub a `github.com` host |
 | past_work_json | Text default `'[]'` | ≤30 items `{"title": "…", "kind": "workshop\|talk\|course\|other", "org": "…"\|null, "year": 2025\|null}` |
-| rate_min / rate_max | Integer null | **Admin-only** (never in any non-admin payload except the owner's own profile); `rate_min ≤ rate_max` |
+| rate_min / rate_max | Integer null | **Admin-only** (only in admin payloads and the owner's own `/api/me/*` payloads — api.md §Phase 11 → Privacy); `rate_min ≤ rate_max` |
 | rate_currency | String(3) null | `INR` \| `USD` |
-| rate_unit | String(8) null | `hour` \| `day` |
+| rate_unit | String(8) null | `hour` \| `day` \| `course` \| `month` — the same four-value enum as `opportunity.compensation_unit` (§Phase 11b). Enforced by `services/profiles.py` validation, not by a DB constraint, so the 0006 column needs no migration |
 | pro_bono | Boolean default false | Open to unpaid community work |
 | availability_json | Text default `'{}'` | Weekly pattern `{"mon": ["morning","afternoon","evening"], …}` (keys `mon`…`sun`, values ⊆ the three day-parts) |
 | available_from | Date null | |
@@ -414,14 +414,16 @@ bucket String(120) + window_start DateTime → composite PK; count Integer not n
 | visibility | String(16) default `'private'` | `private` \| `public` — activated in Phase 13 (C18) |
 | verified | Boolean default false · verified_at DateTime null · verified_by String(254) null | Admin "Verified" badge; invite-created trainers start verified |
 | consent_at | DateTime **not null** · consent_version String(16) not null | Consent to share the profile with partners for matching; current version `2026-11` |
-| autofilled_fields_json | Text default `'[]'` | Field keys pre-filled from the CV and not yet reviewed (drives "From your CV — please check"); cleared on the first save of the review screen |
+| autofilled_fields_json | Text default `'[]'` | Field keys pre-filled from the CV and not yet reviewed (drives "From your CV — please check"). Set at create (`POST /api/me/profile`) to the drafted fields the person left unchanged on the review screen; cleared to `[]` by the first `PATCH /api/me/profile` |
 | created_at / updated_at | DateTime | |
 
 ### trainer_topic
 
 profile_id FK trainer_profile.id CASCADE + topic_id FK topic.id → composite PK; `level` String(16) not null ∈ `intermediate` \| `advanced` \| `expert`. ≤15 topics per profile.
 
-### cv_document — the trainer's current CV (exactly one per user; a new upload replaces it)
+### cv_document — the trainer's current CV (exactly one per user; a new upload replaces it **in place**)
+
+A replacement upload or paste updates the existing row — **same `id`** — overwriting source, filename, blob key, size, hash, text, `draft_status="pending"`, `draft_json=null` and `created_at`; the old blob is deleted. Because `ai_usage.cv_document_id` points at this stable id, a trainer's drafting spend (`ai_cost_usd`, api.md §Phase 11 admin pool) accumulates across replacements.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -439,7 +441,7 @@ profile_id FK trainer_profile.id CASCADE + topic_id FK topic.id → composite PK
 
 ### network_invite
 
-id PK · token String(43) unique (`token_urlsafe(32)`) · email String(254) not null (lower-cased) · name String(120) null · created_by String(254) · created_at · expires_at (14 days) · accepted_at null · accepted_user_id FK app_user.id SET NULL null. Accepting = signing in with the **same** email; it creates/marks the profile `verified=true`.
+id PK · token String(43) unique (`token_urlsafe(32)`) · email String(254) not null (lower-cased) · name String(120) null · created_by String(254) · created_at · expires_at (14 days) · accepted_at null · accepted_user_id FK app_user.id SET NULL null. Accepting = signing in with the **same** email (sets `accepted_at`/`accepted_user_id`); an existing profile is marked `verified=true` at the callback, a profile created later starts verified. Exact rules: api.md §Phase 11 → Invite acceptance.
 
 ### trainer_tag / admin_note (admin-private)
 
@@ -447,17 +449,74 @@ id PK · token String(43) unique (`token_urlsafe(32)`) · email String(254) not 
 
 ### ai_usage — changes (same migration)
 
-`workshop_id` becomes **nullable**; add `cv_document_id` FK cv_document.id SET NULL null and `opportunity_id` FK opportunity.id SET NULL null (Phase 12 shortlist). New `purpose` values: `profile_draft` (Phase 11), `shortlist_rank` (Phase 12). Network spend = `SUM(cost_usd) WHERE workshop_id IS NULL`. For these network rows the provider is Anthropic (agent.md §Network AI): `model` holds the Anthropic model id (e.g. `claude-sonnet-5-5`), `prompt_tokens`/`completion_tokens` are the response's `usage.input_tokens`/`output_tokens`, and `cost_usd` = those tokens × the `ai/pricing.py` table (0 for an unpriced model) — the OpenRouter `usage.cost` rule above applies to help-desk rows only. No schema change follows from the provider choice.
+`workshop_id` becomes **nullable**; add `cv_document_id` FK cv_document.id SET NULL null and `opportunity_id` FK opportunity.id SET NULL null (Phase 12 shortlist). New `purpose` values: `profile_draft` (Phase 11), `opportunity_draft` (Phase 11b; this needs the `0007` widening), `shortlist_rank` (Phase 12). Network spend = `SUM(cost_usd) WHERE workshop_id IS NULL`. For these network rows the provider is Anthropic (agent.md §Network AI): `model` holds the Anthropic model id (e.g. `claude-sonnet-5-5`), `prompt_tokens`/`completion_tokens` are the response's `usage.input_tokens`/`output_tokens`, and `cost_usd` = those tokens × the `ai/pricing.py` table (0 for an unpriced model) — the OpenRouter `usage.cost` rule above applies to help-desk rows only. No schema change follows from the provider choice.
 
-## Phase 12 — migration `0007_applications_matching_email` (`down_revision = "0006"`)
+## Phase 11b — migration `0007_partners_compensation` (`down_revision = "0006"`)
 
-- **opportunity** gains admin-only matching fields: `budget_min`/`budget_max` Integer null, `budget_currency` String(3) null (`INR`\|`USD`), `budget_unit` String(8) null (`hour`\|`day`), `min_level` String(16) null (`intermediate`\|`advanced`\|`expert`). Never in public payloads.
+This migration is owned by F1 ([roadmap.md](roadmap.md) §Phase 11b). It is purely additive, apart from widening one column, so the previous revision keeps working during the one-deploy overlap (architecture.md §Production topology → Migrations).
+
+### partner — the admin-managed partner list
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| id | Integer | PK | |
+| internal_name | String(160) | not null | **Admin-only.** Trimmed, internal whitespace collapsed to single spaces, 2–160 chars. The real organisation name |
+| name_key | String(200) | not null, **unique** | `casefold()` of the collapsed `internal_name` (`services/partners.py::normalize_name`). The DB enforces case- and whitespace-insensitive uniqueness, so it is race-safe. Never serialized anywhere |
+| display_name | String(160) | nullable | **Default** public display name (e.g. "A Bengaluru fintech"). The editor copies it into a listing's `partner_display_name` when the partner is chosen and that field is empty. **No public code reads this column** |
+| notes | Text | nullable | **Admin-only**, ≤5000 (contacts, terms). Never in any opportunity payload |
+| active | Boolean | not null, default true, server_default true | Inactive partners are hidden from the editor's picker for new attachments. Listings that already have one keep it, as with topics |
+| created_at / updated_at | DateTime(tz) | not null | |
+
+There is no delete. Deactivating is the end of a partner's life, because listings and audit rows reference it.
+
+### opportunity — additions
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| partner_id | Integer | FK partner.id (**RESTRICT**), nullable; index `ix_opportunity_partner_id` | The listing's partner. **Admin-only. Never in public payloads** |
+| compensation_min | Integer | nullable | **Public.** 0–100 000 000, whole currency units |
+| compensation_max | Integer | nullable | **Public.** Same range; `compensation_min ≤ compensation_max` when both are set; equal is allowed (a single value) |
+| compensation_currency | String(3) | nullable | **Public.** `INR` \| `USD`, the same set as `trainer_profile.rate_currency`. Required when an amount is set; must be null when neither amount is set |
+| compensation_unit | String(8) | nullable | **Public.** `hour` \| `day` \| `course` \| `month`, the same enum as `trainer_profile.rate_unit`. Required when an amount is set; must be null when neither amount is set |
+
+`compensation_text` stays as the optional free-text **note** (≤120, public), e.g. "plus travel", "Pro bono" or a legacy "Paid — day rate". The single display rule that combines the fields lives in capabilities.md §C10. Validation lives in api.md §Phase 11b.
+
+**`partner_internal_name` becomes a mirror.** New code never reads it. Every write that sets or changes a listing's partner also writes `partner_internal_name = partner.internal_name` (`null` when the partner is cleared), and a partner rename rewrites the mirror on all of that partner's listings. As a result, a rollback to the Phase-10/11 revision still shows the right internal names. Dropping the column is left to a future cleanup migration and is not scheduled.
+
+### ai_usage — change
+
+`purpose` is widened from `String(16)` to **`String(32)`**, because `opportunity_draft` is 17 characters. The new purpose value is `opportunity_draft` (Phase 11b). Each row has `opportunity_id` set when the draft was made from an existing listing and null for a new one, and `cv_document_id` null. Network-spend sums are unchanged (`workshop_id IS NULL`).
+
+### Data migration inside `0007` (normative; Python inside the migration, portable to SQLite and PostgreSQL; the migration does not import app code)
+
+1. Read every `opportunity` row's `(id, partner_internal_name, partner_display_name, updated_at)`.
+2. Skip rows whose `partner_internal_name` is null or blank after trimming. They keep `partner_id = null`.
+3. `collapsed = " ".join(name.split())`, then `key = collapsed.casefold()`. Group the rows by `key`.
+4. Insert one `partner` per group, in `key` order:
+   - `internal_name` = the `collapsed` value of the group's row with the greatest `(updated_at, id)`;
+   - `display_name` = the most frequent collapsed, non-blank `partner_display_name` in the group (a tie goes to the value on the greatest `(updated_at, id)` row; null if none);
+   - `notes` = null, `active` = true, `created_at` = `updated_at` = migration time.
+5. Set `partner_id` on every row of the group. `partner_internal_name` is left as it was, because the mirror is refreshed by the next write.
+
+**`downgrade()`:**
+1. Set `partner_internal_name = (SELECT internal_name FROM partner WHERE partner.id = opportunity.partner_id)` where `partner_id` is not null.
+2. For rows whose `compensation_text` is null but which have an amount, set `compensation_text` to the plain-ASCII fallback `"{currency} {min}-{max} / {unit}"`, truncated to 120. A missing min or max is omitted together with its dash.
+3. Drop the index, FK and the five opportunity columns, then drop `partner`.
+4. Run `DELETE FROM ai_usage WHERE length(purpose) > 16`, then narrow `purpose` back to `String(16)`.
+
+All ALTERs use `batch_alter_table`.
+
+> **Assumed:** existing free-text names are matched case- and whitespace-insensitively only, with no fuzzy merging ("Acme" and "Acme Pvt Ltd" stay two partners). Admins can rename one of them or deactivate it later.
+
+## Phase 12 — migration `0008_applications_matching_email` (`down_revision = "0007"`)
+
+- **opportunity** gains admin-only matching fields: `budget_min`/`budget_max` Integer null, `budget_currency` String(3) null (`INR`\|`USD`), `budget_unit` String(8) null (`hour`\|`day`\|`course`\|`month`, the same enum as `compensation_unit`/`rate_unit`), `min_level` String(16) null (`intermediate`\|`advanced`\|`expert`). Never in public payloads. When the budget is unset, matching uses the public `compensation_max`/`_currency`/`_unit` as the budget (agent.md §Shortlist ranker).
 - **application**: id PK · opportunity_id FK CASCADE · profile_id FK trainer_profile CASCADE · status String(16) ∈ `applied` \| `shortlisted` \| `selected` \| `not_selected` \| `withdrawn` · note Text null (≤1000, plain text) · source String(16) `self` \| `invited` · status_changed_at · created_at · updated_at. **Unique(opportunity_id, profile_id)**; ix(opportunity_id, status), ix(profile_id).
 - **opportunity_invite** (admin "invite to apply"): id PK · opportunity_id FK CASCADE · profile_id FK CASCADE · created_by · created_at · Unique(opportunity_id, profile_id).
 - **match_suggestion** (one row per ranked trainer per shortlist run): id PK · opportunity_id FK CASCADE · profile_id FK CASCADE · run_id String(22) · rank Integer · rule_score Numeric(6,3) · reason String(300) null (null when ranked by rules only) · ranked_by String(8) `ai` \| `rules` · created_at. ix(opportunity_id, run_id, rank). Only the latest run is shown.
 - **email_outbox**: id PK · to_email String(254) · template String(48) · context_json Text · subject String(200) null (rendered at send) · status String(16) ∈ `queued` \| `sent` \| `failed` \| `recorded` · attempts Integer default 0 · last_error String(500) null · dedupe_key String(120) **unique** null · created_at · sent_at null. ix(status, created_at). `recorded` = SMTP not configured; the message is kept for the admin outbox view and never retried.
 
-## Phase 13 — migration `0008_alerts_directory_tiein` (`down_revision = "0007"`)
+## Phase 13 — migration `0009_alerts_directory_tiein` (`down_revision = "0008"`)
 
 - **saved_search**: id PK · user_id FK app_user CASCADE · name String(80) · criteria_json Text `{"types": [...], "topic_slugs": [...], "location_modes": [...]}` · alerts_enabled Boolean default true · created_at · updated_at. ≤10 per user.
 - **email_pref**: user_id FK app_user CASCADE PK · alerts Boolean default true · digest Boolean default true · updated_at.

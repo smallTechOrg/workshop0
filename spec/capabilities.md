@@ -132,7 +132,7 @@ The admin keeps the only cross-workshop view, and can now see where each worksho
 
 smallTech's network of freelance and in-house tech trainers — and more broadly mentors, engineers and learners — lives inside Workshop0, beside a **publicly browsable, admin-curated board of opportunities** from the partner network. Only smallTech admins post, edit and close listings; partners never touch the platform (admins forward shortlisted profiles out of band). Existing workshop/participant token-link flows are unchanged by everything in this section. Shapes: [api.md](api.md) §Phase 10–13; schema: [data-model.md](data-model.md) §Trainer Network.
 
-**Copy rule (all network surfaces):** user-facing UI never says "AI" — drafted fields read "From your CV — please check", ranked lists read "Suggested". AI cost and token counts appear on admin surfaces only. Opportunity `type` labels everywhere: `workshop` = **Workshop / training**, `engagement` = **Longer engagement**, `role` = **Job / contract role**, `cofacilitation` = **Workshop0 co-facilitator / TA**.
+**Copy rule (all network surfaces):** user-facing UI never says "AI" — drafted fields read "From your CV — please check", ranked lists read "Suggested". AI cost and token counts appear on admin surfaces only. Admin surfaces may name AI (e.g. the opportunity editor's "AI drafting not configured" state and its cost line); drafted fields there read "Drafted — please check". Opportunity `type` labels everywhere: `workshop` = **Workshop / training**, `engagement` = **Longer engagement**, `role` = **Job / contract role**, `cofacilitation` = **Workshop0 co-facilitator / TA**.
 
 ---
 
@@ -148,7 +148,7 @@ A curated list of tech topics that listings (and, from Phase 11, trainer profile
 
 ---
 
-## C9 — Opportunity management for admins *(Phase 10)*
+## C9 — Opportunity management for admins *(Phase 10; partners, paste-to-fill and compensation in Phase 11b)*
 
 Admins create, edit, publish and close listings; listings auto-expire at their deadline.
 
@@ -163,16 +163,69 @@ Admins create, edit, publish and close listings; listings auto-expire at their d
 
 **Success criteria:** create as draft → not visible publicly; publish → visible on the board within one page load · internal partner name and internal notes never appear on any public page or public API response · publishing with a past deadline is rejected inline · a listing whose deadline passes shows **Expired** in admin and disappears from the board without any action · close → gone from the board, detail page shows the closed banner · every create / update / publish / unpublish / close writes exactly one audit row visible in Activity.
 
+### C9 additions — Phase 11b (Phase-10 feedback)
+
+**Partners, a managed list.** **Partners — `/app/admin/partners/`** works like the Topics page.
+- **Columns:** the table shows internal name (with a lock icon), default public name, notes (truncated, admin-only), number of listings and an active toggle.
+- **Add partner** row: internal name (required), default public name (optional, placeholder "smallTech partner network"), notes.
+- **Editing:** inline rename and edit. Deactivating asks for confirmation: "Hidden from the partner picker; listings already using it keep it."
+- **Entry points:** linked from the editor's partner field (**Manage partners**) and from the admin header (**Partners**).
+- **Migration:** existing free-text partner names are migrated in. One partner is created per distinct name, ignoring case and extra spaces, and every existing listing is linked to it.
+
+**Editor changes:**
+- **Partner (internal panel):** the free-text internal partner field becomes a **partner dropdown**. It is searchable, lists active partners with their default public name muted, has a **None** option, and an inline **+ Add partner** that opens a small form (internal name, default public name, notes) and selects the new partner.
+- **Public partner name:** choosing a partner fills the listing's **public partner name** with the partner's default public name when that field is empty. The public partner name stays per listing and remains the **only** partner text ever shown publicly.
+- **Compensation (public details):** amount **min** and **max** (one is enough; equal means a single value), **currency** (INR / USD), **unit** (per hour / per day / per course / per month), and an optional **note** (the former compensation text, e.g. "plus travel", "Pro bono"). Currency and unit are required once an amount is entered. Errors show inline.
+- **Paste the forwarded description** box, at the top of a new listing and collapsed under **Draft from a forwarded description** on an existing one:
+  1. The admin pastes the partner's email or post, optionally ticks **Keep the partner's name in the public text**, and clicks **Draft**. A skeleton shows while drafting (up to ~20 s).
+  2. The form is pre-filled for review: title, type, summary, a **cleaned public description**, topics (**only from the curated list**), Remote / Hybrid / Onsite and city, start/end dates, duration, deadline, compensation with unit and note, the partner, the public partner name and internal notes.
+     - The **partner** is either matched against the partner list or offered as "Suggested new partner: *name* — **Add**".
+     - The cleaned description has the partner's identity removed (unless kept), and its contacts, emails and phone numbers moved into the internal notes.
+  3. Every filled field carries an amber **"Drafted — please check"** chip, which disappears once that field is edited.
+  4. **Nothing is saved or published by drafting.** The admin still clicks Save draft / Publish.
+  5. A small cost line under the box reads "Drafted with claude-sonnet-5-5 · $0.0042". This is an admin surface, so naming AI and showing cost is allowed. Spend also appears in the Network AI spend card.
+  6. If typed input would be overwritten, a confirm asks first.
+- **Not configured:** when drafting is unavailable (no Anthropic key, or no workspace id), the box shows a neutral **"AI drafting not configured"** state with the Draft button disabled. The rest of the editor works exactly as before.
+- **Failure:** a failed draft shows "Drafting failed — fill the form by hand or try again", and nothing typed is lost.
+
+**Success criteria (11b):**
+- **Migration:** on migration, N distinct free-text partner names (ignoring case and whitespace) become exactly N partners, and every named listing is linked to one.
+- **Partner uniqueness:** a duplicate partner name in any case or spacing is rejected with `partner_exists` and creates nothing.
+- **Deactivation:** a deactivated partner is absent from the dropdown but still shown on a listing already using it.
+- **No leak:** partner internal names, partner notes and internal notes never appear in any public page or public API response.
+- **Drafting the three ordinary fixture posts** against the real model:
+  - fills the expected type, location, topics and compensation unit;
+  - picks topics only from the curated list;
+  - matches the seeded partner when the post names it, and otherwise suggests a new one;
+  - leaves no partner name, email or phone in the public fields;
+  - creates no listing.
+- **Prompt injection:** a post containing instructions ("ignore previous instructions…") yields only curated topics and enum values, and creates no listing.
+- **Usage record:** each draft writes one usage record with purpose `opportunity_draft`, the model id and a cost > 0.
+- **Graceful degradation:** with drafting unavailable, the box shows "AI drafting not configured", no AI call is made, and a listing can still be created and published by hand.
+- **Compensation validation:** an amount without currency or unit, or `max < min`, is rejected inline.
+
 ---
 
-## C10 — Public opportunity board *(Phase 10)*
+## C10 — Public opportunity board *(Phase 10; compensation display Phase 11b)*
 
 Anyone on the internet can browse what's open; applying arrives with sign-in (Phase 11–12).
 
 **Pages (no auth; linked from the landing page footer as "Opportunities for trainers"; pretty URL `/opportunities`):**
-- **Board — `/app/opportunities/`**: header strip "Opportunities from the smallTech partner network" + one-line subline; **Join our network** CTA (labelled stub in Phase 10 — real in Phase 11). Filter bar: **type** segmented chips (All + the four types), **topic** chips grouped by category with open counts (multi-select = match any), **sort** (Newest / Closing soon). Filter state lives in the URL query (`?type=&topic=&topic=&sort=&page=`) so filtered views are shareable and survive reload. **Cards** (responsive grid): type pill, title, partner display name (or "smallTech partner network"), summary, topic chips (≤4 + "+n"), location (Remote / City · Onsite / City · Hybrid), compensation text when present, **"Apply by 30 Nov"** with an amber "Closes in 3 days" pill when ≤7 days remain. **Pagination**: Previous / Next + "Page 2 of 3", 12 per page. States: loading = skeleton cards; no listings at all = "No open opportunities right now — check back soon."; filters match nothing = "Nothing matches these filters" + **Clear filters**; error = human sentence + Retry.
+- **Board — `/app/opportunities/`**: header strip "Opportunities from the smallTech partner network" + one-line subline; **Join our network** CTA (labelled stub in Phase 10 — real in Phase 11). Filter bar: **type** segmented chips (All + the four types), **topic** chips grouped by category with open counts (multi-select = match any), **sort** (Newest / Closing soon). Filter state lives in the URL query (`?type=&topic=&topic=&sort=&page=`) so filtered views are shareable and survive reload. **Cards** (responsive grid): type pill, title, partner display name (or "smallTech partner network"), summary, topic chips (≤4 + "+n"), location (Remote / City · Onsite / City · Hybrid), compensation when present (display rule below; from Phase 11b), **"Apply by 30 Nov"** with an amber "Closes in 3 days" pill when ≤7 days remain. **Pagination**: Previous / Next + "Page 2 of 3", 12 per page. States: loading = skeleton cards; no listings at all = "No open opportunities right now — check back soon."; filters match nothing = "Nothing matches these filters" + **Clear filters**; error = human sentence + Retry.
 - **Listing — `/app/opportunities/view/?id=<id>`** (pretty `/opportunities/<id>`): back link to the board (preserving filters when arriving from it), title, type pill, partner display name, meta grid (location, dates, duration, compensation, deadline in the viewer's local time), topic chips, rendered markdown description. Side card: when open — "Applications open until …" + **Sign in to apply** (labelled stub in Phase 10; real in Phase 12) + **Copy link**; when expired or closed — a neutral banner "Applications for this opportunity have closed." and no apply control. A **Join our network** stub card ("Get matched to opportunities like this — coming soon"). Draft/unknown id → friendly not-found state "This opportunity isn't available — it may have been removed." + link to the board. The browser tab title is the listing title.
 - **Landing page:** one plain link "Opportunities for trainers" in the footer (no other landing change; still no admin link).
+- **Compensation display (Phase 11b; the one rule for card, listing and admin preview):** the amount part uses the currency symbol (INR `₹`, en-IN digit grouping; USD `$`, en-US grouping), then ` / ` and the unit (`hour`, `day`, `course`, `month`). The note is appended after ` · `.
+  - **Amount forms:**
+    - min < max → `₹8,000–12,000 / day` (en dash, one symbol);
+    - min = max → `₹20,000 / course`;
+    - min only → `From $50 / hour`;
+    - max only → `Up to ₹1,50,000 / month`.
+  - **Note:**
+    - amount + note → `₹20,000 / course · plus travel`;
+    - note only, e.g. legacy text → `Pro bono`;
+    - neither → no compensation line.
+
+  There is no compensation filter on the board.
 
 **Success criteria:** the board lists only open, non-expired listings · with 30 open listings, three pages of 12/12/6 with no duplicates and no gaps · type and topic filters return exactly the matching set and persist in the URL across reload · a closed or expired listing's detail URL still renders with the closed banner · a draft's URL renders not-found · the rendered HTML of board and listing pages never contains the internal partner name · works at 360 px and 1440 px with no horizontal scroll · every stub (Join our network, Sign in to apply) carries the "Coming in a later phase" pill and is non-interactive.
 
@@ -197,7 +250,7 @@ Near-zero-friction, self-serve identity for the network; Google sign-in only at 
 Sign in, drop a CV, review one screen, you're in.
 
 - **Onboarding — `/app/network/join/`** (step 1 of 2): three ways in, as tabs — **Upload CV** (PDF/DOCX ≤5 MB, drag-and-drop), **LinkedIn PDF** (a short how-to: LinkedIn profile → More → Save to PDF, then upload it here), **Paste text** (CV or LinkedIn "About/Experience" text). A one-line note: "We can't read LinkedIn links directly — LinkedIn doesn't allow it." After submit: "Reading your CV…" skeleton (≤60 s), then step 2.
-- **Review — step 2**: one screen, everything editable, pre-filled where possible; every pre-filled field shows a small amber chip **"From your CV — please check"**. Sections: headline, bio, topics (from the curated list, each with a level: Intermediate / Advanced / Expert), location (city + remote OK), links (LinkedIn / GitHub / website), past workshops & talks, rate range + currency (INR / USD) + per hour / per day + "open to pro-bono" (labelled "Visible to smallTech only"), availability (weekly day-part grid Mon–Sun × Morning / Afternoon / Evening, available-from date, blackout date ranges). Only headline and ≥1 topic are required. Consent checkbox. **Create my profile** → profile is live → My profile. If pre-fill wasn't possible the form starts empty with "We couldn't pre-fill from your CV — fill in the basics below; you can add the rest later."
+- **Review — step 2**: one screen, everything editable, pre-filled where possible; every pre-filled field shows a small amber chip **"From your CV — please check"**. Sections: headline, bio, topics (from the curated list, each with a level: Intermediate / Advanced / Expert), location (city + remote OK), links (LinkedIn / GitHub / website), past workshops & talks, rate range + currency (INR / USD) + per hour / per day / per course / per month + "open to pro-bono" (labelled "Visible to smallTech only"), availability (weekly day-part grid Mon–Sun × Morning / Afternoon / Evening, available-from date, blackout date ranges). Only headline and ≥1 topic are required. Consent checkbox. **Create my profile** → profile is live → My profile. If pre-fill wasn't possible the form starts empty with "We couldn't pre-fill from your CV — fill in the basics below; you can add the rest later."
 - **My profile — `/app/network/me/`**: view/edit every field, replace CV, **completeness meter** (0–100 %, the ten checks in api.md) with a nudge listing the top 3 missing items, verified badge when granted, danger zone. Labelled stubs: **My applications** (Phase 12), **Matched for you** (Phase 12), **Saved searches & alerts** (Phase 13), **Public directory profile** toggle (Phase 13).
 - Board: **Join our network** CTA becomes real (→ sign-in → onboarding); "Sign in to apply" stays a labelled stub until Phase 12.
 

@@ -18,7 +18,7 @@ Ground-up rebuild. The old `src/` and `frontend/` are **removed at scaffold**; n
 | 8 | Cutover: data import, `workshop0.smalltech.in`, retire the VM | delivered |
 | 9 | Rename everything to Workshop0 (code, brand, client storage, infra, repo) | delivered (PR #7) |
 | 10 | Opportunity Board: topic taxonomy, admin listings, public board (C8–C10) | specified |
-| 11 | Trainer sign-in, CV-drafted profiles & admin pool (C11–C13) | specified |
+| 11 | Trainer sign-in, CV-drafted profiles & admin pool (C11–C13) + **11b** Phase-10 feedback: managed partners, paste-to-fill drafting, compensation unit (C9/C10 extended) | specified |
 | 12 | Applications, matching & email outbox (C14–C16) | specified |
 | 13 | Alerts & digest, public directory, workshop tie-in (C17–C19) | specified |
 
@@ -619,7 +619,7 @@ kill %1
   - `ai/profile_draft.py`: `TopicRef`, `DraftResult`, `DraftRejected`, `draft_profile`, `run_profile_draft`.
   - `services/profiles.py`: `Completeness(pct: int, missing: list[str])`, `completeness(profile) -> Completeness`.
 - **TypeScript interface stubs:**
-  - `frontend/lib/networkAuth.ts` exports `type CurrentUser = {id, email, display_name, avatar_url, is_admin, has_profile}`, `getAuthConfig(): Promise<{google_enabled: boolean}>`, `getMe(): Promise<CurrentUser | null>`, `signInUrl(next: string, invite?: string): string`, `signOut(): Promise<void>`, `useCurrentUser(): {user, loading, refresh}` and `NETWORK_HEADERS = {"X-Requested-With": "workshop0"}`.
+  - `frontend/lib/networkAuth.ts` exports `type CurrentUser = {id, email, display_name, avatar_url, is_admin, has_profile}` (S9 adds `invite_accepted: boolean`), `getAuthConfig(): Promise<{google_enabled: boolean}>`, `getMe(): Promise<CurrentUser | null>`, `signInUrl(next: string, invite?: string): string`, `signOut(): Promise<void>`, `useCurrentUser(): {user, loading, refresh}` and `NETWORK_HEADERS = {"X-Requested-With": "workshop0"}`.
   - `frontend/components/network/AccountMenu.tsx` is a default export with no props. The stub renders `null`.
 
 **Slices.** S0 runs first because it is small and every DB test needs it. S1–S17 then fan out concurrently, in waves if over the cap. Every slice builds independently against the stubs above. "Tests need" lists the slices that must have landed before that slice's tests can pass.
@@ -627,18 +627,18 @@ kill %1
 | Slice | Owns (exclusive paths) | Delivers | Tests need |
 |---|---|---|---|
 | **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0006_trainer_network.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | All Phase-11 tables and the `ai_usage` changes, exactly per data-model.md. Conftest fixtures: `make_user(email, admin=False)`; `signed_in_client(user)`, which inserts an `auth_session` row and sets the cookie (the shortcut for non-auth tests); and `network_ai_disabled(which="key"\|"workspace")`, which monkeypatches the settings field to `""` and calls `anthropic_client.reset_client()`. This is the only sanctioned keyless switch, because `.env` holds real keys | — |
-| **S1 auth** | `src/workshop0/auth/{oidc,sessions,deps,routes,startup}.py` (fills the stubs), `src/workshop0/security.py`, `tests/integration/auth/**`, `tests/integration/test_redirects.py` | OIDC client, sessions, `deps.py` (exact interface in architecture.md), `/api/auth/*`, admin via session in `require_admin_key`, CSRF check, open-redirect guard. Invite acceptance at the callback goes through `network_invite` rows only; profile writes belong to S7. Also: issuer/secret startup rules in `startup.py`, and redirect tests for `/invite/{token}` and `/network` | S0, S2, S3 |
+| **S1 auth** | `src/workshop0/auth/{oidc,sessions,deps,routes,startup}.py` (fills the stubs), `src/workshop0/security.py`, `tests/integration/auth/**`, `tests/integration/test_redirects.py` | OIDC client, sessions, `deps.py` (exact interface in architecture.md), `/api/auth/*`, admin via session in `require_admin_key`, CSRF check, open-redirect guard. Invite acceptance at the callback per api.md §Phase 11 → Invite acceptance: mismatch/expired checks **before** any user or session write, the masked-email redirect, `network_invite.accepted_*`, `invite_accepted` on `/api/auth/me`, and — the one sanctioned profile write outside S7 — setting `trainer_profile.verified*` when the accepting user **already has** a profile (no other profile column; a not-yet-created profile is verified by S7 at create). Also: issuer/secret startup rules in `startup.py`, and redirect tests for `/invite/{token}` and `/network` | S0, S2, S3 |
 | **S2 ratelimit** | `src/workshop0/services/ratelimit.py`, `tests/unit/test_ratelimit.py`, `tests/integration/test_ratelimit_db.py` | `hit` / `enforce` over `rate_limit_hit`. Includes the two-app-instances-sharing-one-DB test | S0 |
 | **S3 test-issuer** | `tests/support/**` | `tests/support/fake_oidc.py`, run as `uv run python tests/support/fake_oidc.py --port 8099`. Provides discovery, an authorize page with an email field that auto-approves, a token endpoint and JWKS. A flag makes it emit `email_verified=false`, a wrong `aud`, an expired token, or a token signed by a second key | — |
 | **S4 cv-ingest** | `src/workshop0/storage/**`, `src/workshop0/services/cv_text.py`, `tests/unit/test_cv_text.py`, `tests/integration/storage/**`, `tests/fixtures/cv/**` | `BlobStore` (local + GCS). `extract_text` uses pypdf/python-docx and raises `CvUnreadable` below 200 chars. The committed CV fixtures, including an image-only PDF and the prompt-injection CV. GCS tests run only when `WORKSHOP0_GCS_BUCKET` is set (guarded) | — |
-| **S5 ai-client** | `src/workshop0/ai/{__init__,anthropic_client,pricing,usage}.py`, `tests/unit/ai/**`, `tests/integration/ai_network/test_anthropic_client.py` | The Anthropic client exactly per agent.md §Provider / §Shared client: the mandatory `anthropic-workspace-id` default header, the availability rule (key **and** workspace id), forced-tool `call_json` with one re-ask, error mapping, the pricing table, and `record_usage` plus its `ai.<purpose>` event. Also the header unit tests (MockTransport), the real cheap-model call and the header-less-400 negative test | S0 (usage row) |
+| **S5 ai-client** | `src/workshop0/ai/{__init__,anthropic_client,pricing,usage}.py`, `tests/unit/ai/**`, `tests/integration/ai_network/test_anthropic_client.py` | The Anthropic client exactly per agent.md §Provider / §Shared client: the mandatory `anthropic-workspace-id` default header, the availability rule (key **and** workspace id), structured-output `call_json` (`output_config` json_schema, `normalize_schema`, no tools / `tool_choice`) with one re-ask, error mapping (incl. `connection`, `status`, `request_id`), the pricing table, and `record_usage` plus its `ai.<purpose>` event. Also the header unit tests (`httpx2.MockTransport`), the real cheap-model call and the header-less-400 negative test | S0 (usage row) |
 | **S6 profile-drafter** | `src/workshop0/ai/profile_draft.py`, `src/workshop0/ai/prompts/profile_draft_{system,user}.md`, `tests/integration/ai_network/test_profile_draft.py` | `draft_profile` (pure) and `run_profile_draft` (BackgroundTask: DB in, DB out), with the guardrails per agent.md §Profile drafter. Tested on S4's fixtures against the real API | S0, S4 (fixtures), S5 |
-| **S7 me-api** | `src/workshop0/api/network_me.py`, `src/workshop0/services/profiles.py` (fills the stub), `tests/integration/network/me/**` | Every `/api/me/*` endpoint in api.md §Phase 11: CV upload/paste through the BackgroundTask drafter, draft polling, profile create/patch, completeness, own-CV download, deletion (DB + blob + sessions), invite-verified flag on create, audit rows, the CV and drafting rate limits | S0, S1, S2, S4, S6 |
+| **S7 me-api** | `src/workshop0/api/network_me.py`, `src/workshop0/services/profiles.py` (fills the stub), `tests/integration/network/me/**` | Every `/api/me/*` endpoint in api.md §Phase 11: CV upload/paste through the BackgroundTask drafter, draft polling, profile create/patch, completeness, own-CV download, deletion (DB + blob + sessions), invite-verified flag on create (from the user's accepted `network_invite`), `autofilled_fields` lifecycle (create keeps the untouched drafted fields, first PATCH clears), CV replacement in place (same `cv_document.id`), audit rows, the CV and drafting rate limits | S0, S1, S2, S4, S6 |
 | **S8 pool-api** | `src/workshop0/api/network_admin.py`, `src/workshop0/services/{pool,invites}.py`, `tests/integration/network/admin/**` | Every `/api/admin/network/*` endpoint: the paginated and filtered pool, trainer detail with `ai_cost_usd`, CV download + audit, verify/notes/tags, CSV, invites, and `ai-spend` over network `ai_usage` rows. Ships the 60-profile pool fixture | S0, S1, S4, S7 (`completeness`) |
-| **S9 fe-network-auth** | `frontend/app/signin/**`, `frontend/app/network/page.tsx`, `frontend/components/network/AccountMenu.tsx` + `frontend/components/network/auth/**`, `frontend/lib/networkAuth.ts` (fills both stubs), `frontend/components/board/**` (Join-our-network CTA only) | Sign-in page (Google button, "not set up" state, error codes), account menu, network home routing (signed out / no profile / profile), and the real board CTA | — |
-| **S10 fe-network-profile** | `frontend/app/network/join/**`, `frontend/app/network/me/**`, `frontend/components/network/profile/**`, `frontend/lib/network.ts` | Onboarding (3 tabs, LinkedIn how-to, polling skeleton, invite landing with Verified state) and the review screen with "From your CV — please check" chips. My profile with the completeness meter and nudges, delete flow, and stubs. The shared profile form lives here | — (imports S9's stubs) |
+| **S9 fe-network-auth** | `frontend/app/signin/**`, `frontend/app/network/page.tsx`, `frontend/components/network/AccountMenu.tsx` + `frontend/components/network/auth/**`, `frontend/lib/networkAuth.ts` (fills both stubs), `frontend/components/board/**` (Join-our-network CTA only), `frontend/app/opportunities/page.tsx` (board-header CTA only) | Sign-in page (Google button, "not set up" state, error codes incl. the invite mismatch/expired copy in api.md §Phase 11 → Invite acceptance), account menu, network home routing (signed out / no profile / profile), and the real board CTA. `CurrentUser` gains `invite_accepted: boolean` (api.md `GET /api/auth/me`) | — |
+| **S10 fe-network-profile** | `frontend/app/network/join/**`, `frontend/app/network/me/**`, `frontend/components/network/profile/**`, `frontend/lib/network.ts` | Onboarding (3 tabs, LinkedIn how-to, polling skeleton, invite landing with Verified state — signed out with `?invite=` → sign-in link `signInUrl("/app/network/join/", invite)`; signed in → the **Verified** badge renders iff `user.invite_accepted` (server truth from `/api/auth/me`, never the query param)) and the review screen with "From your CV — please check" chips. My profile with the completeness meter and nudges, delete flow, and stubs. The shared profile form lives here | — (imports S9's stubs) |
 | **S11 fe-admin-pool** | `frontend/app/admin/network/**`, `frontend/components/admin/network/**`, `frontend/lib/adminNetwork.ts` | Pool table with filters, CSV, invites and the Network AI spend card. Trainer detail with CV download, verify, tags, notes, drafting cost and activity | — |
-| **S12 fe-admin-gate** | `frontend/components/admin/AdminGate.tsx`, `frontend/app/admin/page.tsx`, `frontend/app/admin/opportunities/page.tsx` (nav only) | Google button on `AdminGate` and on Admin Home's gate. A session admin passes without a key; key behaviour is unchanged. Admin Home **Trainer network** and opportunities-page **Trainer pool** nav become real | — |
+| **S12 fe-admin-gate** | `frontend/components/admin/AdminGate.tsx`, `frontend/app/admin/page.tsx`, `frontend/app/admin/opportunities/page.tsx` (nav only), `frontend/components/admin/AdminHeader.tsx` (the Trainer-pool nav only — handed to F5 once S12 is VERIFIED) | Google button on `AdminGate` and on Admin Home's gate. A session admin passes without a key; key behaviour is unchanged. Admin Home **Trainer network** and opportunities-page **Trainer pool** nav become real. The opportunities-page Trainer pool nav **is** the header's: in `AdminHeader.tsx` (rendered by the opportunities, editor and topics pages) the one-line change replaces `<StubAction label="Trainer pool" />` with a real `Link` to `/admin/network/` carrying `data-testid="nav-trainer-pool"`, and the inline "Trainer pool" link S12 added to the `opportunities/page.tsx` subtitle is removed, so exactly one `nav-trainer-pool` renders per screen (the e2e locator is strict). The header's `Outbox` stub stays | — |
 | **S13 e2e-onboarding** | `tests/e2e/network-onboarding.spec.ts` | Journey below. Its sign-in helper is private to the spec file; `tests/e2e/helpers.ts` is read-only this phase | runtime: all |
 | **S14 e2e-admin-pool** | `tests/e2e/admin-pool.spec.ts` | Journey below. **Self-seeding:** it creates its own trainer in `beforeAll` (fake-issuer sign-in, upload of `tests/fixtures/cv/genai_trainer.pdf`, profile create) and never depends on another spec's data | runtime: all |
 | **S15 infra-provision** | `deploy/cloudrun/provision.sh` | CV bucket + IAM, `workshop0-session-secret`, `workshop0-google-client-secret`, **`workshop0-anthropic-api-key` + `workshop0-anthropic-workspace-id`**, all per architecture.md (stdin values, SKIPPED rule, per-secret IAM). `--rotate` accepts the new names. The script is written and `bash -n`-checked only and is never run by an agent | — |
@@ -659,13 +659,13 @@ export WORKSHOP0_GOOGLE_CLIENT_ID=test-client WORKSHOP0_GOOGLE_CLIENT_SECRET=tes
 export WORKSHOP0_OIDC_ISSUER=http://localhost:8099 WORKSHOP0_SESSION_SECRET="$(openssl rand -hex 32)"
 export WORKSHOP0_ADMIN_EMAILS=admin@example.test WORKSHOP0_BLOB_BACKEND=local
 uv sync
-DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0006'
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0007'   # 0007 = Phase 11b's F1 (lands in the same phase)
 uv run python tests/support/fake_oidc.py --port 8099 &                                 # real OIDC protocol, local issuer
 sleep 2
 uv run pytest tests/unit tests/integration -q                                          # incl. auth/, network/, storage/, ai/, ai_network/ (REAL Anthropic, workspace header)
 ! uv run pytest tests/unit/ai tests/integration/ai_network -q -rs | grep -q SKIPPED   # real-key tests ran, none skipped
 ! grep -rn --include='*.py' 'Anthropic(' src | grep -v '^src/workshop0/ai/anthropic_client.py:'   # one construction site
-! grep -il openrouter src/workshop0/ai/{anthropic_client,pricing,usage,profile_draft}.py           # network AI never uses OpenRouter
+! grep -il openrouter src/workshop0/ai/{anthropic_client,pricing,usage,profile_draft,opportunity_draft}.py   # network AI never uses OpenRouter
 (cd frontend && pnpm install && pnpm build)
 for p in signin network network/join network/me admin/network admin/network/trainer; do test -f "frontend/out/$p/index.html"; done
 grep -q '\.flex' frontend/out/_next/static/css/*.css && ! grep -q '@source' frontend/out/_next/static/css/*.css
@@ -688,7 +688,7 @@ bash -n deploy/cloudrun/provision.sh
 - pricing math and the unknown-model rule hold;
 - the drafter fixtures and prompt-injection CV pass against the real `claude-sonnet-5-5`, and each drafting call writes one `ai_usage` row whose `model` is the configured id.
 
-OIDC — state mismatch, nonce mismatch, wrong `aud`, expired token, bad signature (token signed by a second key), `email_verified=false` each refused with the documented redirect code and no session row; first sign-in creates one user, second reuses it; allowlisted email → admin endpoints succeed without the key, de-listed → 403 `not_admin` on the next request; existing admin tests still pass with the key only; every `/api/me` mutation without `X-Requested-With` → 403 `csrf_failed`; `next=https://evil.example` → lands on `/app/network/`; rate limit: the 11th CV upload in an hour → 429 with `Retry-After`, across two app instances sharing the DB. Profiles — the three drafter fixtures through the real endpoint (upload → poll → draft) with agent.md's assertions; image-only PDF → 422 `cv_unreadable`; keyless run and key-without-workspace run (both via the `network_ai_disabled` fixture) → `draft_status="skipped"` and profile creation still works; consent missing → `validation_error`; completeness = the ten-check formula on 5 hand-built profiles; deletion removes user, profile, CV row, blob file and sessions and writes `account.delete` with a masked email only. Pool — a 60-profile fixture: `q`, `topic` (ANY), `verified`, `tag` filters return precomputed sets across 3 pages; CSV row count = filtered total; CV download (local) returns the original bytes with `Content-Disposition` and writes `cv.download`; `ai-spend` and the trainer's `ai_cost_usd` equal the sums of the seeded network `ai_usage` rows (help-desk rows with a `workshop_id` excluded). Privacy — rates, email and CV fields are absent from every non-admin payload except the owner's own `GET /api/me/profile` (asserted on serialized JSON).
+OIDC — state mismatch, nonce mismatch, wrong `aud`, expired token, bad signature (token signed by a second key), `email_verified=false` each refused with the documented redirect code and no session row; first sign-in creates one user, second reuses it; allowlisted email → admin endpoints succeed without the key, de-listed → 403 `not_admin` on the next request; existing admin tests still pass with the key only; every `/api/me` mutation without `X-Requested-With` → 403 `csrf_failed`; `next=https://evil.example` → lands on `/app/network/`; rate limit: the 11th CV upload in an hour → 429 with `Retry-After`, across two app instances sharing the DB. Profiles — the three drafter fixtures through the real endpoint (upload → poll → draft) with agent.md's assertions; image-only PDF → 422 `cv_unreadable`; keyless run and key-without-workspace run (both via the `network_ai_disabled` fixture) → `draft_status="skipped"` and profile creation still works; consent missing → `validation_error`; completeness = the ten-check formula on 5 hand-built profiles; deletion removes user, profile, CV row, blob file and sessions and writes `account.delete` with a masked email only. Pool — a 60-profile fixture: `q`, `topic` (ANY), `verified`, `tag` filters return precomputed sets across 3 pages; CSV row count = filtered total; CV download (local) returns the original bytes with `Content-Disposition` and writes `cv.download`; `ai-spend` and the trainer's `ai_cost_usd` equal the sums of the seeded network `ai_usage` rows (help-desk rows with a `workshop_id` excluded). Privacy — rates, email and CV fields appear only in the owner's own `/api/me/*` payloads and in admin payloads; raw CV text, `storage_key` and `sha256` are never returned to anyone (asserted on serialized JSON of every `/api/me/*`, `/api/admin/network/*` and public response). Invites — matching email → `invite_accepted: true` on `/api/auth/me`, an existing profile becomes verified at the callback, a later profile create starts verified; mismatching email → 303 to `/app/signin/?error=invite_email_mismatch&invite=<token>&invite_email=<masked>`, no user created, no session, invite untouched; expired → `error=invite_expired`, no user created, no session.
 
 **e2e (S13 / S14):** *network-onboarding* — board → **Join our network** → sign-in page → **Continue with Google** → the local issuer's page → enter `trainer-<run>@example.test` → back on onboarding → upload `tests/fixtures/cv/genai_trainer.pdf` → "Reading your CV…" → review screen shows ≥1 "From your CV — please check" chip and the curated topics (real Anthropic call, via the server's `.env`) → tick consent → **Create my profile** → My profile shows the completeness meter and nudges → sign out → sign in again → same profile → **Delete my account** → confirmation → signing in again lands on onboarding (fresh). *admin-pool* — sign in as `admin@example.test` via the issuer → Admin Home without the key → **Trainer network** → the trainer this spec seeded in `beforeAll` is listed → open → **Download CV** (download event, `.pdf`) → **Verify** → badge → add tag + note → **Export CSV** → create an invite for `invitee-<run>@example.test` → open the copied `/invite/<token>` in a fresh context, sign in as that email → onboarding shows **Verified** → a different email on another invite → mismatch message. Every stub listed above shows its pill.
 
@@ -700,6 +700,198 @@ OIDC — state mismatch, nonce mismatch, wrong `aud`, expired token, bad signatu
 5. As the trainer, **Delete my account** → it disappears from the pool.
 6. **Production (operator step — escalated, agents never run this against GCP)** (after the merge deploys): `set -a; . ./.env; set +a` (or export `WORKSHOP0_GOOGLE_CLIENT_SECRET`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` by hand), then `bash deploy/cloudrun/provision.sh --dry-run` → review → `bash deploy/cloudrun/provision.sh` (creates the bucket and the secrets incl. `workshop0-anthropic-api-key` + `workshop0-anthropic-workspace-id`; each absent value prints `SKIPPED`), `gh variable set WORKSHOP0_GOOGLE_CLIENT_ID --body …`, `gh variable set WORKSHOP0_ADMIN_EMAILS --body …`, `gh workflow run deploy-cloudrun.yml --ref main`, then repeat steps 3–4 on **https://workshop0.smalltech.in** (CV download goes through a signed GCS URL; drafting works only once both Anthropic secrets exist). Also confirm the two prices in `src/workshop0/ai/pricing.py` against Anthropic's pricing page (Assumed values — agent.md §Shared client).
 **Labelled stubs (not bugs):** Sign in to apply, My applications, Matched for you, Saved searches, Public directory profile, matching filters, Suggested trainers, Email invite, Outbox.
+
+### Phase 11b — Phase 10 feedback
+
+*A sub-step of Phase 11. It is built concurrently with S1–S17 and handed off in the same human test. The Phase-11 gate **and** the addendum below must both pass before the Phase-11 handoff.*
+
+**Goal:** An admin pastes the description a partner forwarded into the opportunity editor and clicks **Draft**. Every field is pre-filled and marked "Drafted — please check": topics come only from the curated list, the partner is matched against a managed partner list, and compensation is structured with a unit. The admin fixes anything wrong and publishes. Nothing is ever saved or published automatically. The public card then reads "₹8,000–12,000 / day" and never shows the partner's internal identity. Partners are a managed list that admins can add, rename and deactivate. Existing free-text partner names are migrated into it.
+
+**Capabilities extended (no new numbers):** C9 gains **Partners**, **paste-to-fill drafting** and **structured compensation**. C10 gains the **compensation display**. Contract: [api.md](api.md) §Phase 11b. Schema: [data-model.md](data-model.md) §Phase 11b. Drafter: [agent.md](agent.md) §Opportunity drafter. UI: [capabilities.md](capabilities.md) §C9/§C10.
+
+> **Assumed:** this is feedback on delivered capabilities, so C9/C10 are extended instead of adding C20+. The Phase-10 capability count is unchanged.
+
+**Non-goals (explicit):**
+- no compensation filter on the board or the admin list;
+- no parsing of legacy `compensation_text` into the structured fields;
+- no partner deletion and no partner-facing or public partner surface;
+- no back-linking of a new listing's draft usage to the listing it becomes;
+- no new dependency, setting or environment variable.
+
+**Mini-scaffold (orchestrator, one commit, before the F fan-out; needs only S0, which is committed; see §Parallel fan-out rule):**
+- **`src/workshop0/api/__init__.py`:** add `partners_admin` and `board_ai_admin` to the `from src.workshop0.api import (...)` list. Add `app.include_router(partners_admin.router)` and `app.include_router(board_ai_admin.router)` directly after `app.include_router(board_admin.router)`. No other change.
+- **Router shells:** `api/partners_admin.py` and `api/board_ai_admin.py`. Each is just `router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin_key)])`.
+- **Python stub `src/workshop0/services/partners.py`.** Bodies `raise NotImplementedError`. Signatures:
+  - `PARTNER_EXISTS_MESSAGE: str`;
+  - `normalize_name(name: str) -> tuple[str, str]`, which returns `(collapsed, name_key)`;
+  - `partner_ref(partner: Partner) -> dict`, which returns `{"id", "internal_name", "display_name", "active"}`;
+  - `active_partners(session) -> list[Partner]`;
+  - `resolve_partner(session, *, partner_id: int | None, partner_id_given: bool, internal_name: str | None, internal_name_given: bool, display_name_hint: str | None, current_partner_id: int | None, by: str) -> Partner | None`. It flushes but never commits. Rules are in api.md §Phase 11b.
+- **TypeScript stubs.** Each has exact exported types and signatures, with placeholder bodies that type-check:
+  - `frontend/lib/compensation.ts`:
+    - `type CompensationUnit = "hour" | "day" | "course" | "month"` and `type Currency = "INR" | "USD"`;
+    - `COMPENSATION_UNITS: {value: CompensationUnit; label: string}[]` and `CURRENCIES: {value: Currency; symbol: string}[]`, both real in the stub;
+    - `interface CompensationFields {compensation_min: number | null; compensation_max: number | null; compensation_currency: Currency | null; compensation_unit: CompensationUnit | null; compensation_text: string | null}`;
+    - `formatCompensation(c: CompensationFields): string | null`. The stub returns `c.compensation_text`.
+  - `frontend/lib/adminPartners.ts`:
+    - `interface PartnerRef {id; internal_name; display_name: string | null; active}`;
+    - `interface AdminPartner extends PartnerRef {notes: string | null; opportunity_count: number; created_at; updated_at}`;
+    - `adminListPartners(adminKey): Promise<{partners: AdminPartner[]}>`;
+    - `adminCreatePartner(adminKey, body: {internal_name; display_name?; notes?}): Promise<{partner: AdminPartner}>`;
+    - `adminPatchPartner(adminKey, id, body: Partial<{internal_name; display_name; notes; active}>): Promise<{partner: AdminPartner}>`.
+  - `frontend/lib/adminDraft.ts`:
+    - `type DraftedField`, the union of the api.md `drafted_fields` values;
+    - `interface OpportunityDraft`, the api.md `draft` object;
+    - `interface DraftResponse {draft: OpportunityDraft; drafted_fields: DraftedField[]; cost_usd: number; model: string}`;
+    - `getDraftConfig(adminKey): Promise<{available: boolean; model: string}>`;
+    - `draftOpportunity(adminKey, body: {text: string; opportunity_id: number | null; keep_partner_identity: boolean}): Promise<DraftResponse>`.
+  - `frontend/components/admin/partners/PartnerSelect.tsx`: `export function PartnerSelect(props: {value: PartnerRef | null; onChange: (p: PartnerRef | null) => void; suggestedNew?: {internal_name: string; display_name: string | null} | null; drafted?: boolean; error?: string})`. The stub renders `null`.
+  - `frontend/components/admin/drafting/PasteToFill.tsx`: `export function PasteToFill(props: {opportunityId: number | null; hasUserInput: boolean; onDraft: (r: DraftResponse) => void})`. The stub renders `null`.
+  - `frontend/components/admin/drafting/DraftedChip.tsx`: `export function DraftedChip(props: {field: DraftedField; show: boolean})`. The stub renders `null`.
+
+  Components get the admin key from `useAdmin()` (`components/admin/AdminGate.tsx`, read-only for every F slice).
+
+> **Assumed:** the partner endpoints get their own router, `partners_admin.py`, and the drafter gets `board_ai_admin.py`, instead of both living in `board_admin.py`. This lets F2, F3 and F4 own disjoint files. Paths stay under `/api/admin`.
+
+**Slices.** F1 runs first. It is small, and every other backend F slice's tests need its models. F2–F10 then fan out concurrently with S1–S17, joining the Phase-11 waves in table order. **11b exception to "build dependencies are always none":** three slices each have one **deferred edit** on a file that an in-flight S slice owns. The slice writes everything else at once and applies the deferred edit only after the named S slice is **VERIFIED** by qa-auditor. At that point the path transfers, as listed below.
+
+| Slice | Owns (exclusive paths) | Delivers | Tests need | Build dependency |
+|---|---|---|---|---|
+| **F1 schema-partners** | `src/workshop0/db/models.py` (transferred from S0, which is done), `alembic/versions/0007_partners_compensation.py`, `tests/integration/test_migration.py` (transferred from S0) | `Partner` model, the new `Opportunity` columns, and `AiUsage.purpose` widened to `String(32)`, exactly per data-model.md §Phase 11b. Migration `0007` (`down_revision = "0006"`) includes the free-text-partner data migration with the dedupe rules and a working downgrade. `test_migration.py`: head is now `0007`; `EXPECTED_TABLES` gains `partner`; the existing 0006 tests stop asserting that 0006 is head; plus the new 0007 tests below. `tests/integration/test_sqlite_to_postgres.py` must stay green **without being edited** | — | — (runs first) |
+| **F2 partners-api** | `src/workshop0/services/partners.py` (fills the stub), `src/workshop0/api/partners_admin.py` (fills the shell), `tests/integration/test_partners_admin.py` | `GET/POST /api/admin/partners` and `PATCH /api/admin/partners/{id}` per api.md: normalized-name uniqueness → 409 `partner_exists`, deactivate/reactivate, `opportunity_count`, audit `partner.create`/`partner.update` (actor `admin`, `subject_type="partner"`, `by` from `AdminActor`), and the opportunity mirror rewrite on rename. Also `resolve_partner` and `normalize_name` for F3/F4. Log events `partner.created`/`partner.updated` carry the id only, never names or notes | F1, S1 (`AdminActor`) | — |
+| **F3 opportunity-api** | `src/workshop0/services/opportunities.py`, `src/workshop0/services/topics.py`, `src/workshop0/api/board_admin.py`, `tests/unit/test_board_rules.py`, `tests/integration/test_board_{admin,public,leak,audit,observability}.py` (edited only where the contract changed), `tests/integration/test_board_partner_link.py`, `tests/integration/test_board_compensation.py` | Opportunity writes accept `partner_id`, plus the legacy `partner_internal_name` resolved through `resolve_partner`. They write the mirror. Admin payloads gain `partner_id`/`partner`, with `partner_internal_name` derived from the partner row. Structured compensation fields have their validation, and are added explicitly to the public allow-list. Admin `q` matches `partner.internal_name` through a join. Audit `by` is the `AdminActor.by` for opportunity and topic writes (data-model.md §facilitator_action). `board_public.py` is read-only: public serializers never read the partner row | F1, F2, S1 | — |
+| **F4 opportunity-drafter** | `src/workshop0/ai/opportunity_draft.py`, `src/workshop0/ai/prompts/opportunity_draft_{system,user}.md`, `src/workshop0/api/board_ai_admin.py` (fills the shell), `tests/unit/test_opportunity_draft_guardrails.py`, `tests/integration/ai_network/test_opportunity_draft.py`, `tests/integration/ai_network/test_opportunity_draft_api.py`, `tests/fixtures/opportunity_posts/**` | `draft_opportunity` (pure) and `run_opportunity_draft`, exactly per agent.md §Opportunity drafter. Endpoints `GET /api/admin/opportunity-draft/config` and `POST /api/admin/opportunity-draft`: rate limit, `record_usage(purpose="opportunity_draft", opportunity_id=…)`, 503 `ai_not_configured`, 502 `ai_draft_failed`. Also the four committed fixtures, including the prompt-injection post. Unit tests for the guardrails need no network. The real-API tests run on `claude-sonnet-5-5` | F1, F2 (`normalize_name`), S2 (ratelimit), S5 (client + usage) | — |
+| **F5 fe-partners** | `frontend/app/admin/partners/**`, `frontend/components/admin/partners/**` (fills `PartnerSelect`), `frontend/lib/adminPartners.ts` (fills the stub); **deferred:** `frontend/components/admin/AdminHeader.tsx` | Partners page (C9): table, add row, inline rename/edit of the public name and notes, active toggle with confirm. `PartnerSelect`: a searchable dropdown of active partners plus the listing's current partner if it is inactive; **+ Add partner** modal; a "Suggested new partner" offer; a "Manage partners" link. Own fetch helper, which sends `X-Admin-Key` and `X-Requested-With: workshop0`. **Deferred edit:** `AdminHeader.tsx` gains `"partners"` in `Section` and a `nav-partners` link after Topics | — | the AdminHeader edit waits until **S12 is VERIFIED** (S12 makes the header's Trainer-pool nav real; F5 keeps that link and adds Partners after Topics) |
+| **F6 fe-drafter** | `frontend/components/admin/drafting/**` (fills both stubs), `frontend/lib/adminDraft.ts` (fills the stub) | `PasteToFill`, the "Paste the forwarded description" panel: textarea, "Keep the partner's name in the public text" toggle, **Draft**, drafting skeleton, error state, **not-configured** state from `/config`, a confirm before overwriting typed input, and the cost line "Drafted with <model> · $0.0042" (admin-only, so naming AI is fine). `DraftedChip` shows an amber "Drafted — please check" chip | — | — |
+| **F7 fe-editor** | `frontend/components/admin/OpportunityEditor.tsx`, `frontend/components/admin/PublicCardPreview.tsx`, `frontend/app/admin/opportunities/edit/page.tsx`, `frontend/lib/adminBoard.ts` | The editor embeds `PasteToFill` at the top of a new listing (and collapsed on an existing one). It maps a `DraftResponse` into the form (slug → topic id; `deadline_on` → that date at 23:59 local) and shows `DraftedChip` on each drafted field until that field is edited. The internal partner text input is replaced by `PartnerSelect`; choosing a partner fills an **empty** public-name field with its default public name. Compensation becomes min / max / currency / unit plus the note, with inline errors. The preview uses `formatCompensation`. `adminBoard.ts` gains the new fields and sends `X-Requested-With: workshop0` | — | — |
+| **F8 fe-board-compensation** | `frontend/lib/compensation.ts` (fills the stub; the **only** compensation formatter), `frontend/lib/board.ts`, `frontend/app/opportunities/view/page.tsx`; **deferred:** `frontend/components/board/OpportunityCard.tsx` | The display rules in capabilities.md §C10. The listing meta grid shows `formatCompensation(o)` with `data-testid="opportunity-compensation"`. Public types gain the four fields. **Deferred edit:** the card's compensation line uses `formatCompensation(o)` with the same test id | — | the OpportunityCard edit waits until **S9 is VERIFIED** |
+| **F9 e2e-drafting** | `tests/e2e/opportunity-drafting.spec.ts` (new), `tests/e2e/opportunity-board.spec.ts` (update: the internal-partner text fill becomes the `PartnerSelect` **+ Add partner** flow with a run-suffixed internal name and a `ZZ-PARTNER-NOTE-<run>` note, plus a no-leak assertion for that note; its API seeding is unchanged because the legacy `partner_internal_name` still resolves. **Also owned by F9:** the Phase-10 assertions that expect `join-network-stub` — on the board (`toBeVisible` + "Coming in a later phase") and in the listing-page stub loop `['apply-stub', 'join-network-stub']` — become: board → `join-network-stub` count 0 and `join-network-cta` visible (S9's real CTA, same assertion shape as `network-onboarding.spec.ts`); listing page → the stub loop keeps only `apply-stub` (still a Phase-12 stub) and `join-network-cta` is asserted visible instead) | Journey below. `helpers.ts` stays read-only. Self-seeding | runtime: all (F1–F8 including their deferred edits, and S1–S12) | — |
+| **F10 docs** | **deferred:** `README.md` | The README "Opportunity Board" section gains the Partners page URL, paste-to-fill (needs both Anthropic values; without them the box says "AI drafting not configured"), and the compensation units | — | waits until **S17 is VERIFIED** |
+
+**Path transfers (effective the moment the named slice is VERIFIED; until then the F slice must not touch the file):**
+- `frontend/components/board/OpportunityCard.tsx`: S9 → **F8**. S9 keeps the rest of `components/board/**` until Phase 11 closes.
+- `frontend/components/admin/AdminHeader.tsx`: S12 → **F5**. S12 owns it for the one-line Trainer-pool change (S12 row); S11 never touches it.
+- `frontend/app/opportunities/page.tsx`: owned by **S9** (board-header CTA) for the rest of Phase 11; no F slice touches it.
+- `README.md`: S17 → **F10**.
+- Committed S0 paths: `src/workshop0/db/models.py` and `tests/integration/test_migration.py` → **F1** (immediately).
+- F7 does **not** touch `frontend/app/admin/opportunities/page.tsx` (S12) and F8 does not touch `frontend/app/opportunities/page.tsx` (S9). Neither file needs a change for 11b, because the admin list keeps its `partner_internal_name` key and the board gets no new filter.
+
+> **Assumed:** the pieces of the editor (partner picker, paste box, chips) are separate slices behind TS stubs, and F7 integrates them. This way four frontend slices run in parallel instead of one 1000-line file serializing the work.
+> **Assumed:** `tests/conftest.py` stays read-only in 11b. Truncation is metadata-driven, so `partner` is truncated automatically. `opportunity_body` keeps sending the legacy `partner_internal_name`, which still resolves to a partner, so every existing board fixture remains valid.
+
+**Test-id contract (F5–F8 render these; F9 asserts them):**
+
+| Surface | Test ids |
+|---|---|
+| Partners page | `admin-partners-page`, `partner-row` (contains the internal name), `partner-internal-input`, `partner-display-input`, `partner-notes-input`, `partner-add-button`, `partner-active-toggle`, `partner-error`, `nav-partners` (header, after the deferred edit), `partners-link` (editor) |
+| `PartnerSelect` | `opp-partner-select`, `opp-partner-option-<id>`, `opp-partner-add`, `partner-add-internal-input`, `partner-add-display-input`, `partner-add-notes-input`, `partner-add-save`, `partner-suggested-new` |
+| Paste box | `paste-box`, `paste-input`, `paste-keep-partner-toggle`, `paste-draft-button`, `paste-drafting`, `paste-error`, `paste-not-configured`, `draft-cost-line` |
+| Drafted chips | `drafted-chip-<field>`, one per `drafted_fields` value |
+| Compensation (editor) | `opp-comp-min-input`, `opp-comp-max-input`, `opp-comp-currency-select`, `opp-comp-unit-select`, `opp-compensation-input` (the note; existing id kept) |
+| Compensation (card + listing) | `opportunity-compensation` |
+| Removed | `opp-partner-internal-input` |
+
+**Tests the backend slices must write (PostgreSQL; real Anthropic where stated):**
+- **Migration (F1):**
+  - *Fixture:* at revision `0006`, insert six listings: `"Acme Payments"` (updated oldest), `"  acme   PAYMENTS "`, `"ACME payments"` (updated newest), `"Globex"`, one with `null` and one with `"   "`. Display names: `"A fintech"` ×2, `"Fintech partner"` ×1 on the Acme group, `null` on Globex.
+  - *Upgrade:* `upgrade head` → exactly **2** partner rows. Acme has `internal_name="ACME payments"` (the newest variant, collapsed), `display_name="A fintech"` (the most frequent) and `name_key="acme payments"`. The 4 named listings carry the right `partner_id`; the 2 blank ones are `null`. Their `partner_internal_name` values are unchanged. The compensation columns are null. `ai_usage.purpose` accepts `'opportunity_draft'`.
+  - *Downgrade:* `downgrade 0006` restores the pre-0007 schema. Listings whose `compensation_text` was null but had amounts get the plain-text fallback. `opportunity_draft` usage rows are deleted. `partner_internal_name` equals the partner's name.
+  - *Re-upgrade:* `upgrade head` again → the same 2 partners (idempotent, with no duplicates).
+- **Partners (F2):**
+  - 401 without the key;
+  - create, list with `opportunity_count`;
+  - duplicate under case or whitespace variants → 409 `partner_exists` with no row; rename collision → 409;
+  - bounds: `internal_name` 2–160, `display_name` ≤160, `notes` ≤5000;
+  - deactivate → absent from `active_partners`;
+  - every write → exactly one audit row, and a no-op PATCH → none;
+  - rename rewrites `opportunity.partner_internal_name` on that partner's listings;
+  - captured log events contain neither the internal name nor the notes.
+- **Partner link (F3):**
+  - `partner_id` set, changed and cleared;
+  - an unknown id or an inactive partner on a new attachment → `validation_error` with the exact message; an inactive partner already attached is kept;
+  - the legacy `partner_internal_name` reuses a case-variant match, or creates a partner plus a `partner.create` audit in the same transaction;
+  - a conflicting `partner_id` with `partner_internal_name` → `validation_error`;
+  - `changed_fields` reports `partner_id`;
+  - `q` finds a listing by a renamed partner's new name.
+- **Compensation (F3):** every rule in api.md, including:
+  - amount without currency or unit;
+  - currency or unit without an amount;
+  - `max < min`;
+  - an out-of-range value;
+  - each of the 4 units;
+  - PATCH partial merges.
+  The public card and detail carry the 4 fields.
+- **Leak (F3, extends `test_board_leak.py`):** the board fixture's partners get `notes = "ZZ-PARTNER-NOTE-4b2e"`. The raw text of every public response (topics, list for every type, detail of open, expired and closed listings) contains:
+  - neither the partner sentinel (`ZZ-INTERNAL-PARTNER-7f3a`) nor the note sentinel;
+  - none of the keys `partner_id`, `"partner"`, `name_key`, `notes`, `partner_internal_name`, `internal_notes`, `stored_status`.
+- **Drafter (F4):** per agent.md §Opportunity drafter → Testing, including the prompt-injection fixture, the curated-topics-only assertion, partner matching, the keyless/no-workspace paths, `ai_usage` + cost, and the rate limit.
+
+**e2e journey (F9, `tests/e2e/opportunity-drafting.spec.ts`, live single-origin app, the server's `.env` provides the real Anthropic key + workspace id; per-run suffixes because the e2e DB is not reset):**
+1. **Seed (`beforeAll`, admin API):** ensure the partner `Zenvia Learning Pvt Ltd` exists. Its default public name is `A Pune edtech` and its notes are `ZZ-PARTNER-NOTE-<run>`. Look it up first and create it only if absent.
+2. **Partners page:** sign in at `/app/admin/` → open the Partners page (`partners-link` from the editor, or `nav-partners`). Add `ZZ-Partner-<run>` → it shows a `partner-row`. Adding `zz-partner-<run>` → `partner-error`. Deactivating it → it is gone from `opp-partner-select`.
+3. **Draft:** **New opportunity** → fill `paste-input` with `tests/fixtures/opportunity_posts/forwarded_genai_workshop.txt` → **Draft**. Within 45 s:
+   - title is non-empty;
+   - `opp-topic-option-generative-ai` and `opp-topic-option-python` are selected;
+   - location is Hybrid with city Pune;
+   - comp min 8000, max 12000, INR, unit `day`;
+   - `opp-partner-select` shows Zenvia, and the public partner name is `A Pune edtech`;
+   - at least 5 `drafted-chip-*` are visible, and `draft-cost-line` contains `$`;
+   - the description textarea contains no `Zenvia`, no `@` email and no phone number;
+   - the status is still unsaved, and the public board has no new card.
+4. **Publish:** edit the title → its chip disappears → **Publish** → Open.
+5. **Public check (fresh context):** the card's `opportunity-compensation` reads exactly `₹8,000–12,000 / day`, and so does the listing's. The partner is shown as `A Pune edtech`. `page.content()` contains neither `Zenvia` nor `ZZ-PARTNER-NOTE`.
+6. **Format vectors:** three more listings are created via the admin API, and each listing page shows the exact string:
+   - `{50, null, USD, hour}` → `From $50 / hour`;
+   - `{null, 150000, INR, month}` → `Up to ₹1,50,000 / month`;
+   - `{20000, 20000, INR, course, note "plus travel"}` → `₹20,000 / course · plus travel`.
+7. **Not-configured state:** in a fresh page, `page.route('**/api/admin/opportunity-draft/config')` answers `{"data":{"available":false,"model":"claude-sonnet-5-5"},"error":null}`. This mocks the UI state only; the real keyless path is proven by F4's integration tests. Then `paste-not-configured` is visible, `paste-draft-button` is disabled, and a listing can still be typed, saved as a draft and published.
+
+**Gate addendum (run after the Phase-11 block, in the same shell with the same exports, and with the Phase-11 server already killed):**
+
+```bash
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0007'
+uv run pytest tests/integration/test_migration.py tests/integration/test_partners_admin.py tests/integration/test_board_partner_link.py tests/integration/test_board_compensation.py tests/integration/test_board_leak.py tests/unit/test_opportunity_draft_guardrails.py -q
+! uv run pytest tests/integration/ai_network/test_opportunity_draft.py tests/integration/ai_network/test_opportunity_draft_api.py -q -rs | grep -q SKIPPED   # real Anthropic, none skipped
+uv run pytest tests/integration/ai_network/test_opportunity_draft.py tests/integration/ai_network/test_opportunity_draft_api.py -q          # zero failures
+! grep -il openrouter src/workshop0/ai/opportunity_draft.py
+! grep -nE 'Partner|partner_id|partners' src/workshop0/api/board_public.py           # public router never touches partners
+test -f src/workshop0/ai/prompts/opportunity_draft_system.md && test -f src/workshop0/ai/prompts/opportunity_draft_user.md
+test -f frontend/out/admin/partners/index.html
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head
+DATABASE_URL="$TEST_DATABASE_URL" uv run python -m src &
+sleep 3
+for u in /api/admin/partners /api/admin/opportunity-draft/config; do curl -sS -o /dev/null -w '%{http_code}\n' "http://localhost:8001$u" | grep -qx 401; done
+curl -fsS -H "X-Admin-Key: $WORKSHOP0_ADMIN_KEY" http://localhost:8001/api/admin/opportunity-draft/config | uv run python -c 'import json,sys; d=json.load(sys.stdin)["data"]; assert d["available"] is True and d["model"]=="claude-sonnet-5-5", d'
+pnpm exec playwright test tests/e2e/opportunity-drafting.spec.ts tests/e2e/opportunity-board.spec.ts --reporter=line
+curl -fsS 'http://localhost:8001/api/public/opportunities?page_size=50' > /tmp/w0-public.json             # after e2e: published listings with sentinel partners exist
+uv run python -c 'import json; d=json.load(open("/tmp/w0-public.json"))["data"]; assert d["total"]>=1; assert any(o.get("compensation_unit")=="day" for o in d["opportunities"]), "no structured compensation on the board"'
+! grep -qE 'ZZ-INTERNAL|ZZ-PARTNER-NOTE|Zenvia|partner_internal_name|"partner_id"|"partner"|name_key|internal_notes' /tmp/w0-public.json
+kill %1
+```
+
+**Addendum conditions (tests in F1–F4 must contain, beyond the commands):**
+- *Migration:* existing free-text partners migrate into deduplicated partner rows with the exact grouping above, and the downgrade works.
+- *No leak:* `partner_internal_name`, partner notes, `name_key`, `partner_id` and `internal_notes` never appear in any public payload, nor in the rendered public HTML (e2e).
+- *Drafter, against the real `claude-sonnet-5-5`:* the four fixtures' expectations hold; the **prompt-injection** post still yields only curated slugs, enum values, no internal partner name in public fields and no listing row created; topics always come from the curated active list; each call writes one `ai_usage` row with `purpose="opportunity_draft"`, `model` = the configured id, nonzero tokens, `cost_usd == pricing.cost_usd(...) > 0`, `opportunity_id` = the request's id or null, and the event `ai.opportunity_draft`.
+- *Keyless:* keyless and key-without-workspace runs (`network_ai_disabled`) → config `available: false`, POST → 503 `ai_not_configured`, zero HTTP requests and no `ai_usage` row, and manual create/publish still works.
+- *Compensation display:* the exact strings in capabilities.md §C10, checked by e2e.
+
+**How the user tests it (11b, during the Phase-11 handoff, same setup):**
+1. **http://localhost:8001/admin** → **Opportunities** → open any listing → next to the partner field click **Manage partners** (the header also gains **Partners** once the Trainer-network nav lands). Your Phase-10 free-text partner names are already there, one row per distinct name (case and extra spaces merged), with listing counts.
+2. **Add partner** "Zenvia Learning Pvt Ltd", default public name "A Pune edtech", and a note. Add "zenvia learning pvt ltd" again → rejected. Rename one partner and deactivate another → the deactivated one disappears from the editor's dropdown, but listings that already use it still show it.
+3. **+ New opportunity** → paste a real forwarded email from a partner into **Paste the forwarded description** (or use `tests/fixtures/opportunity_posts/forwarded_genai_workshop.txt`) → **Draft**. Within ~15 s:
+   - the form fills in: title, type, Remote/Hybrid/Onsite and city, dates and deadline, topics (only from your list), compensation with its unit, and the partner (matched, or offered as "Suggested new partner — Add");
+   - every filled field shows an amber **Drafted — please check** chip;
+   - a cost line shows the model and the cost;
+   - the public description no longer names the partner and has no email or phone; those details are in the internal notes;
+   - nothing is saved yet.
+   Fix anything, then **Save draft** → **Publish**.
+4. Private window → **http://localhost:8001/opportunities** → the card and the listing show e.g. "₹8,000–12,000 / day" and "A Pune edtech", and never the partner's real name or your note.
+5. Compensation: set **per course**, then **per month**. Enter an amount without a currency → an inline error.
+6. **Not configured:** comment out `ANTHROPIC_WORKSPACE_ID` in `.env` and restart → the paste box says **AI drafting not configured**, and typing a listing by hand, saving and publishing all still work. Restore the line and restart.
+7. **Trainer network → Network AI spend** (S11's card) now includes the `opportunity_draft` calls.
+
+**Labelled stubs (not bugs):** none new in 11b.
 
 ---
 
@@ -727,7 +919,7 @@ OIDC — state mismatch, nonce mismatch, wrong `aud`, expired token, bad signatu
 
 | Slice | Owns (exclusive paths) | Delivers | Tests need |
 |---|---|---|---|
-| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0007_applications_matching_email.py`, `src/workshop0/email/outbox.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-12 tables/columns, plus `enqueue(...)` (insert-only, with dedupe) | — |
+| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0008_applications_matching_email.py`, `src/workshop0/email/outbox.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-12 tables/columns, plus `enqueue(...)` (insert-only, with dedupe) | — |
 | **S1 applications** | `src/workshop0/services/applications.py`, `src/workshop0/api/network_me.py`, `src/workshop0/api/pipeline_admin.py`, `tests/integration/applications/**` | Apply/withdraw/my-applications (`/api/me/applications…`), `/api/me/matches` (calls `matching.matches_for`), and the pipeline list, bulk status (one audit row, notify emails) and CSV routes. Every route here that enqueues email, including profile create in `network_me.py` (welcome enqueue lives in S7's `profiles.py`), calls `sender.schedule_drain(background_tasks)` | S0, S2, S6 |
 | **S2 matching-rules** | `src/workshop0/services/matching.py` (fills the stub), `tests/integration/matching/**`, `tests/fixtures/network_pool.py` | Prefilter, rule score, `eligible`, `matches_for`. The shared 60-profile fixture `seed_pool()` has an eligible set of exactly 17 and one obvious best | S0 |
 | **S3 shortlist-ranker** | `src/workshop0/ai/shortlist_rank.py` (fills the stub), `src/workshop0/ai/prompts/shortlist_rank_{system,user}.md`, `tests/integration/ai_network/test_shortlist_rank.py` | `run_shortlist`: top 40 by rule score → one real Anthropic call (`claude-sonnet-5-5`, Phase-11 client, `record_usage`) → guardrails → `match_suggestion` rows. Falls back to ranking by rules | S0, S2 |
@@ -761,7 +953,7 @@ export WORKSHOP0_GOOGLE_CLIENT_ID=test-client WORKSHOP0_GOOGLE_CLIENT_SECRET=tes
 export WORKSHOP0_SESSION_SECRET="$(openssl rand -hex 32)" WORKSHOP0_ADMIN_EMAILS=admin@example.test WORKSHOP0_BLOB_BACKEND=local
 export WORKSHOP0_SMTP_HOST=localhost WORKSHOP0_SMTP_PORT=8025 WORKSHOP0_SMTP_STARTTLS=0 WORKSHOP0_SMTP_USER=bot@example.test WORKSHOP0_SMTP_PASSWORD=x
 uv sync
-DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0007'
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0008'
 uv run python tests/support/fake_oidc.py --port 8099 &
 uv run python -m aiosmtpd -n -l localhost:8025 &
 sleep 2
@@ -806,7 +998,7 @@ bash -n deploy/cloudrun/provision.sh
 
 | Slice | Owns (exclusive paths) | Delivers | Tests need |
 |---|---|---|---|
-| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0008_alerts_directory_tiein.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-13 tables/columns | — |
+| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0009_alerts_directory_tiein.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-13 tables/columns | — |
 | **S1 alerts** | `src/workshop0/services/alerts.py` (fills the stub), `src/workshop0/services/opportunities.py` (hook on every transition to effective `open`), `src/workshop0/api/board_admin.py` (adds `schedule_drain` after publish/reopen/patch only), `src/workshop0/email/templates/network_alert.*`, `tests/integration/alerts/**` | Saved-search matching and alert enqueue with dedupe `alert:{search}:{opp}`, written in the transaction that makes the listing open. The alert email carries an unsubscribe link via `unsubscribe.make_token` | S0, S2 |
 | **S2 digest-unsubscribe** | `src/workshop0/services/{digest,unsubscribe}.py`, `src/workshop0/api/network_public.py`, `src/workshop0/email/templates/network_digest.*`, `tests/integration/digest/**` | The `/api/cron/weekly-digest` endpoint (cron key, 404 when unset, idempotent per ISO week, using `alerts.matches`) and the signed one-click `/api/email/unsubscribe` | S0, S1 |
 | **S3 directory** | `src/workshop0/services/directory.py`, `src/workshop0/api/directory_public.py`, `tests/integration/directory/**` | Public directory + profile: allow-list serializer, ≥60 % completeness, private → 404 | S0 |
@@ -825,7 +1017,7 @@ bash -n deploy/cloudrun/provision.sh
 | **S16 infra-workflows** | `.github/workflows/**` | Conditional `WORKSHOP0_CRON_KEY` secret mapping | — |
 | **S17 docs** | `README.md`, `deploy/RUNBOOK.md` | RUNBOOK "network operations" section (digest, scheduler, the secrets list including both Anthropic secrets, the two-provider note) | — |
 
-**Gate (repo root; the Phase-12 environment, including the Anthropic key + workspace id from `.env` because the regression suite re-runs the Phase-11/12 real-key tests, plus `export WORKSHOP0_CRON_KEY=gate-cron-key`):** the Phase-12 command block with `grep -q '^0008'`, page checks `for p in network/directory network/trainer network/searches network/unsubscribed; do test -f "frontend/out/$p/index.html"; done`, and additionally, with the server up: `curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/cron/weekly-digest | grep -qx 401` and `curl -fsS -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest | grep -q '"enqueued"'`, then `bash -n deploy/cloudrun/provision.sh`. **Conditions:** a listing matching 3 of 5 saved searches → exactly 3 alerts, re-publish → 0 more; digest twice in one ISO week → one email per user (fixture: 40 users, 12 opted out, precomputed recipients); unsubscribe link flips exactly one preference; directory payloads contain only allow-listed keys (serialized-JSON assertion with sentinel email/rate/note values); a private or <60 % profile 404s publicly; linking a trainer to a workshop writes an audit row and shows on `/api/me/workshops`; participant join/tracker journeys (existing e2e) still pass and require no sign-in; zero `stub-badge` elements on network pages.
+**Gate (repo root; the Phase-12 environment, including the Anthropic key + workspace id from `.env` because the regression suite re-runs the Phase-11/12 real-key tests, plus `export WORKSHOP0_CRON_KEY=gate-cron-key`):** the Phase-12 command block with `grep -q '^0009'`, page checks `for p in network/directory network/trainer network/searches network/unsubscribed; do test -f "frontend/out/$p/index.html"; done`, and additionally, with the server up: `curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/cron/weekly-digest | grep -qx 401` and `curl -fsS -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest | grep -q '"enqueued"'`, then `bash -n deploy/cloudrun/provision.sh`. **Conditions:** a listing matching 3 of 5 saved searches → exactly 3 alerts, re-publish → 0 more; digest twice in one ISO week → one email per user (fixture: 40 users, 12 opted out, precomputed recipients); unsubscribe link flips exactly one preference; directory payloads contain only allow-listed keys (serialized-JSON assertion with sentinel email/rate/note values); a private or <60 % profile 404s publicly; linking a trainer to a workshop writes an audit row and shows on `/api/me/workshops`; participant join/tracker journeys (existing e2e) still pass and require no sign-in; zero `stub-badge` elements on network pages.
 
 **How the user tests it:** as a trainer, on the board pick filters → **Save this search** → as admin publish a matching listing → the alert email arrives (or is *recorded* in the Outbox) → click **Unsubscribe** in it → preferences show alerts off. Trigger the digest locally: `curl -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest`. Turn on **Public directory profile** → visit `/app/network/directory/` in a private window → your card is there, without rates or email. As admin, on a workshop card **Facilitators** → add the trainer as co-facilitator → the trainer's **My Workshop0 workshops** shows the dashboard link. Open a workshop join link → the **Join our network** card is visible. Production: `bash deploy/cloudrun/provision.sh` (cron key + scheduler), redeploy, `gcloud scheduler jobs run workshop0-weekly-digest --location us-central1`. **Nothing is a stub.**
 
