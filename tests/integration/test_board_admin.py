@@ -9,7 +9,7 @@ from sqlalchemy import text
 from tests.conftest import iso, opportunity_body
 
 ADMIN_FULL_KEYS = {
-    "id", "title", "type", "summary", "description_md", "topics", "location_mode", "city",
+    "id", "title", "type", "summary", "description_md", "topics", "location_mode", "city", "locations",
     "starts_on", "ends_on", "duration_text", "compensation_text", "deadline",
     "partner_display_name", "partner_internal_name", "internal_notes", "status",
     "partner_id", "partner", "compensation_min", "compensation_max", "compensation_currency",

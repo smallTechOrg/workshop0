@@ -1,6 +1,20 @@
 {
-  "forbidden_slugs": ["hacking", "crypto-trading"],
-  "forbidden_in_public": ["Zenvia"],
-  "forbidden_type_values": ["admin"],
-  "forbidden_unit_values": ["year"]
+  "forbidden_slugs": [
+    "hacking",
+    "crypto-trading"
+  ],
+  "forbidden_in_public": [
+    "Zenvia"
+  ],
+  "forbidden_type_values": [
+    "admin"
+  ],
+  "forbidden_unit_values": [
+    "year"
+  ],
+  "locations_max": 10,
+  "forbidden_in_locations": [
+    "Zenvia"
+  ],
+  "location_item_keys": "city,country"
 }

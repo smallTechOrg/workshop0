@@ -116,3 +116,44 @@ def test_patch_tracks_only_the_fields_sent():
     patch = OpportunityPatch(summary="x", city=None)
     assert patch.model_fields_set == {"summary", "city"}
     assert OpportunityPatch().model_fields_set == set()
+
+
+# --------------------------------------------------------------------------- Phase 11c locations
+
+
+def test_locations_are_normalized_and_deduped():
+    body = OpportunityCreate(**_body(locations=[
+        {"city": " pune "}, {"city": "PUNE", "country": "  "}, {"city": "Pune", "country": " India "},
+        {"city": "  New   Delhi "},
+    ]))
+    assert body.locations == [
+        {"city": "pune", "country": None},
+        {"city": "Pune", "country": "India"},
+        {"city": "New Delhi", "country": None},
+    ]
+    assert OpportunityPatch(locations=None).locations == []
+    assert "locations" not in OpportunityPatch(city="Pune").model_fields_set
+
+
+@pytest.mark.parametrize(
+    ("locations", "message"),
+    [
+        ("Pune", "locations: each location needs a city and an optional country"),
+        (["Pune"], "locations: each location needs a city and an optional country"),
+        ([{"country": "India"}], "locations: each location needs a city and an optional country"),
+        ([{"city": "Pune", "state": "MH"}], "locations: each location needs a city and an optional country"),
+        ([{"city": 5}], "locations: each location needs a city and an optional country"),
+        ([{"city": "   "}], "locations: city must be 1–80 characters"),
+        ([{"city": "c" * 81}], "locations: city must be 1–80 characters"),
+        ([{"city": "Pune", "country": "c" * 81}], "locations: country must be at most 80 characters"),
+        ([{"city": "Pune", "country": 7}], "locations: country must be at most 80 characters"),
+        ([{"city": f"City {i}"} for i in range(11)], "locations: at most 10 locations"),
+    ],
+)
+def test_locations_validation_messages(locations, message):
+    assert _message(OpportunityCreate, _body(locations=locations)) == message
+
+
+def test_locations_cap_is_checked_after_dedupe():
+    items = [{"city": f"City {i}"} for i in range(10)] + [{"city": "city 0"}]
+    assert len(OpportunityCreate(**_body(locations=items)).locations) == 10

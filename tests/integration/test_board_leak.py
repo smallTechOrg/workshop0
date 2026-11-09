@@ -15,6 +15,7 @@ FORBIDDEN = (
     '"partner"',
     "name_key",
     '"notes"',
+    "locations_json",
 )
 
 
@@ -22,6 +23,12 @@ def _assert_clean(response) -> None:
     assert response.status_code == 200, response.text
     for needle in FORBIDDEN:
         assert needle not in response.text, (response.url, needle)
+    data = response.json()["data"]
+    cards = data.get("opportunities") or ([data["opportunity"]] if "opportunity" in data else [])
+    for card in cards:  # Phase 11c: every Location has exactly {city, country}
+        assert isinstance(card["locations"], list)
+        for item in card["locations"]:
+            assert set(item) == {"city", "country"}, (response.url, item)
 
 
 def _give_partner_notes(client, admin_headers) -> int:
@@ -37,8 +44,15 @@ def _give_partner_notes(client, admin_headers) -> int:
     return sentinel[0]["id"]
 
 
-def test_no_public_endpoint_leaks_internal_fields(client, admin_headers, board):
+def test_no_public_endpoint_leaks_internal_fields(client, admin_headers, board, create_opportunity):
     partner_id = _give_partner_notes(client, admin_headers)
+    # Phase 11c: one open multi-location listing so `locations` items are really checked
+    multi = create_opportunity(
+        status="open", location_mode="hybrid",
+        partner_internal_name=INTERNAL_PARTNER_SENTINEL, internal_notes=INTERNAL_NOTE_SENTINEL,
+        locations=[{"city": "Bengaluru", "country": "India"}, {"city": "Pune"}],
+    )
+    _assert_clean(client.get(f"/api/public/opportunities/{multi['id']}"))
     # sanity: the sentinels really are stored and visible to admins
     admin = client.get(f"/api/admin/opportunities/{board['open_ids'][0]}", headers=admin_headers)
     assert INTERNAL_PARTNER_SENTINEL in admin.text and INTERNAL_NOTE_SENTINEL in admin.text

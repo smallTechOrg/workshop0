@@ -13,6 +13,7 @@
 import json
 import math
 from datetime import date, datetime
+from typing import Any
 
 import structlog
 from pydantic import BaseModel, StrictInt, field_validator
@@ -28,6 +29,7 @@ from src.workshop0.db.models import (
     Partner,
     Topic,
 )
+from src.workshop0.services import locations as loc
 from src.workshop0.services.audit import record_action
 from src.workshop0.services.partners import partner_ref, resolve_partner
 from src.workshop0.services.topics import ADMIN_ACTOR, ADMIN_BY
@@ -44,7 +46,7 @@ TITLE_MIN, TITLE_MAX = 3, 160
 SUMMARY_MIN, SUMMARY_MAX = 1, 280
 DESCRIPTION_MAX = 20_000
 TOPICS_MIN, TOPICS_MAX = 1, 8
-CITY_MAX = 80
+CITY_MAX = loc.CITY_MAX
 DURATION_MAX = 80
 COMPENSATION_MAX = 120
 AMOUNT_MAX = 100_000_000
@@ -61,6 +63,12 @@ ID_MAX = 2**31 - 1
 NOT_AVAILABLE_MESSAGE = "This opportunity isn't available."
 NOT_FOUND_MESSAGE = "No opportunity matches this id."
 PUBLISH_DEADLINE_MESSAGE = "deadline: set a future deadline to publish"
+CITY_REQUIRED_MESSAGE = "city: required for onsite or hybrid"
+LOCATIONS_REQUIRED_MESSAGE = "locations: add at least one city for onsite or hybrid"
+LOCATION_SHAPE_ERROR = "each location needs a city and an optional country"
+LOCATION_CITY_ERROR = f"city must be 1–{loc.CITY_MAX} characters"
+LOCATION_COUNTRY_ERROR = f"country must be at most {loc.COUNTRY_MAX} characters"
+LOCATIONS_MAX_ERROR = f"at most {loc.LOCATIONS_MAX} locations"
 
 # Field order = the order changed_fields are reported in.
 FIELDS = (
@@ -70,7 +78,7 @@ FIELDS = (
     "description_md",
     "topic_ids",
     "location_mode",
-    "city",
+    "locations",  # Phase 11c: replaces "city" (now a mirror of locations[0].city)
     "starts_on",
     "ends_on",
     "duration_text",
@@ -139,6 +147,42 @@ def _bounded(value: str | None, *, low: int, high: int, required: bool) -> str |
     return trimmed
 
 
+def normalize_locations(value: Any) -> list[loc.Location]:
+    """Validate + normalize a request `locations` value (spec/api.md §Phase 11c).
+
+    null → []; each item is rebuilt as exactly {city, country}; deduped (first wins);
+    the 10-entry cap is checked after dedupe. Raises ValueError with the exact message
+    (FastAPI prefixes it with "locations: ").
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(LOCATION_SHAPE_ERROR)
+    items: list[loc.Location] = []
+    for item in value:
+        if (
+            not isinstance(item, dict)
+            or not set(item) <= {"city", "country"}
+            or not isinstance(item.get("city"), str)
+        ):
+            raise ValueError(LOCATION_SHAPE_ERROR)
+        city = loc.collapse(item["city"])
+        if not (1 <= len(city) <= loc.CITY_MAX):
+            raise ValueError(LOCATION_CITY_ERROR)
+        country = item.get("country")
+        if country is not None:
+            if not isinstance(country, str):
+                raise ValueError(LOCATION_COUNTRY_ERROR)
+            country = loc.collapse(country) or None
+            if country is not None and len(country) > loc.COUNTRY_MAX:
+                raise ValueError(LOCATION_COUNTRY_ERROR)
+        items.append({"city": city, "country": country})
+    deduped = loc.dedupe(items)
+    if len(deduped) > loc.LOCATIONS_MAX:
+        raise ValueError(LOCATIONS_MAX_ERROR)
+    return deduped
+
+
 def _one_of(value: str | None, allowed: tuple[str, ...]) -> str | None:
     if value is None:
         return None
@@ -157,7 +201,8 @@ class OpportunityPatch(BaseModel):
     description_md: str | None = None
     topic_ids: list[int] | None = None
     location_mode: str | None = None
-    city: str | None = None
+    city: str | None = None  # legacy: → a one-element `locations` when `locations` is absent
+    locations: Any = None  # list[Location] | null (validated by normalize_locations)
     starts_on: date | None = None
     ends_on: date | None = None
     duration_text: str | None = None
@@ -217,6 +262,11 @@ class OpportunityPatch(BaseModel):
     @classmethod
     def _city(cls, v):
         return _bounded(v, low=1, high=CITY_MAX, required=False)
+
+    @field_validator("locations")
+    @classmethod
+    def _locations(cls, v):
+        return normalize_locations(v)
 
     @field_validator("duration_text")
     @classmethod
@@ -328,6 +378,15 @@ def topics_by_opportunity(session: Session, opportunity_ids: list[int]) -> dict[
     return result
 
 
+def _location_fields(opp: Opportunity) -> dict:
+    """`locations` via the read rule; `city` derived as locations[0].city (or null)."""
+    items = loc.parse_stored(opp.locations_json, opp.city, opp.location_mode)
+    return {
+        "city": items[0]["city"] if items else None,
+        "locations": [{"city": i["city"], "country": i["country"]} for i in items],
+    }
+
+
 def public_card(opp: Opportunity, topics: list[Topic], base_url: str, now: datetime) -> dict:
     """PublicOpportunityCard — an explicit allow-list (never "model minus fields")."""
     return {
@@ -338,7 +397,7 @@ def public_card(opp: Opportunity, topics: list[Topic], base_url: str, now: datet
         "partner_display_name": opp.partner_display_name,
         "topics": [{"slug": t.slug, "name": t.name} for t in topics],
         "location_mode": opp.location_mode,
-        "city": opp.city,
+        **_location_fields(opp),
         "starts_on": _date_or_none(opp.starts_on),
         "ends_on": _date_or_none(opp.ends_on),
         "duration_text": opp.duration_text,
@@ -379,7 +438,7 @@ def admin_row(
             {"id": t.id, "slug": t.slug, "name": t.name, "active": t.active} for t in topics
         ],
         "location_mode": opp.location_mode,
-        "city": opp.city,
+        **_location_fields(opp),
         "starts_on": _date_or_none(opp.starts_on),
         "ends_on": _date_or_none(opp.ends_on),
         "duration_text": opp.duration_text,
@@ -609,8 +668,11 @@ def get_admin(session: Session, opportunity_id: int, *, base_url: str) -> dict:
 
 
 def _current_values(opp: Opportunity, topic_ids: list[int]) -> dict:
-    values = {field: getattr(opp, field) for field in FIELDS if field != "topic_ids"}
+    values = {
+        field: getattr(opp, field) for field in FIELDS if field not in ("topic_ids", "locations")
+    }
     values["topic_ids"] = topic_ids
+    values["locations"] = loc.parse_stored(opp.locations_json, opp.city, opp.location_mode)
     if values["deadline"] is not None:
         values["deadline"] = as_utc(values["deadline"])
     return values
@@ -679,6 +741,7 @@ def _validate_merged(
     *,
     previous: dict | None,
     now: datetime,
+    locations_sent: bool,
 ) -> None:
     """Cross-field rules over the post-write state (spec/api.md §POST validation)."""
     for field in REQUIRED_FIELDS:
@@ -688,9 +751,11 @@ def _validate_merged(
         attached = set(previous["topic_ids"]) if previous else set()
         _validate_topics(session, merged["topic_ids"], attached)
     if merged["location_mode"] == "remote":
-        merged["city"] = None
-    elif not merged["city"]:
-        raise validation_error("city: required for onsite or hybrid")
+        merged["locations"] = []
+    elif not merged["locations"]:
+        raise validation_error(
+            LOCATIONS_REQUIRED_MESSAGE if locations_sent else CITY_REQUIRED_MESSAGE
+        )
     _validate_compensation(merged)
     if merged["starts_on"] and merged["ends_on"] and merged["ends_on"] < merged["starts_on"]:
         raise validation_error("ends_on: must be on or after starts_on")
@@ -703,10 +768,32 @@ def _validate_merged(
             raise validation_error(PUBLISH_DEADLINE_MESSAGE)
 
 
+def _location_input(body: OpportunityPatch, provided: dict) -> None:
+    """Fold the request's location fields into `provided["locations"]` (api.md §Phase 11c).
+
+    `locations` wins when both are sent; a legacy `city` replaces the whole list with
+    one entry (null/blank → []). `city` itself never reaches the merge — it is a mirror.
+    """
+    given = body.model_fields_set
+    provided.pop("city", None)
+    if "locations" in given:
+        provided["locations"] = body.locations if body.locations is not None else []
+    else:
+        provided.pop("locations", None)
+        if "city" in given:
+            city = body.city
+            provided["locations"] = (
+                [{"city": loc.collapse(city), "country": None}] if city else []
+            )
+
+
 def _apply(opp: Opportunity, merged: dict, partner: Partner | None) -> None:
     for field in FIELDS:
-        if field != "topic_ids":
+        if field not in ("topic_ids", "locations"):
             setattr(opp, field, merged[field])
+    # Phase 11c: locations_json is the source; `city` is its first-entry mirror.
+    opp.locations_json = loc.dump(merged["locations"])
+    opp.city = merged["locations"][0]["city"] if merged["locations"] else None
     # Legacy mirror (data-model.md §Phase 11b): new code never reads it.
     opp.partner_internal_name = partner.internal_name if partner is not None else None
 
@@ -735,9 +822,14 @@ def create_opportunity(
     for field, default in CREATE_DEFAULTS.items():
         if provided[field] is None:
             provided[field] = default
+    _location_input(body, provided)
     merged = dict(provided)
     merged.setdefault("partner_id", None)
-    _validate_merged(session, merged, provided, previous=None, now=now)
+    merged.setdefault("locations", [])
+    _validate_merged(
+        session, merged, provided, previous=None, now=now,
+        locations_sent="locations" in body.model_fields_set,
+    )
     partner = _resolve_partner(session, body, merged, current_partner_id=None, by=by)
 
     opp = Opportunity(created_at=now, updated_at=now)
@@ -780,8 +872,12 @@ def update_opportunity(
     if "description_md" in provided and provided["description_md"] is None:
         provided["description_md"] = ""
     provided.pop("partner_internal_name", None)  # legacy input, resolved below
+    _location_input(body, provided)
     merged = {**previous, **provided}
-    _validate_merged(session, merged, provided, previous=previous, now=now)
+    _validate_merged(
+        session, merged, provided, previous=previous, now=now,
+        locations_sent="locations" in body.model_fields_set,
+    )
     partner = _resolve_partner(
         session, body, merged, current_partner_id=opp.partner_id, by=by
     )

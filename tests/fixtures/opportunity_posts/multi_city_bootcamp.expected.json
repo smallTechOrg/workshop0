@@ -1,0 +1,12 @@
+{
+  "location_mode": "onsite",
+  "location_cities": ["bengaluru", "pune", "hyderabad"],
+  "location_cities_exclude": ["mumbai", "chennai"],
+  "location_countries": [null, "India"],
+  "topics_include": ["data-engineering"],
+  "compensation": {"min": 15000, "currency": "INR", "unit": "day"},
+  "partner_id": null,
+  "suggested_partner_name_contains": "Initech",
+  "forbidden_in_public": ["Initech"],
+  "drafted_fields_include": ["location"]
+}

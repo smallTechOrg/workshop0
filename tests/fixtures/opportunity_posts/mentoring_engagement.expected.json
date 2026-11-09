@@ -1,9 +1,16 @@
 {
   "type": "engagement",
   "location_mode": "remote",
-  "city": null,
-  "topics_include": ["kubernetes"],
-  "compensation": {"min": 50, "max": 50, "currency": "USD", "unit": "hour"},
+  "location_cities": [],
+  "topics_include": [
+    "kubernetes"
+  ],
+  "compensation": {
+    "min": 50,
+    "max": 50,
+    "currency": "USD",
+    "unit": "hour"
+  },
   "partner_id": null,
   "suggested_partner_name_contains": "Northwind"
 }

@@ -44,7 +44,7 @@ def _content(**overrides: Any) -> dict[str, Any]:
         "description_md": "A hands-on workshop.",
         "topics": ["generative-ai", "python"],
         "location_mode": "hybrid",
-        "city": "Pune",
+        "locations": [{"city": "Pune", "country": None}],
         "starts_on": "2027-02-08",
         "ends_on": "2027-02-09",
         "duration_text": "2 days",
@@ -107,10 +107,53 @@ def test_enums_are_exact_or_null_never_fuzzy():
         assert _guard(_comp(min=5, max=5, currency="USD", unit=unit))["compensation_unit"] == unit
 
 
-def test_city_forced_null_when_remote_and_trimmed():
-    assert _guard(_content(location_mode="remote", city="Pune"))["city"] is None
-    assert _guard(_content(location_mode="onsite", city="  " + "x" * 200))["city"] == "x" * 80
-    assert _guard(_content(location_mode=None, city="Pune"))["city"] == "Pune"
+def _locs(raw: Any, mode: str | None = "onsite") -> list[dict[str, Any]]:
+    return _guard(_content(location_mode=mode, locations=raw))["locations"]
+
+
+def test_locations_first_wins_dedupe_and_country_is_part_of_the_key():
+    raw = [{"city": " pune "}, {"city": "PUNE", "country": None}, {"city": "Pune", "country": "India"}]
+    assert _locs(raw) == [{"city": "pune", "country": None}, {"city": "Pune", "country": "India"}]
+
+
+def test_locations_capped_at_ten_in_model_order():
+    raw = [{"city": f"City {i}", "country": None} for i in range(12)]
+    assert _locs(raw) == raw[:10]
+
+
+def test_location_city_truncated_to_80():
+    assert _locs([{"city": "  " + "x" * 200, "country": None}]) == [{"city": "x" * 80, "country": None}]
+
+
+def test_malformed_location_items_dropped_and_blank_country_is_null():
+    raw = [{"city": ""}, {"city": 5}, "Pune", None, {"city": "Pune", "country": ""}, {"city": "Mysuru", "country": 7}]
+    assert _locs(raw) == [{"city": "Pune", "country": None}, {"city": "Mysuru", "country": None}]
+    assert _locs("Pune") == [] and _locs(None) == []
+
+
+def test_locations_forced_empty_when_remote():
+    assert _locs([{"city": "Pune", "country": "India"}], mode="remote") == []
+    assert _locs([{"city": "Pune", "country": None}], mode=None) == [{"city": "Pune", "country": None}]
+
+
+def test_location_contacts_scrubbed_and_emptied_item_dropped():
+    raw = [{"city": "p.nair@zenvia.example", "country": None},
+           {"city": "Pune p.nair@zenvia.example", "country": "India +91 98450 12345"}]
+    assert _locs(raw) == [{"city": "Pune", "country": "India"}]
+
+
+def test_drafted_fields_location_follows_locations_when_mode_null():
+    with_city = _guard(_content(location_mode=None, locations=[{"city": "Pune", "country": None}]))
+    without = _guard(_content(location_mode=None, locations=[]))
+    assert "location" in drafted_fields_of(with_city)
+    assert "location" not in drafted_fields_of(without)
+
+
+def test_schema_declares_locations_array_not_city():
+    schema = build_input_schema(TOPICS)
+    assert "city" not in schema["properties"] and "locations" in schema["required"]
+    item = schema["properties"]["locations"]["items"]
+    assert item["required"] == ["city", "country"] and item["properties"]["country"]["type"] == ["string", "null"]
 
 
 # --------------------------------------------------------------------------- dates
@@ -296,7 +339,7 @@ def test_drafted_fields_full_draft():
 def test_drafted_fields_sparse_draft_with_suggested_partner():
     content = _content(
         title="Kubernetes mentor", type=None, summary="", description_md="", topics=["python"],
-        location_mode="remote", city="Pune", starts_on=None, ends_on=None, duration_text=None,
+        location_mode="remote", locations=[{"city": "Pune", "country": None}], starts_on=None, ends_on=None, duration_text=None,
         deadline_on=None,
         compensation={"min": None, "max": None, "currency": None, "unit": None, "note": "negotiable"},
         partner={"existing_partner_id": None, "organisation_name": "Northwind Cloud", "suggested_display_name": None},
@@ -308,7 +351,7 @@ def test_drafted_fields_sparse_draft_with_suggested_partner():
 
 def test_drafted_fields_minimal_draft():
     content = _content(
-        title="", summary="Short summary.", type=None, description_md="", topics=[], location_mode=None, city=None,
+        title="", summary="Short summary.", type=None, description_md="", topics=[], location_mode=None, locations=[],
         starts_on="2027-03-01", ends_on=None, duration_text=None, deadline_on=None,
         compensation={"min": None, "max": None, "currency": "INR", "unit": "day", "note": None},
         partner={"existing_partner_id": None, "organisation_name": None, "suggested_display_name": None},
@@ -317,7 +360,7 @@ def test_drafted_fields_minimal_draft():
     draft = _guard(content)
     assert drafted_fields_of(draft) == ["summary", "dates"]
     assert set(draft) == {
-        "title", "type", "summary", "description_md", "topic_slugs", "location_mode", "city", "starts_on", "ends_on",
+        "title", "type", "summary", "description_md", "topic_slugs", "location_mode", "locations", "starts_on", "ends_on",
         "duration_text", "deadline_on", "compensation_min", "compensation_max", "compensation_currency",
         "compensation_unit", "compensation_text", "partner_id", "suggested_partner", "partner_display_name",
         "internal_notes",
