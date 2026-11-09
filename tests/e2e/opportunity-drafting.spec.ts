@@ -147,6 +147,15 @@ test.describe.serial('Phase 11b — AI drafting, Partners and compensation, end 
     await expect(admin.getByTestId('drafted-chip-title')).toContainText('Drafted — please check');
     expect(await admin.getByTestId('drafted-chip').count()).toBeGreaterThan(1);
 
+    // Phase 11c: the venue city (Pune) is drafted as one chip; the remote
+    // Hyderabad team is not a venue and must not become a location.
+    await expect(admin.getByTestId('opp-location-select')).toHaveValue('hybrid');
+    await expect(admin.getByTestId('opp-location-chip')).toHaveCount(1);
+    await expect(admin.getByTestId('opp-location-chip')).toHaveText(/Pune/);
+    await expect(
+      admin.getByTestId('opp-location-chip').filter({ hasText: 'Hyderabad' }),
+    ).toHaveCount(0);
+
     // Topics only from the curated (active) list, at least one.
     const topicsRes = await api.get('/api/admin/topics');
     expect(topicsRes.ok()).toBeTruthy();
@@ -219,9 +228,14 @@ test.describe.serial('Phase 11b — AI drafting, Partners and compensation, end 
     await fillStable(display, 'A Pune edtech');
 
     // Make publish-critical fields deterministic regardless of the draft.
-    const city = admin.getByTestId('opp-city-input');
-    if ((await city.isVisible().catch(() => false)) && (await city.inputValue()) === '') {
-      await fillStable(city, 'Pune');
+    const cityInput = admin.getByTestId('opp-location-city-input');
+    if (
+      (await cityInput.isVisible().catch(() => false)) &&
+      (await admin.getByTestId('opp-location-chip').count()) === 0
+    ) {
+      await fillStable(cityInput, 'Pune');
+      await cityInput.press('Enter');
+      await expect(admin.getByTestId('opp-location-chip')).toHaveCount(1);
     }
     const input = admin.getByTestId('opp-deadline-input');
     await waitForHydration(input);

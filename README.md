@@ -146,6 +146,8 @@ Partners, paste-to-fill drafting and compensation units are covered under [Oppor
 - A draft is never auto-published. Nothing is saved until you click **Save draft**, and publishing is a separate step.
 - A cost line (model and dollars) is shown to admins only. Drafting calls also count in **Network AI spend**.
 
+**Multiple locations (Phase 11c).** An Onsite or Hybrid listing can name up to 10 cities. In the editor, type a city (the country is optional) and press Enter, click **Add**, or type a comma; each city becomes a chip, and a chip's **×** removes it. A city already in the list is ignored with an "Already added" hint, and text left in the City box is added when you leave it or save. Remote listings have no cities. The public card shows the first two cities and a count for the rest, for example **Bengaluru · Pune · +1 · Hybrid**, and hovering shows them all; the listing page lists every location, for example **Bengaluru, India · Pune · Hyderabad · Hybrid**. Paste-to-fill drafts every venue city named in a post, but not cities that only hold remote participants, the head office or the signature. Existing single-city listings show as one chip and display exactly as before; migration `0008` converts them.
+
 **Compensation.** A listing has an amount (or range), a currency and a unit: **hour**, **day**, **course** or **month**. The board shows it, for example "₹8,000–12,000 / day". An amount needs a currency. Trainer rates use the same four units.
 
 ## Run the tests
@@ -201,7 +203,7 @@ export WORKSHOP0_GOOGLE_CLIENT_ID=test-client WORKSHOP0_GOOGLE_CLIENT_SECRET=tes
 export WORKSHOP0_OIDC_ISSUER=http://localhost:8099 WORKSHOP0_SESSION_SECRET="$(openssl rand -hex 32)"
 export WORKSHOP0_ADMIN_EMAILS=admin@example.test WORKSHOP0_BLOB_BACKEND=local
 uv sync
-DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0007'   # 0007 = Phase 11b's F1 (lands in the same phase)
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0008'   # 0008 = Phase 11c's M1 (multi-location)
 uv run python tests/support/fake_oidc.py --port 8099 &                                 # real OIDC protocol, local issuer
 sleep 2
 uv run pytest tests/unit tests/integration -q                                          # incl. auth/, network/, storage/, ai/, ai_network/ (REAL Anthropic, workspace header)
@@ -229,7 +231,7 @@ GCS storage tests run only when `WORKSHOP0_GCS_BUCKET` is set.
 Run this after the Phase 11 block, in the same shell with the same exports, and with the Phase 11 server already killed.
 
 ```bash
-DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0007'
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0008'
 uv run pytest tests/integration/test_migration.py tests/integration/test_partners_admin.py tests/integration/test_board_partner_link.py tests/integration/test_board_compensation.py tests/integration/test_board_leak.py tests/unit/test_opportunity_draft_guardrails.py -q
 ! uv run pytest tests/integration/ai_network/test_opportunity_draft.py tests/integration/ai_network/test_opportunity_draft_api.py -q -rs | grep -q SKIPPED   # real Anthropic, none skipped
 uv run pytest tests/integration/ai_network/test_opportunity_draft.py tests/integration/ai_network/test_opportunity_draft_api.py -q          # zero failures
