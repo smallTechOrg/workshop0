@@ -222,7 +222,7 @@ def test_0005_seeds_topics_and_downgrade_to_0004_removes_the_board(monkeypatch, 
         assert set(inspect(engine).get_table_names()) == EXPECTED_TABLES
         _assert_seed(_topic_seed(engine))  # re-seeded exactly once, not duplicated
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0009"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0010"
     finally:
         engine.dispose()
 
@@ -275,7 +275,7 @@ def test_0006_creates_the_network_schema_and_0007_is_head_and_creates_the_networ
     url = scratch_database()
     _use(monkeypatch, url)
     config = _alembic_config()
-    assert ScriptDirectory.from_config(config).get_current_head() == "0009"
+    assert ScriptDirectory.from_config(config).get_current_head() == "0010"
     command.upgrade(config, "0006")
 
     engine = create_engine(url)
@@ -409,7 +409,7 @@ def test_0006_downgrade_to_0005_and_back_round_trips(monkeypatch, scratch_databa
         _assert_seed(_topic_seed(engine))  # Phase-10 data untouched
 
         command.upgrade(config, "head")
-        assert _version(engine) == "0009"
+        assert _version(engine) == "0010"
         inspector = inspect(engine)
         assert set(inspector.get_table_names()) == EXPECTED_TABLES
         assert _columns(inspector, "ai_usage")["workshop_id"]["nullable"]
@@ -476,7 +476,7 @@ def test_0007_schema_and_widened_purpose(monkeypatch, scratch_database):
     command.upgrade(config, "head")
     engine = create_engine(url)
     try:
-        assert _version(engine) == "0009"
+        assert _version(engine) == "0010"
         inspector = inspect(engine)
         pcols = _columns(inspector, "partner")
         assert set(pcols) == {
@@ -599,7 +599,7 @@ def test_0007_downgrade_restores_mirror_compensation_and_round_trips(monkeypatch
         assert purposes == ["profile_draft"]  # >16-char purposes removed
 
         command.upgrade(config, "head")
-        assert _version(engine) == "0009"
+        assert _version(engine) == "0010"
         with engine.connect() as connection:
             assert connection.execute(text("SELECT count(*) FROM partner")).scalar() == 2
     finally:
@@ -647,8 +647,9 @@ def test_0008_upgrade_migrates_single_city_to_locations(monkeypatch, scratch_dat
     engine = create_engine(url)
     try:
         _seed_pre_0008(engine)
-        command.upgrade(config, "0008")
+        command.upgrade(config, "0008")  # the raw INSERT below predates 0010's NOT NULL slug
         assert _version(engine) == "0008"
+        assert ScriptDirectory.from_config(config).get_current_head() == "0010"
         col = _columns(inspect(engine), "opportunity")["locations_json"]
         assert not col["nullable"]
         got = _locations(engine)
@@ -698,8 +699,8 @@ def test_0008_downgrade_restores_first_city_and_round_trips(monkeypatch, scratch
             "zurich": "Zürich",
         }
 
-        command.upgrade(config, "0008")
-        assert _version(engine) == "0008"
+        command.upgrade(config, "head")
+        assert _version(engine) == "0010"
         got = _locations(engine)
         assert got["pune"] == ([{"city": "Bengaluru", "country": None}], "Bengaluru")
         assert got["zurich"] == ([{"city": "Zürich", "country": None}], "Zürich")
@@ -715,8 +716,8 @@ def test_0009_adds_invite_revoke_columns_and_round_trips(monkeypatch, scratch_da
     url = scratch_database()
     _use(monkeypatch, url)
     config = _alembic_config()
-    assert ScriptDirectory.from_config(config).get_current_head() == "0009"
-    command.upgrade(config, "head")
+    assert ScriptDirectory.from_config(config).get_current_head() == "0010"
+    command.upgrade(config, "0009")
     engine = create_engine(url)
     try:
         assert _version(engine) == "0009"
@@ -736,7 +737,7 @@ def test_0009_adds_invite_revoke_columns_and_round_trips(monkeypatch, scratch_da
         cols = _columns(inspect(engine), "network_invite")
         assert not {"revoked_at", "revoked_by"} & set(cols)
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "0009")
         assert _version(engine) == "0009"
         assert {"revoked_at", "revoked_by"} <= set(_columns(inspect(engine), "network_invite"))
         with engine.connect() as connection:
@@ -744,5 +745,96 @@ def test_0009_adds_invite_revoke_columns_and_round_trips(monkeypatch, scratch_da
                 text("SELECT email, revoked_at, revoked_by FROM network_invite WHERE token = 'tok-0009'")
             ).one()
         assert tuple(row) == ("a@example.test", None, None)
+    finally:
+        engine.dispose()
+
+
+# --------------------------------------------------------------------------- Phase 11e — 0010
+
+_OPP_0009_INSERT = (
+    "INSERT INTO opportunity (title, type, summary, description_md, location_mode, city,"
+    " locations_json, deadline, status, created_at, updated_at)"
+    " VALUES (:t, 'workshop', 's', '', :m, :c, :l, now(), :s, now(), now())"
+)
+
+# (title, mode, city, locations_json, status, expected base)
+_PRE_0010 = [
+    ("GenAI Workshop", "hybrid", "Bengaluru",
+     '[{"city": "Bengaluru", "country": null}, {"city": "Pune", "country": null}]', "open",
+     "genai-workshop-bengaluru"),
+    ("Remote Mentoring", "remote", None, "[]", "open", "remote-mentoring"),
+    ("Legacy Row", "onsite", "Pune", "[]", "closed", "legacy-row-pune"),
+    ("Draft Thing", "remote", None, "[]", "draft", "draft-thing"),
+    ("Same Title", "onsite", "Delhi", '[{"city": "Delhi", "country": null}]', "open", "same-title-delhi"),
+    ("Same Title", "onsite", "Delhi", '[{"city": "Delhi", "country": null}]', "open", "same-title-delhi"),
+]
+
+
+def _seed_pre_0010(engine) -> None:
+    with engine.begin() as connection:
+        for t, m, c, l, s, _ in _PRE_0010:
+            connection.execute(text(_OPP_0009_INSERT), {"t": t, "m": m, "c": c, "l": l, "s": s})
+
+
+def test_0010_backfills_unique_slugs_and_is_head(monkeypatch, scratch_database):
+    import re
+
+    from sqlalchemy.exc import IntegrityError
+
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    command.upgrade(config, "0009")
+    engine = create_engine(url)
+    try:
+        _seed_pre_0010(engine)
+        command.upgrade(config, "head")
+        assert _version(engine) == "0010"
+        assert ScriptDirectory.from_config(config).get_current_head() == "0010"
+        inspector = inspect(engine)
+        assert not _columns(inspector, "opportunity")["slug"]["nullable"]
+        assert any(
+            uc["name"] == "uq_opportunity_slug" and uc["column_names"] == ["slug"]
+            for uc in inspector.get_unique_constraints("opportunity")
+        )
+        with engine.connect() as connection:
+            rows = connection.execute(text("SELECT title, slug FROM opportunity ORDER BY id")).all()
+        assert len(rows) == len(_PRE_0010)
+        for (title, slug), expected in zip(rows, _PRE_0010):
+            assert re.fullmatch(rf"{expected[5]}-[0-9a-f]{{4,6}}", slug), (title, slug)
+        assert len({slug for _, slug in rows}) == len(rows)
+
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text("UPDATE opportunity SET slug = :s WHERE title = 'Draft Thing'"),
+                    {"s": rows[0][1]},
+                )
+    finally:
+        engine.dispose()
+
+
+def test_0010_downgrade_drops_slug_and_keeps_data(monkeypatch, scratch_database):
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    command.upgrade(config, "0009")
+    engine = create_engine(url)
+    try:
+        _seed_pre_0010(engine)
+        command.upgrade(config, "head")
+        command.downgrade(config, "0009")
+        assert _version(engine) == "0009"
+        assert "slug" not in _columns(inspect(engine), "opportunity")
+        with engine.connect() as connection:
+            got = connection.execute(
+                text("SELECT title, location_mode, city, locations_json, status FROM opportunity ORDER BY id")
+            ).all()
+        assert [tuple(r) for r in got] == [(t, m, c, l, s) for t, m, c, l, s, _ in _PRE_0010]
+
+        command.upgrade(config, "head")
+        assert _version(engine) == "0010"
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT count(*) FROM opportunity WHERE slug IS NULL")).scalar() == 0
     finally:
         engine.dispose()

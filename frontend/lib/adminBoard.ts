@@ -144,6 +144,8 @@ export interface AdminOpportunityRow {
   partner_internal_name: string | null;
   status: OpportunityStatus;
   stored_status: StoredStatus;
+  /** Frozen on first publish (Phase 11e); `public_url` ends with `/opportunities/{slug}`. */
+  slug: string;
   public_url: string;
   published_at: string | null;
   closed_at: string | null;

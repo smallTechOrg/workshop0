@@ -43,11 +43,9 @@ def public_opportunities(
     )
 
 
-@router.get("/opportunities/{opportunity_id}")
-def public_opportunity(
-    opportunity_id: str, request: Request, session: Session = Depends(get_session)
-) -> dict:
-    # Non-integer / out-of-range ids are simply "not available" (never a 422 or a 500).
-    oid = opportunities.parse_path_id(opportunity_id, opportunities.NOT_AVAILABLE_MESSAGE)
-    detail = opportunities.get_public(session, oid, base_url=request_base_url(request))
+@router.get("/opportunities/{key}")
+def public_opportunity(key: str, request: Request, session: Session = Depends(get_session)) -> dict:
+    # Phase 11e: `key` is an id (`^\d{1,12}$`) or a slug (case-insensitive). Anything
+    # malformed, out of range, a draft or unknown is simply "not available" (never 422/500).
+    detail = opportunities.get_public(session, key, base_url=request_base_url(request))
     return ok({"opportunity": detail})

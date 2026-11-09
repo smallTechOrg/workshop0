@@ -91,6 +91,7 @@ def create_app() -> FastAPI:
         participant,
         partners_admin,
         public,
+        seo,
     )
     from src.workshop0.auth import routes as auth_routes
 
@@ -156,11 +157,8 @@ def create_app() -> FastAPI:
     def _opportunities_redirect():
         return RedirectResponse(url="/app/opportunities/", status_code=307)
 
-    @app.get("/opportunities/{opportunity_id}", include_in_schema=False)
-    def _opportunity_redirect(opportunity_id: str):
-        return RedirectResponse(
-            url=f"/app/opportunities/view/?id={quote(opportunity_id, safe='')}", status_code=307
-        )
+    # Phase 11e — server-rendered listing pages, sitemap and robots (api/seo.py).
+    app.include_router(seo.router)
 
     # Phase 11 — invite + pretty network links (before the static mount).
     @app.get("/invite/{token}", include_in_schema=False)

@@ -14,7 +14,7 @@ ADMIN_FULL_KEYS = {
     "partner_display_name", "partner_internal_name", "internal_notes", "status",
     "partner_id", "partner", "compensation_min", "compensation_max", "compensation_currency",
     "compensation_unit",
-    "stored_status", "public_url", "published_at", "closed_at", "created_at", "updated_at",
+    "stored_status", "public_url", "slug", "published_at", "closed_at", "created_at", "updated_at",
 }
 
 
@@ -70,7 +70,7 @@ def test_create_draft_persists_listing_topics_and_returns_full_admin_shape(clien
     assert opp["partner_internal_name"] == "Acme Payments Pvt Ltd"
     assert opp["internal_notes"] == "Contact: R. Rao"
     assert [t["slug"] for t in opp["topics"]] == ["generative-ai", "prompt-engineering"]
-    assert opp["public_url"] == f"http://testserver/opportunities/{opp['id']}"
+    assert opp["public_url"] == f"http://testserver/opportunities/{opp['slug']}"
     assert _count("SELECT count(*) FROM opportunity") == 1
     assert _count("SELECT count(*) FROM opportunity_topic") == 2
     # draft is invisible publicly

@@ -1132,6 +1132,177 @@ kill %2 %1
 
 ---
 
+### Phase 11e — Opportunity slugs & SEO
+
+*A small sub-phase after 11c with its own human test. User request: "the opportunity link is using ID; it should have a slug. This will also help build our SEO." It does not change the scope of Phase 12/13. Their migrations are renumbered `0011`/`0012`, because `0009` (invite revoke, a separate PR) and `0010` (this phase) come first.*
+
+**Goal:** Every listing has a readable, permanent address, such as **`/opportunities/genai-workshop-bengaluru-a3f9`**. Every link uses it: board cards, **Copy link**, and the admin public link and copy button. Old `/opportunities/12` links 301 to it. The raw HTML of that address carries the listing's title, a description, a canonical URL, Open Graph/Twitter tags and JobPosting structured data. `/sitemap.xml` and `/robots.txt` exist. Nothing internal leaks into any of it.
+
+**Capabilities extended (no new numbers):** C10 gains **slug URLs & SEO** (capabilities.md §C10 → Readable, shareable listing URLs and SEO). Contract: [api.md](api.md) §Phase 11e. Schema, slug rule and lifecycle: [data-model.md](data-model.md) §Phase 11e.
+
+> **Assumed:** this extends a delivered capability, so no C20 is added, as in the 11b/11c precedent.
+> **Decided (stability):** the slug is **frozen on first publish**, with no alias table (data-model.md §Phase 11e → Lifecycle).
+> **Blocker to check before the fan-out:** `alembic/versions/0009_*.py` (invite revoke) must be on the base branch. If it is not, rebase onto it first. `0010` has `down_revision = "0009"`.
+
+**Non-goals (explicit):**
+- no admin slug editing, slug history or alias table;
+- no `og:image`, and no server-side rendering of the listing body (the body still renders client-side; only the head is injected);
+- no SEO tags for the board page or the landing page beyond the sitemap entry;
+- no change to the board's filters, no new setting and no new dependency;
+- no change to the JSON shape beyond the added `slug` and the new `public_url` value.
+
+**Mini-scaffold (orchestrator, one commit, before the fan-out):** add to `src/workshop0/services/opportunities.py` two stubs whose bodies `raise NotImplementedError`. Slice E1 fills them, and E2 imports them.
+- `find_public(session, key: str) -> Opportunity | None`: a numeric key (`^\d{1,12}$`) is an id, anything else is a slug compared after lower-casing. It returns the row unless that row is a draft.
+- `list_open(session, now) -> list[Opportunity]`: every effective-open listing, ordered by `published_at` desc, `id` desc.
+
+**Slices: three, fanned out concurrently, with disjoint paths.** Build dependencies are none. Runtime and test dependencies are noted per slice.
+
+| Slice | Owns (exclusive paths) | Delivers | Tests need |
+|---|---|---|---|
+| **E1 slug-data** | `src/workshop0/services/slugs.py` (new), `src/workshop0/db/models.py`, `alembic/versions/0010_opportunity_slugs.py` (new), `src/workshop0/services/opportunities.py`, `src/workshop0/api/board_public.py`, `tests/unit/test_slugs.py` (new), `tests/integration/test_migration.py`, `tests/integration/test_board_slugs.py` (new), `tests/integration/test_board_admin.py`, `tests/integration/test_board_public.py` | `slug_base`/`new_suffix`/`make_unique_slug`. `Opportunity.slug`. Migration `0010` with the backfill and downgrade, per data-model.md §Phase 11e. Slug assignment on POST, recompute-while-never-published and freeze after publish in the write path. `slug` in the public card/detail and admin payloads. `public_url` uses the slug. `GET /api/public/opportunities/{key}` accepts an id or a slug. `find_public` and `list_open` are filled in. `test_migration.py`: "head is 0009" → `0010`. In the two board test files, only the key sets gain `slug` and the two `public_url` assertions become `/opportunities/{slug}` | — |
+| **E2 seo-routes** | `src/workshop0/services/seo.py` (new), `src/workshop0/api/seo.py` (new), `src/workshop0/api/__init__.py`, `tests/unit/test_seo_render.py` (new), `tests/integration/test_seo_routes.py` (new), `tests/integration/test_board_leak.py`, `tests/integration/test_redirects.py` | `render_listing_html(template, opp_or_none, base_url, now)`, the head-block builder, the JobPosting builder, `render_sitemap` and `render_robots`, all exactly per api.md §Phase 11e. The view-HTML path is a module constant, `VIEW_HTML = FRONTEND_OUT_DIR / "opportunities/view/index.html"`, which tests monkeypatch to a tiny fixture HTML, so pytest needs no `pnpm build`. The router serves `/opportunities/{key}`, `/opportunities/{key}/`, `/sitemap.xml` and `/robots.txt`. It is registered in `create_app()` before the static mount, and the Phase-10 `_opportunity_redirect` is **deleted**. `test_redirects.py`: drop the `("/opportunities/12", …)` tuple and the quoted-id test, which are now covered by `test_seo_routes.py`. Keep `("/opportunities", "/app/opportunities/")` | E1 (runtime: the column, `find_public`, `list_open`, the serializers) |
+| **E3 frontend-e2e** | `frontend/lib/board.ts`, `frontend/lib/adminBoard.ts`, `frontend/components/board/OpportunityCard.tsx`, `frontend/app/opportunities/view/page.tsx`, `tests/e2e/opportunity-slugs.spec.ts` (new), `tests/e2e/opportunity-board.spec.ts`, `README.md` | Types gain `slug: string`. `listingHref(slug, boardQs)` → `/opportunities/{slug}` plus `?from=<boardQs>` when set. The card renders it as a plain `<a>` (not `next/link`, because the target is outside `basePath`). `getPublicOpportunity(key: string)`. The view page reads its key in the order given in api.md §Phase 11e → Client page reading the key, and on `/app/…?id=`/`?slug=` it calls `location.replace` to the slug URL. `document.title` behaviour is unchanged. `opportunity-board.spec.ts`: the two `pathname` assertions `'/app/opportunities/view/'` become `/^\/opportunities\/[a-z0-9-]+-[0-9a-f]{4,6}$/`. README: one paragraph on slug URLs, the sitemap and robots, plus the gate's `'^0010'` | runtime: E1 + E2 |
+
+**Tests the backend slices must write (PostgreSQL via `TEST_DATABASE_URL`):**
+- **Slug unit (E1, `test_slugs.py`):**
+  - `("GenAI Workshop", "Bengaluru")` → base `genai-workshop-bengaluru`;
+  - `("Zürich  Data — Bootcamp!", None)` → `zurich-data-bootcamp`;
+  - `("São Paulo", "São Paulo")` → `sao-paulo-sao-paulo`;
+  - a Devanagari-only title with no city → `opportunity`;
+  - a 160-character title → a base of 60 characters or fewer, not ending in `-` and not cut mid-word;
+  - the suffix matches `^[0-9a-f]{4}$`;
+  - with a monkeypatched suffix source that collides 5 times, the result has 6 hex characters;
+  - no generated slug matches `^\d+$`.
+- **Migration (E1):**
+  - *Fixture at `0009`:* rows for a hybrid listing `GenAI Workshop` with `locations_json` [Bengaluru, Pune], a remote listing `Remote Mentoring`, a legacy row with `locations_json='[]'` and `city='Pune'`, a draft, and two rows both titled `Same Title` in `Delhi`.
+  - *Upgrade:* `upgrade head` → each slug matches `^<expected base>-[0-9a-f]{4,6}$`, i.e. `genai-workshop-bengaluru-…`, `remote-mentoring-…`, `…-pune-…` and so on. All slugs are distinct, the column is not null, and a duplicate insert raises `IntegrityError`. Head is `0010`.
+  - *Downgrade:* `downgrade 0009` → the column is gone and the other data is intact.
+- **API (E1, `test_board_slugs.py`):**
+  - POST draft `GenAI Workshop` Bengaluru → the slug is `genai-workshop-bengaluru-XXXX`;
+  - PATCH the title to `LLM Workshop` while it is a draft → the slug is `llm-workshop-bengaluru-XXXX` with the **same suffix**;
+  - publish, then PATCH the title and the locations → the slug is unchanged;
+  - unpublish and republish → unchanged;
+  - `public_url` ends with `/opportunities/{slug}` on admin and public payloads;
+  - `GET /api/public/opportunities/{slug}`, the upper-cased slug and `{id}` all return the same listing;
+  - a draft's slug → 404;
+  - `slug` in a PATCH body is ignored;
+  - no `changed_fields` contains `slug`.
+- **SEO render (E2, `test_seo_render.py`, pure functions on a fixture template):**
+  - the template's `<title>` and `description` meta are replaced, with exactly one of each in the output;
+  - the block sits before `</head>` between the markers;
+  - a title `</script><script>alert(1)</script>"&<b>` appears only escaped, the output contains no `<script>alert`, and the JSON-LD `<script>` body parses with `json.loads` and round-trips the exact title;
+  - the description is cut at 160 characters with `…`;
+  - JobPosting: hybrid with 2 locations → 2 Places; remote → `TELECOMMUTE` + India and no `jobLocation`; INR 8000–12000/day → `baseSalary` with `DAY`; `course` → no `baseSalary`; a null `partner_display_name` → `smallTech partner network`;
+  - closed or expired → `noindex` and no `application/ld+json`;
+  - `None` (not found) → the generic title, `noindex` and no listing text.
+- **SEO routes (E2, `test_seo_routes.py`):**
+  - open slug → 200 `text/html` with the canonical URL `http://testserver/opportunities/{slug}`;
+  - `/opportunities/{id}?from=type%3Dworkshop` → 301 `Location: /opportunities/{slug}?from=type%3Dworkshop`;
+  - an upper-case slug → 301 to the lower-case slug;
+  - a trailing slash → 301;
+  - a draft's slug, a draft's id, an unknown slug, `a%20b%26c` and an 81-character key → 404 HTML, `noindex`, and the draft title absent;
+  - a closed listing → 200 + `noindex`;
+  - a missing template → 503;
+  - `/sitemap.xml` → parses as XML and its `<loc>` set equals `{base}/opportunities` plus exactly the open listings' `public_url` (expired, closed and draft listings created in the test are absent);
+  - `/robots.txt` equals the exact api.md text with `Sitemap: http://testserver/sitemap.xml`;
+  - with `WORKSHOP0_BASE_URL=https://workshop0.smalltech.in`, canonical, `og:url`, the sitemap and robots all use it.
+- **Leak (E2, extends `test_board_leak.py`):** using the existing sentinel partner, internal name and notes, the HTML for open, expired and closed listings, the 404 HTML for a draft whose title is `ZZ-DRAFT-TITLE`, and `/sitemap.xml` must not contain any Phase-10/11b/11c sentinel or key, `ZZ-DRAFT-TITLE`, or `partner_id`/`stored_status`/`locations_json`.
+
+**e2e journey (E3, `tests/e2e/opportunity-slugs.spec.ts`, `test.describe.serial`, live single-origin app, admin key from the env, per-run suffix, `workers: 1`):**
+1. **Seed via the admin API:** publish a hybrid workshop `Slug Test <run> Zürich` in Bengaluru with internal notes `ZZ-INTERNAL-<run>` and a sentinel internal partner. The response `slug` matches `^slug-test-<run>-zurich-bengaluru-[0-9a-f]{4,6}$`, and `public_url` ends with `/opportunities/{slug}`.
+2. **Card → slug URL (fresh context):** `/app/opportunities/?sort=newest&type=workshop` → click the card → `pathname === "/opportunities/{slug}"` and `opportunity-title` has the title. **All opportunities** → back at `/app/opportunities/` with `sort=newest&type=workshop`.
+3. **Legacy:** `goto('/opportunities/{id}')` and `goto('/app/opportunities/view/?id={id}')` both end on `pathname === "/opportunities/{slug}"` with the title rendered.
+4. **Raw HTML (`request.get`, no JS):** the HTML has `<title>Slug Test <run> Zürich — Workshop0</title>`, `rel="canonical"` = `public_url`, `og:title`, and exactly one `application/ld+json` whose `JSON.parse` gives `@type === "JobPosting"` with `jobLocation[0].address.addressLocality === "Bengaluru"`. It contains neither `ZZ-INTERNAL` nor the sentinel partner name, and neither does `page.content()` on the rendered page.
+5. **Stable:** PATCH the title to `Renamed <run>` → the slug is unchanged, the old URL is 200, and `<title>` shows the new title.
+6. **Admin link:** open the listing in the editor → the public link's text and `href` end with `/opportunities/{slug}`.
+7. **Closed:** PATCH `status: closed` → the raw HTML has `noindex` and no `ld+json`. The page shows "Applications for this opportunity have closed."
+8. **Draft:** create a draft `ZZ-DRAFT-<run>` via the API → `request.get('/opportunities/{draft slug}')` has status 404 and no `ZZ-DRAFT`. The page shows `opportunity-not-found`.
+9. **Sitemap and robots:** `/sitemap.xml` contains the step-1 listing's URL only while it is open; after step 7 it is absent. `/robots.txt` contains `Disallow: /admin`, `Disallow: /api/` and `Disallow: /network/me`.
+
+**Gate (exact commands, serial; working directory = the repo root; PostgreSQL via `TEST_DATABASE_URL`. The regression suite re-runs the real-Anthropic Phase-11 tests, so the key and workspace id come from the gitignored `.env`, never echoed. PIDs are tracked and killed on exit):**
+
+```bash
+export TEST_DATABASE_URL="postgresql+psycopg://$USER@localhost:5432/workshop0_test"
+export WORKSHOP0_ADMIN_KEY="${WORKSHOP0_ADMIN_KEY:-phase11e-local-gate-key-0123}"
+envval() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | tr -d '"'"'"; }
+export ANTHROPIC_API_KEY="$(envval ANTHROPIC_API_KEY)" ANTHROPIC_WORKSPACE_ID="$(envval ANTHROPIC_WORKSPACE_ID)"
+test -n "$ANTHROPIC_API_KEY" && test -n "$ANTHROPIC_WORKSPACE_ID"                      # BLOCKED (not skipped) without both
+export WORKSHOP0_GOOGLE_CLIENT_ID=test-client WORKSHOP0_GOOGLE_CLIENT_SECRET=test-secret
+export WORKSHOP0_OIDC_ISSUER=http://localhost:8099 WORKSHOP0_SESSION_SECRET="$(openssl rand -hex 32)"
+export WORKSHOP0_ADMIN_EMAILS=admin@example.test WORKSHOP0_BLOB_BACKEND=local
+OIDC_PID=""; SERVER_PID=""
+cleanup() { for p in $SERVER_PID $OIDC_PID; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; OIDC_PID=""; SERVER_PID=""; true; }
+trap cleanup EXIT
+test -n "$(ls alembic/versions/0009_*.py 2>/dev/null)"                                  # invite-revoke 0009 is present
+uv sync
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0010'
+uv run python tests/support/fake_oidc.py --port 8099 & OIDC_PID=$!
+sleep 2
+uv run pytest tests/unit tests/integration -q                                          # full regression (incl. real-Anthropic ai_network)
+! uv run pytest tests/unit/ai tests/integration/ai_network -q -rs | grep -q SKIPPED
+uv run pytest tests/unit/test_slugs.py tests/unit/test_seo_render.py tests/integration/test_migration.py tests/integration/test_board_slugs.py tests/integration/test_seo_routes.py tests/integration/test_board_leak.py tests/integration/test_redirects.py tests/integration/test_sqlite_to_postgres.py -q   # the 11e files exist and pass
+! grep -n '_opportunity_redirect\|view/?id=' src/workshop0/api/__init__.py               # the id redirect is gone
+! grep -nE 'partner_internal_name|internal_notes|partner_id|Partner' src/workshop0/services/seo.py src/workshop0/api/seo.py
+grep -qF "'^0010'" README.md
+(cd frontend && ASDF_NODEJS_VERSION=23.11.0 pnpm install && ASDF_NODEJS_VERSION=23.11.0 pnpm build)
+test -f frontend/out/opportunities/view/index.html && grep -q '</head>' frontend/out/opportunities/view/index.html
+! grep -rn 'opportunities/view/?' frontend/components frontend/lib                       # no link builds the id URL
+ASDF_NODEJS_VERSION=23.11.0 pnpm install && ASDF_NODEJS_VERSION=23.11.0 pnpm exec playwright install chromium
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head
+DATABASE_URL="$TEST_DATABASE_URL" uv run python -m src & SERVER_PID=$!
+sleep 3
+curl -fsS http://localhost:8001/api/health > /dev/null
+curl -fsS http://localhost:8001/robots.txt | grep -qx 'Disallow: /network/me'
+curl -fsS http://localhost:8001/sitemap.xml | grep -q '<urlset'
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8001/opportunities/does-not-exist-0000 | grep -qx 404
+ASDF_NODEJS_VERSION=23.11.0 pnpm exec playwright test tests/e2e --reporter=line        # every e2e spec, incl. opportunity-slugs/-board
+PUB_JSON="$(mktemp)"; SITEMAP="$(mktemp)"
+curl -fsS 'http://localhost:8001/api/public/opportunities?page_size=50' > "$PUB_JSON"
+curl -fsS http://localhost:8001/sitemap.xml > "$SITEMAP"
+uv run python - "$PUB_JSON" "$SITEMAP" <<'PY'
+import json, re, sys, urllib.request
+ops = json.load(open(sys.argv[1]))["data"]["opportunities"]
+sitemap = open(sys.argv[2]).read()
+assert ops, "empty board"
+for o in ops:
+    assert re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{4,6}", o["slug"]), o["slug"]
+    assert o["public_url"].endswith("/opportunities/" + o["slug"]), o["id"]
+    assert o["public_url"] in sitemap, o["slug"]
+    html = urllib.request.urlopen("http://localhost:8001/opportunities/" + o["slug"]).read().decode()
+    assert html.count('application/ld+json') == 1 and 'rel="canonical"' in html, o["slug"]
+    for bad in ("ZZ-INTERNAL", "ZZ-PARTNER-NOTE", "Zenvia", "partner_internal_name", "internal_notes", "locations_json"):
+        assert bad not in html, (o["slug"], bad)
+PY
+! grep -qE 'ZZ-INTERNAL|ZZ-PARTNER-NOTE|Zenvia|partner_internal_name|internal_notes|ZZ-DRAFT' "$SITEMAP" "$PUB_JSON"
+rm -f "$PUB_JSON" "$SITEMAP"
+kill "$SERVER_PID" "$OIDC_PID"; wait "$SERVER_PID" "$OIDC_PID" 2>/dev/null || true; SERVER_PID=""; OIDC_PID=""
+sleep 1
+! curl -s -o /dev/null --max-time 2 http://localhost:8001/api/health
+trap - EXIT
+```
+
+**Gate conditions (beyond the commands):**
+- *Migration:* every existing row gets a unique, well-formed slug, and the downgrade works.
+- *Stability:* a published slug never changes (E1 tests and e2e step 5).
+- *Legacy links:* `/opportunities/{id}` → 301; `/app/opportunities/view/?id=` → the slug URL.
+- *SEO:* the exact head block, the escaping, the JobPosting rules, noindex for closed and expired, and a 404 for drafts and unknown keys, per api.md §Phase 11e.
+- *No leak:* JSON, injected HTML, 404 HTML and the sitemap are all clean of the internal partner name, notes and draft titles.
+- *No regression:* every pre-11e unit, integration and e2e test passes. The only edits are the documented key-set, `public_url` and pathname changes.
+
+**How the user tests it (repo root; local SQLite as usual):**
+1. `uv run alembic upgrade head` → `uv run alembic current` prints `0010`. Then run `(cd frontend && pnpm build)` and `uv run python -m src`.
+2. Private window → **http://localhost:8001/opportunities** → click any card → the address bar reads e.g. `/opportunities/genai-workshop-bengaluru-a3f9`. **All opportunities** returns with your filters.
+3. Paste an old link, **http://localhost:8001/opportunities/1** → it lands on that listing's slug address.
+4. **View source** on the listing (Ctrl/Cmd-U) → `<title>`, `meta description`, `canonical`, `og:*` and one `application/ld+json` JobPosting are there, and the internal partner name and notes are nowhere. Optionally paste the URL into a link-preview tool once deployed.
+5. **http://localhost:8001/admin** → open that listing → the public link and **Copy public link** use the slug. Edit the title and save → the slug address is unchanged and still works.
+6. Close the listing → the page still opens with the closed banner, and view source shows `noindex`. Open a draft's slug address → "This opportunity isn't available".
+7. **http://localhost:8001/sitemap.xml** lists the board and the open listings. **http://localhost:8001/robots.txt** shows the disallow rules.
+8. **Production:** no operator step. `workshop0-migrate` applies `0010` (after `0009`). `WORKSHOP0_BASE_URL` already makes canonical URLs and the sitemap use `https://workshop0.smalltech.in`.
+
+**Labelled stubs (not bugs):** none new in 11e.
+
+---
+
 ## Phase 12 — Applications, Matching & Email Outbox
 
 **Goal:** A signed-in trainer applies to a listing in one click and tracks the status; an admin gets a suggested shortlist for a listing, invites trainers to apply, moves applicants through the pipeline in bulk with status emails; every email goes through an outbox that sends over Gmail SMTP when configured and is recorded (and shown to admins, clearly labelled) when not.
@@ -1156,7 +1327,7 @@ kill %2 %1
 
 | Slice | Owns (exclusive paths) | Delivers | Tests need |
 |---|---|---|---|
-| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0009_applications_matching_email.py`, `src/workshop0/email/outbox.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-12 tables/columns, plus `enqueue(...)` (insert-only, with dedupe) | — |
+| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0011_applications_matching_email.py`, `src/workshop0/email/outbox.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-12 tables/columns, plus `enqueue(...)` (insert-only, with dedupe) | — |
 | **S1 applications** | `src/workshop0/services/applications.py`, `src/workshop0/api/network_me.py`, `src/workshop0/api/pipeline_admin.py`, `tests/integration/applications/**` | Apply/withdraw/my-applications (`/api/me/applications…`), `/api/me/matches` (calls `matching.matches_for`), and the pipeline list, bulk status (one audit row, notify emails) and CSV routes. Every route here that enqueues email, including profile create in `network_me.py` (welcome enqueue lives in S7's `profiles.py`), calls `sender.schedule_drain(background_tasks)` | S0, S2, S6 |
 | **S2 matching-rules** | `src/workshop0/services/matching.py` (fills the stub), `tests/integration/matching/**`, `tests/fixtures/network_pool.py` | Prefilter, rule score, `eligible`, `matches_for`. The shared 60-profile fixture `seed_pool()` has an eligible set of exactly 17 and one obvious best | S0 |
 | **S3 shortlist-ranker** | `src/workshop0/ai/shortlist_rank.py` (fills the stub), `src/workshop0/ai/prompts/shortlist_rank_{system,user}.md`, `tests/integration/ai_network/test_shortlist_rank.py` | `run_shortlist`: top 40 by rule score → one real Anthropic call (`claude-sonnet-5-5`, Phase-11 client, `record_usage`) → guardrails → `match_suggestion` rows. Falls back to ranking by rules | S0, S2 |
@@ -1190,7 +1361,7 @@ export WORKSHOP0_GOOGLE_CLIENT_ID=test-client WORKSHOP0_GOOGLE_CLIENT_SECRET=tes
 export WORKSHOP0_SESSION_SECRET="$(openssl rand -hex 32)" WORKSHOP0_ADMIN_EMAILS=admin@example.test WORKSHOP0_BLOB_BACKEND=local
 export WORKSHOP0_SMTP_HOST=localhost WORKSHOP0_SMTP_PORT=8025 WORKSHOP0_SMTP_STARTTLS=0 WORKSHOP0_SMTP_USER=bot@example.test WORKSHOP0_SMTP_PASSWORD=x
 uv sync
-DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0009'   # 0008 = Phase 11c
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0011'   # 0010 = Phase 11e
 uv run python tests/support/fake_oidc.py --port 8099 &
 uv run python -m aiosmtpd -n -l localhost:8025 &
 sleep 2
@@ -1235,7 +1406,7 @@ bash -n deploy/cloudrun/provision.sh
 
 | Slice | Owns (exclusive paths) | Delivers | Tests need |
 |---|---|---|---|
-| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0010_alerts_directory_tiein.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-13 tables/columns | — |
+| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0012_alerts_directory_tiein.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-13 tables/columns | — |
 | **S1 alerts** | `src/workshop0/services/alerts.py` (fills the stub), `src/workshop0/services/opportunities.py` (hook on every transition to effective `open`), `src/workshop0/api/board_admin.py` (adds `schedule_drain` after publish/reopen/patch only), `src/workshop0/email/templates/network_alert.*`, `tests/integration/alerts/**` | Saved-search matching and alert enqueue with dedupe `alert:{search}:{opp}`, written in the transaction that makes the listing open. The alert email carries an unsubscribe link via `unsubscribe.make_token` | S0, S2 |
 | **S2 digest-unsubscribe** | `src/workshop0/services/{digest,unsubscribe}.py`, `src/workshop0/api/network_public.py`, `src/workshop0/email/templates/network_digest.*`, `tests/integration/digest/**` | The `/api/cron/weekly-digest` endpoint (cron key, 404 when unset, idempotent per ISO week, using `alerts.matches`) and the signed one-click `/api/email/unsubscribe` | S0, S1 |
 | **S3 directory** | `src/workshop0/services/directory.py`, `src/workshop0/api/directory_public.py`, `tests/integration/directory/**` | Public directory + profile: allow-list serializer, ≥60 % completeness, private → 404 | S0 |
@@ -1254,7 +1425,7 @@ bash -n deploy/cloudrun/provision.sh
 | **S16 infra-workflows** | `.github/workflows/**` | Conditional `WORKSHOP0_CRON_KEY` secret mapping | — |
 | **S17 docs** | `README.md`, `deploy/RUNBOOK.md` | RUNBOOK "network operations" section (digest, scheduler, the secrets list including both Anthropic secrets, the two-provider note) | — |
 
-**Gate (repo root; the Phase-12 environment, including the Anthropic key + workspace id from `.env` because the regression suite re-runs the Phase-11/12 real-key tests, plus `export WORKSHOP0_CRON_KEY=gate-cron-key`):** the Phase-12 command block with `grep -q '^0010'`, page checks `for p in network/directory network/trainer network/searches network/unsubscribed; do test -f "frontend/out/$p/index.html"; done`, and additionally, with the server up: `curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/cron/weekly-digest | grep -qx 401` and `curl -fsS -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest | grep -q '"enqueued"'`, then `bash -n deploy/cloudrun/provision.sh`. **Conditions:** a listing matching 3 of 5 saved searches → exactly 3 alerts, re-publish → 0 more; digest twice in one ISO week → one email per user (fixture: 40 users, 12 opted out, precomputed recipients); unsubscribe link flips exactly one preference; directory payloads contain only allow-listed keys (serialized-JSON assertion with sentinel email/rate/note values); a private or <60 % profile 404s publicly; linking a trainer to a workshop writes an audit row and shows on `/api/me/workshops`; participant join/tracker journeys (existing e2e) still pass and require no sign-in; zero `stub-badge` elements on network pages.
+**Gate (repo root; the Phase-12 environment, including the Anthropic key + workspace id from `.env` because the regression suite re-runs the Phase-11/12 real-key tests, plus `export WORKSHOP0_CRON_KEY=gate-cron-key`):** the Phase-12 command block with `grep -q '^0012'`, page checks `for p in network/directory network/trainer network/searches network/unsubscribed; do test -f "frontend/out/$p/index.html"; done`, and additionally, with the server up: `curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/cron/weekly-digest | grep -qx 401` and `curl -fsS -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest | grep -q '"enqueued"'`, then `bash -n deploy/cloudrun/provision.sh`. **Conditions:** a listing matching 3 of 5 saved searches → exactly 3 alerts, re-publish → 0 more; digest twice in one ISO week → one email per user (fixture: 40 users, 12 opted out, precomputed recipients); unsubscribe link flips exactly one preference; directory payloads contain only allow-listed keys (serialized-JSON assertion with sentinel email/rate/note values); a private or <60 % profile 404s publicly; linking a trainer to a workshop writes an audit row and shows on `/api/me/workshops`; participant join/tracker journeys (existing e2e) still pass and require no sign-in; zero `stub-badge` elements on network pages.
 
 **How the user tests it:** as a trainer, on the board pick filters → **Save this search** → as admin publish a matching listing → the alert email arrives (or is *recorded* in the Outbox) → click **Unsubscribe** in it → preferences show alerts off. Trigger the digest locally: `curl -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest`. Turn on **Public directory profile** → visit `/app/network/directory/` in a private window → your card is there, without rates or email. As admin, on a workshop card **Facilitators** → add the trainer as co-facilitator → the trainer's **My Workshop0 workshops** shows the dashboard link. Open a workshop join link → the **Join our network** card is visible. Production: `bash deploy/cloudrun/provision.sh` (cron key + scheduler), redeploy, `gcloud scheduler jobs run workshop0-weekly-digest --location us-central1`. **Nothing is a stub.**
 

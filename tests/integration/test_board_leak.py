@@ -81,3 +81,56 @@ def test_not_found_responses_do_not_leak_either(client, board):
     assert response.status_code == 404
     for needle in FORBIDDEN:
         assert needle not in response.text
+
+
+# --------------------------------------------------------------------------- Phase 11e
+SEO_FORBIDDEN = (
+    *FORBIDDEN,
+    "Acme Payments Pvt Ltd",  # the factory's default internal partner name
+    "Contact: R. Rao",  # the factory's default internal note
+    "ZZ-DRAFT-TITLE",
+)
+
+
+def _assert_html_clean(response, status: int) -> None:
+    assert response.status_code == status, response.text
+    for needle in SEO_FORBIDDEN:
+        assert needle not in response.text, (response.url, needle)
+
+
+def test_seo_html_and_sitemap_do_not_leak(
+    client, admin_headers, board, create_opportunity, monkeypatch, tmp_path
+):
+    import src.workshop0.api.seo as seo_api
+
+    view = tmp_path / "view.html"
+    view.write_text("<html><head><title>x</title></head><body></body></html>", encoding="utf-8")
+    monkeypatch.setattr(seo_api, "VIEW_HTML", view)
+    _give_partner_notes(client, admin_headers)
+    multi = create_opportunity(
+        status="open", location_mode="hybrid",
+        partner_internal_name=INTERNAL_PARTNER_SENTINEL, internal_notes=INTERNAL_NOTE_SENTINEL,
+        locations=[{"city": "Bengaluru", "country": "India"}, {"city": "Pune"}],
+    )
+    draft = create_opportunity(
+        title="ZZ-DRAFT-TITLE", partner_internal_name=INTERNAL_PARTNER_SENTINEL,
+        internal_notes=INTERNAL_NOTE_SENTINEL,
+    )
+
+    def slug_of(oid: int) -> str:
+        response = client.get(f"/api/admin/opportunities/{oid}", headers=admin_headers)
+        return response.json()["data"]["opportunity"]["slug"]
+
+    ids = [multi["id"], *board["open_ids"][:3], *board["expired_ids"], *board["closed_ids"]]
+    for oid in ids:
+        response = client.get(f"/opportunities/{slug_of(oid)}", follow_redirects=False)
+        _assert_html_clean(response, 200)
+        assert 'rel="canonical"' in response.text
+    for key in (draft["slug"], str(draft["id"]), slug_of(board["draft_ids"][0])):
+        response = client.get(f"/opportunities/{key}", follow_redirects=False)
+        _assert_html_clean(response, 404)
+        assert "Draft 0" not in response.text
+    sitemap = client.get("/sitemap.xml")
+    _assert_html_clean(sitemap, 200)
+    assert draft["slug"] not in sitemap.text
+    _assert_html_clean(client.get("/robots.txt"), 200)

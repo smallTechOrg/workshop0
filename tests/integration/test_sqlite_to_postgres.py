@@ -255,9 +255,9 @@ def test_topic_reference_table_is_replaced_by_the_source_including_admin_edits(s
     )
     conn.execute("UPDATE topic SET name = 'Golang', active = 0 WHERE slug = 'go'")
     conn.execute(
-        "INSERT INTO opportunity (id, title, type, summary, description_md, location_mode, city,"
+        "INSERT INTO opportunity (id, slug, title, type, summary, description_md, location_mode, city,"
         " starts_on, ends_on, deadline, status, published_at, created_at, updated_at)"
-        " VALUES (1, 'Elixir bootcamp', 'engagement', 'Teach Elixir', '', 'onsite', 'Pune',"
+        " VALUES (1, 'elixir-bootcamp-pune-a3f9', 'Elixir bootcamp', 'engagement', 'Teach Elixir', '', 'onsite', 'Pune',"
         " '2026-12-05', '2026-12-06', '2026-11-30 18:29:59', 'open', '2026-11-01 10:00:00',"
         " '2026-11-01 10:00:00', '2026-11-01 10:00:00')"
     )
@@ -277,6 +277,7 @@ def test_topic_reference_table_is_replaced_by_the_source_including_admin_edits(s
         2026, 11, 30, 18, 29, 59, tzinfo=timezone.utc
     )
     assert _pg_scalar(target, "SELECT topic_id FROM opportunity_topic WHERE opportunity_id = 1") == 41
+    assert _pg_scalar(target, "SELECT slug FROM opportunity WHERE id = 1") == "elixir-bootcamp-pune-a3f9"
     assert _pg_scalar(target, "SELECT nextval(pg_get_serial_sequence('topic', 'id'))") == 42
 
 

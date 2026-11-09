@@ -32,6 +32,7 @@ This is the contract both generators build against **in parallel** — the backe
 
 `GET /j/{join_slug}` → `/app/join/?s=…` · `GET /p/{participant_token}` → `/app/p/?t=…` · `GET /f/{admin_token}` → `/app/f/?t=…` — all 307. **Phase 1.**
 `GET /admin` → `/app/admin/` — 307. **Phase 6.**
+`GET /opportunities/{key}`, `/sitemap.xml` and `/robots.txt` are server-rendered public pages. **Phase 11e**, see §Phase 11e.
 `GET /` — **Phase 1:** 307 → `/app/`. **Phase 6:** no longer a redirect — it serves the public marketing landing page HTML directly (200, `text/html`). See architecture.md §Serving the landing page at `/`.
 
 ---
@@ -342,7 +343,7 @@ Every other failure uses the existing catalogue (`invalid_admin_key`, `not_found
 
 **Enums:** `type` ∈ `workshop` \| `engagement` \| `role` \| `cofacilitation`. `location_mode` ∈ `remote` \| `onsite` \| `hybrid`. Effective `status` ∈ `draft` \| `open` \| `expired` \| `closed` (data-model.md §Effective status). Dates (`starts_on`, `ends_on`) are `"YYYY-MM-DD"`; `deadline` is an ISO 8601 UTC timestamp with `Z` (input must carry a timezone — naive → `validation_error`).
 
-**`public_url`** = `{WORKSHOP0_BASE_URL or request origin}/opportunities/{id}` (pretty redirect below).
+**`public_url`** = `{WORKSHOP0_BASE_URL or request origin}/opportunities/{id}` (pretty redirect below). From Phase 11e it is `/opportunities/{slug}` (§Phase 11e).
 
 **PublicOpportunityCard** (list item):
 ```json
@@ -434,7 +435,7 @@ Any of `{"name", "category", "active"}`; slug never changes. Rename collisions �
 
 ## Pretty routes (Phase 10)
 
-`GET /opportunities` → 307 `/app/opportunities/` · `GET /opportunities/{id}` → 307 `/app/opportunities/view/?id={id}` (the segment is URL-quoted and passed through; a non-numeric id just renders the page's not-found state).
+`GET /opportunities` → 307 `/app/opportunities/` · `GET /opportunities/{id}` → 307 `/app/opportunities/view/?id={id}` (the segment is URL-quoted and passed through; a non-numeric id just renders the page's not-found state). **Superseded in Phase 11e:** `/opportunities/{key}` is server-rendered HTML, and numeric ids get a 301 to the slug URL (§Phase 11e).
 
 ---
 
@@ -659,6 +660,101 @@ Today's public board filters are `type`, `topic` and `sort` only, and the admin 
 ## Drafting response (`POST /api/admin/opportunity-draft`)
 
 The `draft` object replaces `"city"` with **`"locations": [<Location>, …]`** (always present, `[]` when not drafted or remote). The draft has a single consumer, the editor, so no legacy `city` key is kept there. The **`drafted_fields`** value stays **`location`**. It now covers `location_mode` and `locations` (a non-empty list), and the fixed set of values is unchanged.
+
+---
+
+# Phase 11e — Opportunity slugs & SEO (no new JSON endpoint)
+
+Schema and slug rule: [data-model.md](data-model.md) §Phase 11e. JSON changes are in `services/opportunities.py` and `api/board_public.py`. The server-rendered HTML routes are in a new router, `src/workshop0/api/seo.py`, backed by `src/workshop0/services/seo.py`. It is registered in `create_app()` **before** the `/app` static mount, and it **replaces** the Phase-10 `/opportunities/{id}` redirect. `GET /opportunities` → 307 `/app/opportunities/` is unchanged.
+
+## Response fields
+- **PublicOpportunityCard / Detail** and **AdminOpportunity (rows and full)** gain `"slug": "genai-workshop-bengaluru-a3f9"`. It is added to the explicit public allow-list.
+- **`public_url`** becomes `{WORKSHOP0_BASE_URL or request origin}/opportunities/{slug}`. This is the only change to the field's meaning. The admin editor's public link and copy button, and the listing's **Copy link**, already render `public_url`, so they follow automatically.
+- Request bodies never accept `slug`. An unknown `slug` key in a POST/PATCH body is **ignored**, like any other unknown key today, and is never written (tested).
+
+## `GET /api/public/opportunities/{key}`
+`key` matching `^\d{1,12}$` is an **id**, kept for existing clients. Any other key is a **slug**, compared after lower-casing. The same visibility as Phase 10 applies: open, expired and closed are returned, and a draft or unknown key → 404 `not_found`. The response shape is unchanged.
+
+## Server-rendered public listing: `GET /opportunities/{key}` (HTML, not JSON)
+The response body is the exported `frontend/out/opportunities/view/index.html`, read once and cached in memory (re-read when the file's mtime changes), with the SEO block injected. Headers are `Content-Type: text/html; charset=utf-8` and `Cache-Control: no-cache`. If the file is missing → 503 plain text `frontend not built — run \`pnpm build\` in frontend/`, as the landing route does.
+
+| Request | Response |
+|---|---|
+| `key` is numeric (`^\d{1,12}$`) and is a non-draft listing | **301** → `/opportunities/{slug}`, keeping the original query string |
+| `key` is not lower-case but lower-cases to a non-draft listing's slug | **301** → `/opportunities/{slug}`, keeping the query string |
+| `key` is the slug of an **open** listing | **200**, full SEO block **plus** JobPosting JSON-LD |
+| `key` is the slug of an **expired** or **closed** listing | **200**, full SEO block with `<meta name="robots" content="noindex">` and **no** JSON-LD. Shared links keep working, and the page shows the closed banner |
+| draft, unknown id, unknown slug, or a key with characters outside `[A-Za-z0-9-]` or longer than 80 | **404** with the same HTML, the generic title `Opportunity not available — Workshop0`, `<meta name="robots" content="noindex">`, and **nothing** from the listing (a draft's title must not leak). The client renders its not-found state |
+
+Trailing slash: `/opportunities/{key}/` → 301 to the slash-less URL.
+
+**SEO block (exact; open listing):** the exported HTML's existing `<title>…</title>` and any `<meta name="description" …>` are removed. Then the following is inserted immediately before `</head>`, between the markers `<!--w0-seo-->` and `<!--/w0-seo-->`:
+```html
+<title>{title} — Workshop0</title>
+<meta name="description" content="{description}">
+<link rel="canonical" href="{public_url}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Workshop0">
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="{description}">
+<meta property="og:url" content="{public_url}">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="{title}">
+<meta name="twitter:description" content="{description}">
+<script type="application/ld+json">{jobposting}</script>
+```
+- `{description}` = `summary`, cut to 160 characters at a word boundary with `…` appended when cut.
+- `{public_url}` is as above, without any query string.
+- **Escaping:** every `{…}` interpolated into HTML goes through `html.escape(value, quote=True)`. `{jobposting}` is `json.dumps(obj, ensure_ascii=False)`, then `<`, `>` and `&` are replaced with `<`, `>` and `&`, and U+2028/U+2029 with ` `/` `. A title of `</script><script>alert(1)</script>"&` therefore never closes a tag or an attribute.
+- **Allow-list:** the block is built only from `title`, `summary`, `description_md`, `slug`, `type`, `location_mode`, `locations`, `published_at`, `deadline`, `partner_display_name` and the public compensation fields. It is never built from `partner_internal_name`, `partner_id`, the partner row, `internal_notes` or `stored_status`.
+
+**JobPosting (open listings only):**
+```json
+{"@context": "https://schema.org", "@type": "JobPosting",
+ "title": "<title>", "description": "<summary>\n\n<description_md>",
+ "datePosted": "<published_at, YYYY-MM-DD>", "validThrough": "<deadline, ISO 8601 Z>",
+ "employmentType": "CONTRACTOR", "url": "<public_url>",
+ "hiringOrganization": {"@type": "Organization", "name": "<partner_display_name or 'smallTech partner network'>"},
+ "jobLocation": [{"@type": "Place", "address": {"@type": "PostalAddress", "addressLocality": "<city>", "addressCountry": "<country, omitted when null>"}}],
+ "baseSalary": {"@type": "MonetaryAmount", "currency": "INR", "value": {"@type": "QuantitativeValue", "minValue": 8000, "maxValue": 12000, "unitText": "DAY"}}}
+```
+- `jobLocation` has one Place per location, for onsite and hybrid.
+- Remote → no `jobLocation`; instead `"jobLocationType": "TELECOMMUTE"` and `"applicantLocationRequirements": {"@type": "Country", "name": "India"}`.
+- `baseSalary` only when an amount is set and the unit is `hour`/`day`/`month` (→ `HOUR`/`DAY`/`MONTH`). It is omitted for `course`. `minValue`/`maxValue` appear only when set, and min = max gives `"value"` only.
+
+> **Assumed:** `employmentType` is `CONTRACTOR` for all four types, because every listing is freelance or contract work through partners. Remote listings require India, which matches the board's audience. There is no `og:image`, since no image asset exists.
+
+## Client page reading the key
+The view page keeps its static route `/app/opportunities/view/`, because a static export cannot have dynamic segments. It reads the key in this order:
+1. `?slug=`;
+2. `?id=` (legacy);
+3. `window.location.pathname` matching `^/opportunities/([^/]+)/?$`, read in an effect after mount, **not** with `usePathname`, because the page is served outside `basePath`. `/` already works this way.
+
+It then calls `GET /api/public/opportunities/{key}`. When the page was reached at `/app/opportunities/view/?id=…` or `?slug=…`, it calls `window.location.replace("/opportunities/{slug}" + (from ? "?from=" + from : ""))` once loaded. One URL per listing is what users and crawlers see.
+
+## `GET /sitemap.xml`
+`application/xml; charset=utf-8`. The body is a `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` with `{base}/opportunities` (no `lastmod`) and then one `<url>` per **effective-open** listing, ordered by `published_at` desc and `id` desc: `<loc>{public_url}</loc><lastmod>{updated_at, YYYY-MM-DD}</lastmod>`. All text is XML-escaped. Drafts, expired and closed listings are absent. `{base}` = `WORKSHOP0_BASE_URL` or the request origin, as for `public_url`.
+
+## `GET /robots.txt`
+`text/plain; charset=utf-8`, exactly:
+```
+User-agent: *
+Disallow: /admin
+Disallow: /app/admin/
+Disallow: /api/
+Disallow: /network/me
+Disallow: /app/network/me/
+Disallow: /app/opportunities/view/
+Disallow: /f/
+Disallow: /p/
+Disallow: /app/f/
+Disallow: /app/p/
+Sitemap: {base}/sitemap.xml
+```
+> **Assumed:** besides the three requested paths, the token-bearing facilitator and participant links and the duplicate `/app/opportunities/view/` URL are disallowed. Disallowing `/admin` also covers `/admin/…`.
+
+## Hard rule extension (gate-tested)
+No injected SEO block, 404 HTML or sitemap ever contains a partner's internal name, `internal_notes`, `partner_internal_name`, `partner_id`, `stored_status` or `locations_json`, or a draft's title.
 
 ---
 

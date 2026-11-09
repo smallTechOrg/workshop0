@@ -106,6 +106,8 @@ export interface PublicOpportunityCard {
   deadline: string;
   published_at: string | null;
   status: PublicOpportunityStatus;
+  /** Stable, readable URL key (Phase 11e), e.g. `genai-workshop-bengaluru-a3f9`. */
+  slug: string;
   public_url: string;
 }
 
@@ -152,11 +154,11 @@ export function listPublicOpportunities(q: BoardQuery): Promise<PublicOpportunit
   return getJson(`/api/public/opportunities?${qs.toString()}`);
 }
 
-/** `GET /api/public/opportunities/{id}` — open, expired or closed; 404 otherwise. */
+/** `GET /api/public/opportunities/{key}` — key is a slug or a legacy numeric id; open, expired or closed; 404 otherwise. */
 export function getPublicOpportunity(
-  id: number,
+  key: string,
 ): Promise<{ opportunity: PublicOpportunityDetail }> {
-  return getJson(`/api/public/opportunities/${id}`);
+  return getJson(`/api/public/opportunities/${encodeURIComponent(key)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -206,11 +208,14 @@ export function boardHref(qs: string): string {
   return qs ? `/opportunities/?${qs}` : "/opportunities/";
 }
 
-/** Listing href; `from` carries the board's query so the back link keeps filters. */
-export function listingHref(id: number, boardQs: string): string {
-  const qs = new URLSearchParams({ id: String(id) });
-  if (boardQs) qs.set("from", boardQs);
-  return `/opportunities/view/?${qs.toString()}`;
+/**
+ * Listing href — the server-rendered slug URL `/opportunities/{slug}` (Phase 11e).
+ * It is OUTSIDE the `/app` basePath, so render it with a plain `<a>`, never next/link.
+ * `from` carries the board's query so the back link keeps filters.
+ */
+export function listingHref(slug: string, boardQs: string): string {
+  const path = `/opportunities/${encodeURIComponent(slug)}`;
+  return boardQs ? `${path}?${new URLSearchParams({ from: boardQs }).toString()}` : path;
 }
 
 /** Re-validate a `from` value so it can only ever be a board query string. */

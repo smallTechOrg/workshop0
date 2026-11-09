@@ -494,16 +494,12 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
     if (adminCtx) await adminCtx.close();
   });
 
-  test('pretty /opportunities and /opportunities/{id} are 307s into the app', async ({
+  test('pretty /opportunities is a 307 into the app', async ({
     request,
   }) => {
     const board = await request.get(`${ORIGIN}/opportunities`, { maxRedirects: 0 });
     expect(board.status()).toBe(307);
     expect(board.headers()['location']).toMatch(/\/app\/opportunities\/$/);
-
-    const detail = await request.get(`${ORIGIN}/opportunities/12`, { maxRedirects: 0 });
-    expect(detail.status()).toBe(307);
-    expect(detail.headers()['location']).toMatch(/\/app\/opportunities\/view\/\?id=12$/);
   });
 
   test('admin creates a draft from the editor — Draft pill', async () => {
@@ -565,8 +561,11 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
   }) => {
     const { ctx, page } = await publicPage(browser, 'draft-view');
     try {
-      await page.goto(`${ORIGIN}/opportunities/${opportunityId}`);
-      expect(new URL(page.url()).pathname).toBe('/app/opportunities/view/');
+      // Phase 11e: a draft's id is a server-side 404 (no redirect to a slug —
+      // a draft's slug must never be disclosed), so the URL stays as typed.
+      const res = await page.goto(`${ORIGIN}/opportunities/${opportunityId}`);
+      expect(res?.status()).toBe(404);
+      expect(new URL(page.url()).pathname).toBe(`/opportunities/${opportunityId}`);
       await expect(page.getByTestId('opportunity-not-found')).toBeVisible();
       await expect(page.getByTestId('opportunity-detail')).toHaveCount(0);
       expect(await page.content()).not.toContain(TITLE);
@@ -582,8 +581,9 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
     await expect(admin.getByTestId('opp-status-pill')).toContainText(/open/i);
 
     await expect(admin.getByTestId('opp-public-link')).toBeVisible();
+    // Phase 11e: public_url is the slug URL.
     await expect(admin.getByTestId('opp-public-link')).toContainText(
-      `/opportunities/${opportunityId}`,
+      /\/opportunities\/[a-z0-9-]+-[0-9a-f]{4,6}$/,
     );
 
     const rows = admin.getByTestId('opp-activity-row');
@@ -650,8 +650,8 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
 
       const detail = page.getByTestId('opportunity-detail');
       await expect(detail).toBeVisible({ timeout: 15_000 });
-      expect(new URL(page.url()).pathname).toBe('/app/opportunities/view/');
-      expect(new URL(page.url()).searchParams.get('id')).toBe(String(opportunityId));
+      expect(new URL(page.url()).pathname).toMatch(/^\/opportunities\/[a-z0-9-]+-[0-9a-f]{4,6}$/);
+      expect(new URL(page.url()).searchParams.get('from')).toMatch(/type=workshop/);
       await expect(page.getByTestId('opportunity-title')).toHaveText(TITLE);
       await expect(detail).toContainText(PUBLIC_PARTNER);
       await expect(page).toHaveTitle(new RegExp(TITLE));

@@ -343,9 +343,12 @@ class Opportunity(Base):
         Index("ix_opportunity_status_deadline", "status", "deadline"),
         Index("ix_opportunity_published_at", "published_at"),
         Index("ix_opportunity_partner_id", "partner_id"),
+        UniqueConstraint("slug", name="uq_opportunity_slug"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Phase 11e: public URL key, server-generated (services/slugs.py); frozen on first publish.
+    slug: Mapped[str] = mapped_column(String(80), nullable=False)
     title: Mapped[str] = mapped_column(String(160), nullable=False)
     type: Mapped[str] = mapped_column(String(24), nullable=False)
     summary: Mapped[str] = mapped_column(String(280), nullable=False)
