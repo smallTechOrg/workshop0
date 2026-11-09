@@ -27,6 +27,18 @@ const MESSAGES: Record<string, SigninMessage> = {
     title: "This invite has expired — ask smallTech for a new one.",
     hint: "You can still join the network without an invite.",
   },
+  invite_used: {
+    title: "This invite has already been used.",
+    hint: "You can still join the network without an invite.",
+  },
+  invite_revoked: {
+    title: "This invite has been withdrawn — ask smallTech for a new one.",
+    hint: "You can still join the network without an invite.",
+  },
+  invite_not_found: {
+    title: "We couldn't find that invite.",
+    hint: "Check the link, or ask smallTech for a new one. You can still join the network without an invite.",
+  },
   rate_limited: {
     title: "Too many sign-in attempts.",
     hint: "Wait a minute, then try again.",

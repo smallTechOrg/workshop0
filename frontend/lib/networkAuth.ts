@@ -31,6 +31,17 @@ export const NETWORK_HEADERS = { "X-Requested-With": "workshop0" } as const;
 /** Where the open-redirect guard sends anything that isn't an `/app/` path. */
 export const DEFAULT_NEXT = "/app/network/";
 
+/** ApiError plus the optional `error.details` object (e.g. the masked `invite_email`). */
+export class NetworkApiError extends ApiError {
+  readonly details: Record<string, unknown> | null;
+
+  constructor(code: string, message: string, status: number, details: Record<string, unknown> | null) {
+    super(code, message, status);
+    this.name = "NetworkApiError";
+    this.details = details;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Low-level request (envelope-aware, cookie-carrying)
 // ---------------------------------------------------------------------------
@@ -64,11 +75,16 @@ async function authRequest<T>(path: string, init: RequestInit = {}): Promise<T> 
   }
 
   if (!res.ok) {
-    const detail = (body as { detail?: { code?: string; message?: string } } | null)?.detail;
-    throw new ApiError(
+    const detail = (
+      body as {
+        detail?: { code?: string; message?: string; details?: Record<string, unknown> };
+      } | null
+    )?.detail;
+    throw new NetworkApiError(
       detail?.code ?? "internal_error",
       detail?.message ?? `The server returned an unexpected error (${res.status}).`,
       res.status,
+      detail?.details ?? null,
     );
   }
 
@@ -93,6 +109,29 @@ export async function getAuthConfig(): Promise<{ google_enabled: boolean }> {
 export async function getMe(): Promise<CurrentUser | null> {
   const res = await authRequest<{ user?: CurrentUser | null } | null>("/api/auth/me");
   return res?.user ?? null;
+}
+
+/**
+ * `POST /api/me/invite/accept` (api.md §Phase 11d) — applies an invite to the
+ * signed-in user's (IdP-verified) email without a second Google round-trip.
+ * Throws NetworkApiError with `invite_not_found` / `invite_revoked` /
+ * `invite_used` / `invite_expired` / `invite_email_mismatch` (details.invite_email).
+ */
+export async function acceptInvite(
+  token: string,
+): Promise<{ invite_accepted: boolean; profile_verified: boolean }> {
+  const res = await authRequest<{ invite_accepted?: boolean; profile_verified?: boolean } | null>(
+    "/api/me/invite/accept",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    },
+  );
+  return {
+    invite_accepted: Boolean(res?.invite_accepted),
+    profile_verified: Boolean(res?.profile_verified),
+  };
 }
 
 /** Client-side mirror of the server's open-redirect guard: `next` must start with `/app/`. */

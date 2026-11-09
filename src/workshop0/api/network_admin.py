@@ -156,7 +156,25 @@ def create_invite(
     actor: AdminActor = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> dict:
-    invite = invites.create_invite(session, body, by=actor.by, base_url=request_base_url(request))
+    invite, reused = invites.create_invite(
+        session, body, by=actor.by, base_url=request_base_url(request)
+    )
+    return ok({"invite": invite, "reused": reused})
+
+
+@router.post("/invites/{invite_id}/revoke")
+def revoke_invite(
+    invite_id: str,
+    request: Request,
+    actor: AdminActor = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> dict:
+    invite = invites.revoke_invite(
+        session,
+        parse_path_id(invite_id, "No invite with that id."),
+        by=actor.by,
+        base_url=request_base_url(request),
+    )
     return ok({"invite": invite})
 
 
