@@ -1074,6 +1074,64 @@ trap - EXIT
 
 ---
 
+### Phase 11d — Invite flow fixes
+
+*A fix-up of Phase 11's invites (C11/C13 extended, no new capability numbers). Branch `fix/invite-flow-v0.1`. Contract: [api.md](api.md) §Invite acceptance + §Phase 11d. Schema + status rules: [data-model.md](data-model.md) §network_invite. UI copy: [capabilities.md](capabilities.md) §C11/§C13.*
+
+**Goal:** An admin can revoke a pending invite and never sees duplicate actionable invites; a trainer who is already signed in (even with a profile) can open an invite and apply it in one click, landing **Verified**; a used or revoked invite says so plainly instead of being silently ignored.
+
+**Fixes:** (1) signed-in user with a profile opening an un-applied invite gets the **Use my invite** path, not a redirect (CODE bug — the join page redirects on `has_profile` before looking at the invite); (2) `invite_used` instead of silent ignore (`auth/routes.py::_check_invite`); (3) admin **Revoke** + `invite_revoked`; (4a) direct accept `POST /api/me/invite/accept` and corrected card copy; (4b) "sent" → "created"; (4c) one pending invite per email (re-use + refresh) and `superseded` status.
+
+> **Assumed:** direct accept without a second Google round-trip is safe: the session already proves an IdP-verified email (`email_verified` was required at sign-in), and the endpoint applies exactly the callback's checks to that email.
+> **Assumed:** `superseded` is derived (no column), so no data migration is needed for it; only `revoked_at`/`revoked_by` need migration `0008`.
+> **Assumed:** revoking does not unverify anyone and accepted invites cannot be revoked (verification is managed by the existing Verify/Unverify buttons).
+> **Assumed:** re-creating for an email with a pending invite renews the **same** token (the link the admin may already have shared keeps working) rather than rotating it.
+
+**Migration / rebase flag:** `alembic/versions/0008_invite_revoke.py` (`revision = "0008"`, `down_revision = "0007"`) chains from the current head on `origin/main`. PR #10 (multi-location, another branch) also adds a `0008`. **Whichever merges second must renumber its migration to `0009` with `down_revision = "0008"`** (and bump the `alembic current | grep '^0008'` checks and `test_migration.py`'s head assertion to `0009`). Do not touch any multi-location file on this branch.
+
+**Non-goals:** no invite email (Phase 12); no unverify-on-revoke; no invite deletion; no bulk revoke; no new settings or dependencies.
+
+**Slices** (disjoint paths; F1/F2/E1 build against the api.md contract with **no build dependency**, so B1, F1, F2, E1 fan out concurrently):
+
+| Slice | Owns (exclusive paths) | Delivers | Tests need | Build dependency |
+|---|---|---|---|---|
+| **B1 backend** | `src/workshop0/services/invites.py`, `src/workshop0/auth/routes.py`, `src/workshop0/api/network_admin.py` (invite routes only), `src/workshop0/api/network_me.py` (new accept route only), `src/workshop0/db/models.py` (two `NetworkInvite` columns), `alembic/versions/0008_invite_revoke.py`, `tests/integration/test_migration.py`, `tests/integration/auth/test_auth_invites.py`, `tests/integration/network/admin/test_invites_11d.py`, `tests/integration/network/test_invite_accept.py` | One shared `check_invite(session, token, email, user_id)` + `accept_invite(...)` in `services/invites.py` (moved from `auth/routes.py`, which now calls them) with the api.md ordering; `invite_used`/`invite_revoked` callback codes; `POST /api/me/invite/accept`; `POST /api/admin/network/invites/{id}/revoke`; create re-use/refresh + `invite_already_accepted`; `invite_status` with `revoked`/`superseded`; payload `revoked_at`/`revoked_by`; audit `invite.revoke`/`invite.refresh`; migration 0008 with downgrade; head assertion → `0008` | — | — |
+| **F1 fe-join** | `frontend/app/network/join/page.tsx`, `frontend/components/network/auth/signinErrors.ts`, `frontend/lib/networkAuth.ts` (adds `acceptInvite(token): Promise<{invite_accepted: boolean; profile_verified: boolean}>`) | Join page: with an `invite` param and `!user.invite_accepted`, never redirect on `has_profile`; the invite card per capabilities.md §C11 (`data-testid="invite-card"`, button `invite-use`, error `invite-card-error` with `data-code`, `invite-go-profile`, existing `invite-verified`); `signinErrorMessage` gains `invite_used` and `invite_revoked` with the exact wording | runtime: B1 | — |
+| **F2 fe-admin-invites** | `frontend/components/admin/network/InvitesPanel.tsx`, `frontend/lib/adminNetwork.ts` (InviteStatus + `revoked`/`superseded`, `revoked_at`/`revoked_by`, `reused`; `adminRevokeInvite(id)`) | "created … · expires …" copy; status badges Revoked (neutral) / Superseded (neutral); link + **Revoke** only on pending rows (`invite-revoke`, confirm `invite-revoke-confirm`); reused notice `invite-reused`; `invite_already_accepted` inline error | runtime: B1 | — |
+| **E1 e2e-invites** | `tests/e2e/invite-flow.spec.ts` (new; `helpers.ts` and other specs read-only; private sign-in helper copied from `network-onboarding.spec.ts`) | Self-seeding, run-suffixed journeys via the fake OIDC issuer: (a) sign in as `t-<run>@example.test`, create a profile (Fill in the form yourself, no CV), admin creates an invite for that email, open `/invite/<token>` in the same context → `invite-card` visible (no redirect) → `invite-use` → `invite-verified` → `invite-go-profile` → My profile shows the verified badge; (b) a second account opens that accepted invite via a fresh context sign-in → `/app/signin/` `signin-error[data-code=invite_used]` with "This invite has already been used."; (c) admin creates an invite, **Revoke** in the panel → row shows Revoked with no link → open the link and sign in as the invited email → `signin-error[data-code=invite_revoked]`; (d) creating the same email twice shows `invite-reused` and the same URL; panel text contains "created" and no "sent" | runtime: all (B1, F1, F2) | — |
+
+**Tests B1 must write (PostgreSQL):** callback: revoked → `error=invite_revoked`, no user/session; accepted by user A, then user B (any email) → `error=invite_used` (checked **before** email mismatch), no session; same user re-using → success no-op; superseded opened by the sibling's acceptor → success, row not stamped; superseded opened by a different email → `invite_email_mismatch`. Direct accept: 401 without session, 403 `csrf_failed` without the header, each error code above, success verifies an unverified profile + one `trainer.verify` audit, second call no-op. Revoke: pending → revoked + one `invite.revoke` audit, repeat → no new audit, accepted → 409, unknown → 404, without key → 401, cookie admin without header → 403. Create: pending twice → same id/token, `expires_at` renewed, `reused: true`, one `invite.refresh` audit; after acceptance → 409 `invite_already_accepted`; after revoke → a new row. Status: a sibling of an accepted invite lists as `superseded`. Migration: `upgrade head` → head `0008`, columns present; `downgrade 0007` drops them; re-upgrade works.
+
+**Gate (exact; repo root; same exports as the Phase-11 gate block — `TEST_DATABASE_URL` PostgreSQL, admin key, Google test client id/secret, `WORKSHOP0_OIDC_ISSUER=http://localhost:8099`, session secret, `WORKSHOP0_ADMIN_EMAILS=admin@example.test`, local blobs, Anthropic values from `.env`):**
+
+```bash
+export TEST_DATABASE_URL="postgresql+psycopg://$USER@localhost:5432/workshop0_test"
+uv sync
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0008'
+uv run python tests/support/fake_oidc.py --port 8099 &
+sleep 2
+uv run pytest tests/integration/test_migration.py tests/integration/auth tests/integration/network -q
+uv run pytest tests/unit tests/integration -q                                   # full regression
+(cd frontend && ASDF_NODEJS_VERSION=23.11.0 pnpm build)
+DATABASE_URL="$TEST_DATABASE_URL" uv run python -m src &
+sleep 3
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/me/invite/accept | grep -qx 401
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/admin/network/invites/1/revoke | grep -qx 401
+pnpm exec playwright test tests/e2e/invite-flow.spec.ts tests/e2e/admin-pool.spec.ts tests/e2e/network-onboarding.spec.ts --reporter=line
+! grep -rn 'sent \${' frontend/components/admin/network/InvitesPanel.tsx
+kill %2 %1
+```
+
+**How the user tests it:** same local setup as Phase 11 (`(cd frontend && pnpm build)`, `uv run python -m src`).
+1. Sign in at **http://localhost:8001/network** with account A and create a profile (not verified). As admin (**/admin → Trainer network → Invites**) create an invite for A's email → the row says "created just now". Create it again → "An invite for this email already existed…", same link.
+2. In A's browser open the link → the invite card (no jump to My profile) → **Use my invite** → **Verified** → **Go to My profile** shows the badge.
+3. Open the same link in a private window signed in as account B → "This invite has already been used."
+4. Create an invite for a third address → **Revoke** → confirm → row reads Revoked with no link; opening the link and signing in → "This invite has been withdrawn — ask smallTech for a new one."
+
+**Labelled stubs (not bugs):** Email invite (Phase 12), unchanged.
+
+---
+
 ## Phase 12 — Applications, Matching & Email Outbox
 
 **Goal:** A signed-in trainer applies to a listing in one click and tracks the status; an admin gets a suggested shortlist for a listing, invites trainers to apply, moves applicants through the pipeline in bulk with status emails; every email goes through an outbox that sends over Gmail SMTP when configured and is recorded (and shown to admins, clearly labelled) when not.

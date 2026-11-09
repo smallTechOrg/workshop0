@@ -443,6 +443,17 @@ A replacement upload or paste updates the existing row — **same `id`** — ove
 
 id PK · token String(43) unique (`token_urlsafe(32)`) · email String(254) not null (lower-cased) · name String(120) null · created_by String(254) · created_at · expires_at (14 days) · accepted_at null · accepted_user_id FK app_user.id SET NULL null. Accepting = signing in with the **same** email (sets `accepted_at`/`accepted_user_id`); an existing profile is marked `verified=true` at the callback, a profile created later starts verified. Exact rules: api.md §Phase 11 → Invite acceptance.
 
+**Phase 11d (migration `0008_invite_revoke`, `down_revision = "0007"`):** adds `revoked_at` DateTime null · `revoked_by` String(254) null (the admin's email, or `"admin key"`, same attribution as `created_by`). Both nullable, no backfill; downgrade drops them. No other column changes.
+
+**Status** (derived, never stored; one function `services/invites.py::invite_status`), first match wins:
+1. `revoked` — `revoked_at` set (an accepted invite can never be revoked, so 1 and 2 never overlap);
+2. `accepted` — `accepted_at` set;
+3. `superseded` — not accepted, and **another** invite with the same `email` is accepted (the person is already in via a sibling link; this one is no longer actionable);
+4. `expired` — `expires_at ≤ now`;
+5. `pending` — otherwise. Only `pending` is actionable (copyable link, Revoke button).
+
+**At most one pending invite per email:** creating an invite for an email that already has a `pending` one re-uses that row (rules: api.md §Phase 11d). This is enforced in the service, not by a DB constraint (status is derived).
+
 ### trainer_tag / admin_note (admin-private)
 
 `trainer_tag`: profile_id FK CASCADE + tag String(40) (lower-cased, `^[a-z0-9][a-z0-9 -]{0,39}$`) → composite PK; ≤20 per trainer. `admin_note`: id PK · profile_id FK CASCADE · body Text (1–4000, plain text) · author String(254) · created_at.
