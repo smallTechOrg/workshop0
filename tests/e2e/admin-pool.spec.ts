@@ -97,11 +97,12 @@ async function freshContext(browser: Browser): Promise<BrowserContext> {
 }
 
 /** A labelled stub: an element carrying `label` that also holds a stub pill. */
-function stubWithLabel(page: Page | Locator, label: string | RegExp): Locator {
-  return page
+function stubWithLabel(root: Page | Locator, label: string | RegExp): Locator {
+  const pg: Page = 'page' in root && typeof root.page === 'function' ? root.page() : (root as Page);
+  return root
     .locator('[aria-disabled="true"]')
     .filter({ hasText: label })
-    .filter({ has: page.getByTestId('stub-badge') })
+    .filter({ has: pg.locator('[data-testid="stub-badge"]') })
     .first();
 }
 

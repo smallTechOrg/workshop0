@@ -180,7 +180,6 @@ pnpm exec playwright test tests/e2e --reporter=line
 The real Anthropic key and workspace id are read from your gitignored `.env` and never echoed. The gate is **blocked**, not skipped, without both. No `gcloud`, Google or SMTP credentials are needed, because sign-in runs against the local fake issuer.
 
 ```bash
-# from the repo root
 export TEST_DATABASE_URL="postgresql+psycopg://$USER@localhost:5432/workshop0_test"
 export WORKSHOP0_ADMIN_KEY="${WORKSHOP0_ADMIN_KEY:-phase11-local-gate-key-0123}"
 envval() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | tr -d '"'"'"; }      # .env values are unquoted or simply quoted
@@ -190,13 +189,13 @@ export WORKSHOP0_GOOGLE_CLIENT_ID=test-client WORKSHOP0_GOOGLE_CLIENT_SECRET=tes
 export WORKSHOP0_OIDC_ISSUER=http://localhost:8099 WORKSHOP0_SESSION_SECRET="$(openssl rand -hex 32)"
 export WORKSHOP0_ADMIN_EMAILS=admin@example.test WORKSHOP0_BLOB_BACKEND=local
 uv sync
-DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0006'
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0007'   # 0007 = Phase 11b's F1 (lands in the same phase)
 uv run python tests/support/fake_oidc.py --port 8099 &                                 # real OIDC protocol, local issuer
 sleep 2
 uv run pytest tests/unit tests/integration -q                                          # incl. auth/, network/, storage/, ai/, ai_network/ (REAL Anthropic, workspace header)
 ! uv run pytest tests/unit/ai tests/integration/ai_network -q -rs | grep -q SKIPPED   # real-key tests ran, none skipped
 ! grep -rn --include='*.py' 'Anthropic(' src | grep -v '^src/workshop0/ai/anthropic_client.py:'   # one construction site
-! grep -il openrouter src/workshop0/ai/{anthropic_client,pricing,usage,profile_draft}.py           # network AI never uses OpenRouter
+! grep -il openrouter src/workshop0/ai/{anthropic_client,pricing,usage,profile_draft,opportunity_draft}.py   # network AI never uses OpenRouter
 (cd frontend && pnpm install && pnpm build)
 for p in signin network network/join network/me admin/network admin/network/trainer; do test -f "frontend/out/$p/index.html"; done
 grep -q '\.flex' frontend/out/_next/static/css/*.css && ! grep -q '@source' frontend/out/_next/static/css/*.css
