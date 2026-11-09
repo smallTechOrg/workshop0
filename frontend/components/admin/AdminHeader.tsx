@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { StubAction } from "@/components/ui/StubBadge";
 import { useAdmin } from "@/components/admin/AdminGate";
 
-type Section = "opportunities" | "topics";
+type Section = "opportunities" | "topics" | "partners";
 
 /** Shared header for the admin board pages (opportunities, editor, topics). */
 export function AdminHeader({ current }: { current: Section }) {
@@ -46,6 +46,14 @@ export function AdminHeader({ current }: { current: Section }) {
           aria-current={current === "topics" ? "page" : undefined}
         >
           Topics
+        </Link>
+        <Link
+          href="/admin/partners/"
+          data-testid="nav-partners"
+          className={linkCls(current === "partners")}
+          aria-current={current === "partners" ? "page" : undefined}
+        >
+          Partners
         </Link>
         <Link href="/admin/network/" data-testid="nav-trainer-pool" className={linkCls(false)}>
           Trainer pool
