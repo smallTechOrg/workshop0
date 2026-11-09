@@ -12,7 +12,7 @@ CARD_KEYS = {
     "id", "title", "type", "summary", "partner_display_name", "topics", "location_mode",
     "city", "locations", "starts_on", "ends_on", "duration_text", "compensation_text", "deadline",
     "compensation_min", "compensation_max", "compensation_currency", "compensation_unit",
-    "published_at", "status", "public_url",
+    "published_at", "status", "public_url", "slug",
 }
 
 
@@ -67,7 +67,7 @@ def test_default_page_size_is_12_and_total_ignores_non_open(client, board):
     card = data["opportunities"][0]
     assert set(card) == CARD_KEYS
     assert card["status"] == "open"
-    assert card["public_url"] == f"http://testserver/opportunities/{card['id']}"
+    assert card["public_url"] == f"http://testserver/opportunities/{card['slug']}"
     hidden = set(board["draft_ids"] + board["closed_ids"] + board["expired_ids"])
     every = {o["id"] for o in _list(client, page_size=50)["opportunities"]}
     assert len(every) == 30 and not every & hidden

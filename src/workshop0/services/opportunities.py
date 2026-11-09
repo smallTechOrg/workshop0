@@ -12,12 +12,14 @@
 
 import json
 import math
+import re
 from datetime import date, datetime
 from typing import Any
 
 import structlog
 from pydantic import BaseModel, StrictInt, field_validator
 from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -30,6 +32,7 @@ from src.workshop0.db.models import (
     Topic,
 )
 from src.workshop0.services import locations as loc
+from src.workshop0.services import slugs
 from src.workshop0.services.audit import record_action
 from src.workshop0.services.partners import partner_ref, resolve_partner
 from src.workshop0.services.topics import ADMIN_ACTOR, ADMIN_BY
@@ -350,8 +353,9 @@ def parse_path_id(raw: str, message: str) -> int:
 # --------------------------------------------------------------------------- serializers
 
 
-def public_url(base_url: str, opportunity_id: int) -> str:
-    return f"{base_url}/opportunities/{opportunity_id}"
+def public_url(base_url: str, slug: str) -> str:
+    """Phase 11e: the public address uses the slug (api.md §Phase 11e)."""
+    return f"{base_url}/opportunities/{slug}"
 
 
 def _iso_or_none(value: datetime | None) -> str | None:
@@ -391,6 +395,7 @@ def public_card(opp: Opportunity, topics: list[Topic], base_url: str, now: datet
     """PublicOpportunityCard — an explicit allow-list (never "model minus fields")."""
     return {
         "id": opp.id,
+        "slug": opp.slug,
         "title": opp.title,
         "type": opp.type,
         "summary": opp.summary,
@@ -409,7 +414,7 @@ def public_card(opp: Opportunity, topics: list[Topic], base_url: str, now: datet
         "deadline": iso_z(opp.deadline),
         "published_at": _iso_or_none(opp.published_at),
         "status": effective_status(opp, now),
-        "public_url": public_url(base_url, opp.id),
+        "public_url": public_url(base_url, opp.slug),
     }
 
 
@@ -431,6 +436,7 @@ def admin_row(
     """
     return {
         "id": opp.id,
+        "slug": opp.slug,
         "title": opp.title,
         "type": opp.type,
         "summary": opp.summary,
@@ -454,7 +460,7 @@ def admin_row(
         "partner_internal_name": partner.internal_name if partner is not None else None,
         "status": effective_status(opp, now),
         "stored_status": opp.status,
-        "public_url": public_url(base_url, opp.id),
+        "public_url": public_url(base_url, opp.slug),
         "published_at": _iso_or_none(opp.published_at),
         "closed_at": _iso_or_none(opp.closed_at),
         "created_at": iso_z(opp.created_at),
@@ -542,9 +548,40 @@ def list_public(
     }
 
 
-def get_public(session: Session, opportunity_id: int, *, base_url: str) -> dict:
-    opp = session.get(Opportunity, opportunity_id)
+_NUMERIC_KEY = re.compile(r"[0-9]{1,12}")
+SLUG_MAX = 80
+
+
+def find_public(session: Session, key: str) -> Opportunity | None:
+    """Resolve a public key (api.md §Phase 11e): `^\\d{1,12}$` is an id, anything else a
+    slug compared after lower-casing. Drafts and unknown keys → None."""
+    if not key or len(key) > SLUG_MAX:
+        return None
+    if _NUMERIC_KEY.fullmatch(key):
+        value = int(key)
+        opp = session.get(Opportunity, value) if 1 <= value <= ID_MAX else None
+    else:
+        opp = session.scalar(select(Opportunity).where(Opportunity.slug == key.lower()))
     if opp is None or opp.status == "draft":
+        return None
+    return opp
+
+
+def list_open(session: Session, now: datetime) -> list[Opportunity]:
+    """Every effective-open listing, newest first (`published_at` desc, `id` desc)."""
+    return list(
+        session.scalars(
+            select(Opportunity)
+            .where(effective_status_predicate("open", now))
+            .order_by(Opportunity.published_at.desc(), Opportunity.id.desc())
+        )
+    )
+
+
+def get_public(session: Session, key: str, *, base_url: str) -> dict:
+    """Public detail by id or slug; a draft or unknown key → 404 not_found."""
+    opp = find_public(session, key)
+    if opp is None:
         raise api_error("not_found", NOT_AVAILABLE_MESSAGE, 404)
     topics = topics_by_opportunity(session, [opp.id])[opp.id]
     return public_detail(opp, topics, base_url, utcnow())
@@ -814,6 +851,73 @@ def _status_action(from_status: str, to_status: str) -> str:
     ]
 
 
+# --------------------------------------------------------------------------- slugs
+# Lifecycle (data-model.md §Phase 11e): assigned on POST; while `published_at` is null a
+# title / first-city change recomputes the base and keeps the suffix; frozen from the
+# first publish on. Never audited, never in changed_fields, never read from a body.
+
+
+def _first_city(merged: dict) -> str | None:
+    return merged["locations"][0]["city"] if merged["locations"] else None
+
+
+def _slug_taken(session: Session, slug: str, *, exclude_id: int | None = None) -> bool:
+    query = select(Opportunity.id).where(Opportunity.slug == slug)
+    if exclude_id is not None:
+        query = query.where(Opportunity.id != exclude_id)
+    return session.scalar(query.limit(1)) is not None
+
+
+def _new_slug(session: Session, base: str, *, exclude_id: int | None = None) -> str:
+    return slugs.make_unique_slug(
+        base, lambda candidate: _slug_taken(session, candidate, exclude_id=exclude_id)
+    )
+
+
+def _recompute_draft_slug(session: Session, opp: Opportunity, merged: dict) -> str | None:
+    """Never-published listing: new base, same suffix (a fresh one only on a clash).
+
+    Returns the new slug to write (via `_flush_with_slug_retry`), or None if unchanged."""
+    if opp.published_at is not None:
+        return None
+    base = slugs.slug_base(merged["title"], _first_city(merged))
+    current_base, suffix = slugs.split_suffix(opp.slug)
+    if base == current_base:
+        return None
+    candidate = f"{base}-{suffix}"
+    if _slug_taken(session, candidate, exclude_id=opp.id):
+        candidate = _new_slug(session, base, exclude_id=opp.id)
+    return candidate
+
+
+def _is_slug_conflict(error: IntegrityError) -> bool:
+    """Only the slug unique constraint triggers a retry; any other violation propagates."""
+    name = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+    if name is not None:
+        return name == "uq_opportunity_slug"
+    return "uq_opportunity_slug" in str(error.orig)
+
+
+def _flush_with_slug_retry(session: Session, opp: Opportunity, base: str, slug: str) -> None:
+    """Write `slug` to `opp`; the unique constraint is the backstop: one retry with a new suffix.
+
+    `begin_nested()` flushes all pending state BEFORE opening the savepoint, so the slug is
+    assigned (and a new `opp` attached) only inside it — a collision then rolls back just
+    the savepoint. That rollback expunges a new row, so it is re-added on the retry."""
+    for attempt in range(2):
+        try:
+            with session.begin_nested():
+                session.add(opp)
+                opp.slug = slug
+                session.flush()
+            return
+        except IntegrityError as error:
+            if attempt or not _is_slug_conflict(error):
+                raise
+            with session.no_autoflush:
+                slug = _new_slug(session, base, exclude_id=opp.id)
+
+
 def create_opportunity(
     session: Session, body: OpportunityCreate, *, base_url: str, by: str = ADMIN_BY
 ) -> dict:
@@ -834,12 +938,13 @@ def create_opportunity(
 
     opp = Opportunity(created_at=now, updated_at=now)
     _apply(opp, merged, partner)
+    base = slugs.slug_base(merged["title"], _first_city(merged))
+    slug = _new_slug(session, base)
     if opp.status == "open":
         opp.published_at = now
     if opp.status == "closed":
         opp.closed_at = now
-    session.add(opp)
-    session.flush()
+    _flush_with_slug_retry(session, opp, base, slug)  # attaches opp inside the savepoint
     _set_topics(session, opp.id, [], merged["topic_ids"])
     changed = [f for f in FIELDS if f != "status" and merged[f] not in (None, "", [])]
     record_action(
@@ -897,6 +1002,9 @@ def update_opportunity(
         return _full(session, opp, base_url)  # no-op: no write, no audit row
 
     _apply(opp, merged, partner)
+    new_slug = _recompute_draft_slug(session, opp, merged)  # before a publish below freezes it
+    if new_slug is not None:
+        _flush_with_slug_retry(session, opp, slugs.split_suffix(new_slug)[0], new_slug)
     if "topic_ids" in changed:
         _set_topics(session, opp.id, old_topic_ids, merged["topic_ids"])
     if status_changed:

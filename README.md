@@ -54,7 +54,8 @@ Open **http://localhost:8001/** — the public landing page. From there, **Creat
 | `/p/<token>` | Participant personal link |
 | `/f/<token>` | Facilitator dashboard link — the only credential for a workshop; save it |
 | `/opportunities` → `/app/opportunities/` | Public **Opportunity Board** — open listings from the smallTech partner network, filterable by type and topic (filters live in the URL), 12 per page. No sign-in |
-| `/opportunities/<id>` → `/app/opportunities/view/?id=<id>` | One listing's public page (closed/expired listings show a "closed" banner; drafts are not found) |
+| `/opportunities/<slug>` | One listing's public page, e.g. `/opportunities/genai-workshop-bengaluru-a3f9` (closed/expired listings show a "closed" banner and are `noindex`; drafts are a 404). Old `/opportunities/<id>` links 301 to the slug URL |
+| `/sitemap.xml`, `/robots.txt` | Search-engine sitemap of open listings, and the crawler rules |
 | `/app/admin/opportunities/` | Admin: post, edit, publish, unpublish, close and reopen listings (same `WORKSHOP0_ADMIN_KEY` gate as Admin Home). Internal partner name and notes are admin-only — never on a public page or API |
 | `/app/admin/partners/` | Admin: the partner list — add, rename, deactivate, default public name and internal note. Partner names and notes are admin-only |
 | `/app/admin/topics/` | Admin: the topic taxonomy (40 seeded topics in 5 categories; add, rename, deactivate) |
@@ -203,7 +204,7 @@ export WORKSHOP0_GOOGLE_CLIENT_ID=test-client WORKSHOP0_GOOGLE_CLIENT_SECRET=tes
 export WORKSHOP0_OIDC_ISSUER=http://localhost:8099 WORKSHOP0_SESSION_SECRET="$(openssl rand -hex 32)"
 export WORKSHOP0_ADMIN_EMAILS=admin@example.test WORKSHOP0_BLOB_BACKEND=local
 uv sync
-DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0008'   # 0008 = Phase 11c's M1 (multi-location)
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0010'   # 0010 = Phase 11e (opportunity slugs)
 uv run python tests/support/fake_oidc.py --port 8099 &                                 # real OIDC protocol, local issuer
 sleep 2
 uv run pytest tests/unit tests/integration -q                                          # incl. auth/, network/, storage/, ai/, ai_network/ (REAL Anthropic, workspace header)
@@ -226,12 +227,16 @@ bash -n deploy/cloudrun/provision.sh
 
 GCS storage tests run only when `WORKSHOP0_GCS_BUCKET` is set.
 
+### Opportunity slug URLs and SEO (Phase 11e)
+
+Every listing has a readable slug, built from its title and its first city plus a short random suffix (`genai-workshop-bengaluru-a3f9`). The slug is frozen when the listing is first published, so a shared link never breaks, even after a rename. `/opportunities/<slug>` is served by FastAPI as the listing page with a server-injected `<title>`, description, canonical URL, Open Graph tags and, for open listings, JobPosting JSON-LD, so crawlers see it without running JavaScript. Legacy `/opportunities/<id>` and `/app/opportunities/view/?id=<id>` links end on the slug URL. `/sitemap.xml` lists the board and every open listing, and `/robots.txt` keeps crawlers out of `/admin`, `/app/admin/`, `/api/` and `/network/me`. Set `WORKSHOP0_BASE_URL` in production so canonical and sitemap URLs use the public domain. The Phase 11e gate checks the migration head with `alembic current | grep -q '^0010'`, and its e2e spec is `tests/e2e/opportunity-slugs.spec.ts`.
+
 ### Phase 11b gate addendum (partners, drafting, compensation)
 
 Run this after the Phase 11 block, in the same shell with the same exports, and with the Phase 11 server already killed.
 
 ```bash
-DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0008'
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0010'
 uv run pytest tests/integration/test_migration.py tests/integration/test_partners_admin.py tests/integration/test_board_partner_link.py tests/integration/test_board_compensation.py tests/integration/test_board_leak.py tests/unit/test_opportunity_draft_guardrails.py -q
 ! uv run pytest tests/integration/ai_network/test_opportunity_draft.py tests/integration/ai_network/test_opportunity_draft_api.py -q -rs | grep -q SKIPPED   # real Anthropic, none skipped
 uv run pytest tests/integration/ai_network/test_opportunity_draft.py tests/integration/ai_network/test_opportunity_draft_api.py -q          # zero failures

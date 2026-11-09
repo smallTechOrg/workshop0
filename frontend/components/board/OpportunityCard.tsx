@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatCompensation } from "@/lib/compensation";
@@ -87,12 +86,13 @@ export function OpportunityCard({
       </div>
 
       <h2 className="mt-3 text-lg leading-snug font-semibold break-words text-stone-900">
-        <Link
-          href={listingHref(o.id, boardQs)}
+        {/* Plain <a>: the slug URL lives outside the /app basePath (Phase 11e). */}
+        <a
+          href={listingHref(o.slug, boardQs)}
           className="outline-none after:absolute after:inset-0 after:rounded-xl group-hover:text-brand-700"
         >
           {o.title}
-        </Link>
+        </a>
       </h2>
       <p className="mt-1 text-sm font-medium break-words text-stone-500">{partnerName(o)}</p>
 

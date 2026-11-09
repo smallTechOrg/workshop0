@@ -1,9 +1,12 @@
 "use client";
 
 /**
- * Public listing page — spec/capabilities.md C10. `/app/opportunities/view/?id=<id>`
- * (pretty `/opportunities/<id>`). Open, expired and closed listings render;
- * drafts and unknown ids get a friendly not-found state.
+ * Public listing page — spec/capabilities.md C10, api.md §Phase 11e.
+ * Canonical URL is the server-rendered `/opportunities/<slug>` (this static page
+ * with an SEO head injected). Legacy `/app/opportunities/view/?id=` / `?slug=`
+ * load the listing and then `location.replace` to the slug URL.
+ * Open, expired and closed listings render; drafts and unknown keys get a
+ * friendly not-found state.
  */
 
 import { Suspense, useEffect, useState } from "react";
@@ -35,10 +38,26 @@ type LoadState =
   | { kind: "error"; message: string }
   | { kind: "ready"; opportunity: PublicOpportunityDetail };
 
-function parseId(raw: string | null): number | null {
-  if (!raw || !/^\d{1,12}$/.test(raw.trim())) return null;
-  const n = Number(raw.trim());
-  return n >= 1 ? n : null;
+type KeySource = "query" | "path";
+/** `undefined` = not resolved yet (path is read after mount); `null` = no usable key. */
+type ResolvedKey = { key: string; source: KeySource } | null | undefined;
+
+const KEY_RE = /^[A-Za-z0-9-]{1,80}$/;
+
+function cleanKey(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const k = raw.trim();
+  return KEY_RE.test(k) ? k : null;
+}
+
+function keyFromPath(pathname: string): string | null {
+  const m = /^\/opportunities\/([^/]+)\/?$/.exec(pathname);
+  if (!m) return null;
+  try {
+    return cleanKey(decodeURIComponent(m[1]));
+  } catch {
+    return null;
+  }
 }
 
 function BackLink({ fromQs }: { fromQs: string }) {
@@ -111,23 +130,52 @@ function MetaItem({ label, value, testId }: { label: string; value: string; test
 
 function ListingInner() {
   const params = useSearchParams();
-  const id = parseId(params.get("id"));
+  const rawSlug = params.get("slug");
+  const rawId = params.get("id");
   const fromQs = sanitizeFromParam(params.get("from"));
   const now = useNowTick(30_000);
 
-  const [state, setState] = useState<LoadState>(id === null ? { kind: "not_found" } : { kind: "loading" });
+  // Key order (api.md §Phase 11e): ?slug=, then legacy ?id=, then the pathname
+  // (read after mount — this page is also served outside the /app basePath).
+  const [resolved, setResolved] = useState<ResolvedKey>(undefined);
+  useEffect(() => {
+    if (rawSlug !== null) {
+      const k = cleanKey(rawSlug);
+      setResolved(k ? { key: k, source: "query" } : null);
+      return;
+    }
+    if (rawId !== null) {
+      const k = cleanKey(rawId);
+      setResolved(k && /^\d{1,12}$/.test(k) ? { key: k, source: "query" } : null);
+      return;
+    }
+    const k = keyFromPath(window.location.pathname);
+    setResolved(k ? { key: k, source: "path" } : null);
+  }, [rawSlug, rawId]);
+
+  const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (id === null) {
+    if (resolved === undefined) return;
+    if (resolved === null) {
       setState({ kind: "not_found" });
       return;
     }
     let cancelled = false;
     setState({ kind: "loading" });
-    getPublicOpportunity(id)
+    getPublicOpportunity(resolved.key)
       .then((res) => {
-        if (!cancelled) setState({ kind: "ready", opportunity: res.opportunity });
+        if (cancelled) return;
+        const opp = res.opportunity;
+        if (resolved.source === "query" && opp.slug) {
+          // One URL per listing: move legacy /app/…?id= / ?slug= to the slug URL.
+          const target =
+            `/opportunities/${encodeURIComponent(opp.slug)}` +
+            (fromQs ? `?${new URLSearchParams({ from: fromQs }).toString()}` : "");
+          window.location.replace(target);
+        }
+        setState({ kind: "ready", opportunity: opp });
       })
       .catch((err) => {
         if (cancelled) return;
@@ -146,7 +194,7 @@ function ListingInner() {
     return () => {
       cancelled = true;
     };
-  }, [id, attempt]);
+  }, [resolved, attempt, fromQs]);
 
   useEffect(() => {
     if (state.kind === "ready") document.title = `${state.opportunity.title} — Workshop0`;
