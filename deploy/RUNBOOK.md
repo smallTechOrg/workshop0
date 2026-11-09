@@ -16,6 +16,9 @@ Browser ─HTTPS─▶ Cloud Run service workshop0 (project ai-agent-boilerplate
                     ▼
                  Cloud SQL PostgreSQL instance ai-agent-db (shared) ─ database workshop0, user workshop0_app
 Secrets (Secret Manager): workshop0-database-url, workshop0-openrouter-api-key, workshop0-admin-key
+  + Phase 11 (trainer network): workshop0-session-secret, workshop0-google-client-secret,
+    workshop0-anthropic-api-key, workshop0-anthropic-workspace-id
+CV bucket (Phase 11): gs://ai-agent-boilerplate0-workshop0-cvs (private; uniform access, public access prevention)
 Public URL: https://workshop0.smalltech.in (domain mapping -> ghs.googlehosted.com) and the *.run.app URL
 ```
 
