@@ -43,6 +43,10 @@ const SUMMARY = `Hands-on LLM workshop for product teams (${RUN}).`;
 const PUBLIC_PARTNER = 'A Bengaluru fintech';
 const INTERNAL_PARTNER = `ZZ-INTERNAL-PARTNER-${RUN}`;
 const INTERNAL_NOTE = `ZZ-INTERNAL-NOTE-${RUN} contact R. Rao`;
+// Phase 11b: the partner now lives in the Partners directory; its notes are
+// admin-only too and must never reach any public surface.
+const PARTNER_NOTE = `ZZ-PARTNER-NOTE-${RUN}`;
+const LEAK_MARKERS = ['ZZ-INTERNAL', 'ZZ-PARTNER-NOTE'];
 const CITY = 'Bengaluru';
 const LIST_ITEM = 'Retrieval-augmented generation';
 const CODE_LINE = 'def greet(name: str) -> str:';
@@ -81,6 +85,7 @@ let pagingTopicId = 0;
 let pagingTopicSlug = '';
 const pagingListingIds: number[] = [];
 const extraListingIds: number[] = [];
+const partnerIds: number[] = [];
 
 const REOPEN_TITLE = `E2E Close reopen ${RUN}`;
 const PLAIN_REOPEN_TITLE = `E2E Plain reopen ${RUN}`;
@@ -308,6 +313,48 @@ async function clickAction(page: Page, id: number, testId: string): Promise<numb
   return (await patched).status();
 }
 
+/** Phase 11b: pick a partner via PartnerSelect's "+ Add partner" modal. */
+async function addPartnerInEditor(page: Page, internal: string, notes?: string): Promise<void> {
+  const select = page.getByTestId('editor-partner-select');
+  const addBtn = select.getByTestId('add-partner');
+  await waitForHydration(addBtn);
+  await addBtn.click();
+  await expect(page.getByTestId('add-partner-modal')).toBeVisible();
+  await fillStable(page.getByTestId('add-partner-internal'), internal);
+  if (notes) await fillStable(page.getByTestId('add-partner-notes'), notes);
+  const created = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/admin/partners',
+  );
+  await page.getByTestId('add-partner-submit').click();
+  const res = await created;
+  expect(res.status(), 'POST /api/admin/partners must succeed').toBe(200);
+  partnerIds.push((await res.json()).data.partner.id as number);
+  await expect(page.getByTestId('add-partner-modal')).toHaveCount(0);
+  await expect(
+    select.getByTestId('partner-select-input').locator('option:checked'),
+  ).toHaveText(new RegExp(internal));
+}
+
+/** No internal marker in the page HTML (admin-only names/notes never leak). */
+async function expectNoLeak(page: Page): Promise<void> {
+  const html = await page.content();
+  for (const m of LEAK_MARKERS) expect(html).not.toContain(m);
+}
+
+/** No internal marker or admin-only key in the public API JSON for a listing. */
+async function expectNoLeakInPublicApi(request: APIRequestContext, id: number): Promise<void> {
+  const list = await request.get(`${ORIGIN}/api/public/opportunities?page_size=50`);
+  const detail = await request.get(`${ORIGIN}/api/public/opportunities/${id}`);
+  expect(detail.ok(), 'public detail must be readable once open').toBeTruthy();
+  for (const text of [await list.text(), await detail.text()]) {
+    for (const m of LEAK_MARKERS) expect(text).not.toContain(m);
+    for (const k of ['partner_internal_name', 'internal_notes', 'partner_id', 'name_key']) {
+      expect(text).not.toContain(`"${k}"`);
+    }
+  }
+}
+
 /** Fill the editor's public + internal fields for a new listing. */
 async function fillEditor(
   page: Page,
@@ -321,6 +368,7 @@ async function fillEditor(
     deadlineDays: number;
     partnerDisplay?: string;
     partnerInternal?: string;
+    partnerNote?: string;
     internalNotes?: string;
   },
 ): Promise<void> {
@@ -342,7 +390,7 @@ async function fillEditor(
     await fillStable(page.getByTestId('opp-partner-display-input'), opts.partnerDisplay);
   }
   if (opts.partnerInternal) {
-    await fillStable(page.getByTestId('opp-partner-internal-input'), opts.partnerInternal);
+    await addPartnerInEditor(page, opts.partnerInternal, opts.partnerNote);
   }
   if (opts.internalNotes) {
     await fillStable(page.getByTestId('opp-internal-notes-input'), opts.internalNotes);
@@ -428,6 +476,12 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
             .catch(() => undefined);
         }
       }
+      for (const pid of partnerIds) {
+        const r = await api
+          .patch(`/api/admin/partners/${pid}`, { data: { active: false } })
+          .catch(() => null);
+        if (r && !r.ok()) console.warn(`partner ${pid} cleanup → ${r.status()}`);
+      }
       await api.dispose();
     }
     if (adminCtx) await adminCtx.close();
@@ -472,6 +526,7 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
       deadlineDays: 10,
       partnerDisplay: PUBLIC_PARTNER,
       partnerInternal: INTERNAL_PARTNER,
+      partnerNote: PARTNER_NOTE,
       internalNotes: INTERNAL_NOTE,
     });
 
@@ -488,6 +543,9 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
     expect(opportunityId).toBeGreaterThan(0);
     expect(body.data.opportunity.status).toBe('draft');
     expect(body.data.opportunity.partner_internal_name).toBe(INTERNAL_PARTNER);
+    expect(body.data.opportunity.partner_id, 'listing is linked to the added partner').toBe(
+      partnerIds[0],
+    );
     expect(
       (body.data.opportunity.topics as Array<{ slug: string }>).map((t) => t.slug).sort(),
     ).toEqual(['generative-ai', 'python']);
@@ -541,9 +599,10 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
       const mine = card(page, TITLE);
       await expect(mine).toHaveCount(1);
       await expect(mine).toContainText(PUBLIC_PARTNER);
-      await expect(page.getByTestId('join-network-stub')).toBeVisible();
-      await expect(page.getByTestId('join-network-stub')).toContainText('Coming in a later phase');
-      expect(await page.content()).not.toContain('ZZ-INTERNAL');
+      // Phase 11: the Join-network stub is now the real CTA.
+      await expect(page.getByTestId('join-network-stub')).toHaveCount(0);
+      await expect(page.getByTestId('join-network-cta')).toBeVisible();
+      await expectNoLeak(page);
 
       // Type filter that excludes it.
       await clickUntilUrl(page, page.getByTestId('type-filter-role'), /[?&]type=role(&|$)/);
@@ -573,7 +632,7 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
       await expect(card(page, TITLE)).toHaveCount(1);
       expect(page.url()).toMatch(/[?&]type=workshop(&|$)/);
       expect(page.url()).toMatch(/[?&]topic=generative-ai(&|$)/);
-      expect(await page.content()).not.toContain('ZZ-INTERNAL');
+      await expectNoLeak(page);
 
       // Open the listing from its card.
       const target = card(page, TITLE);
@@ -600,7 +659,8 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
       await expect(detail).not.toContainText('```');
 
       // Labelled, non-interactive stubs.
-      for (const id of ['apply-stub', 'join-network-stub']) {
+      await expect(page.getByTestId('join-network-cta')).toBeVisible();
+      for (const id of ['apply-stub']) {
         const stub = page.getByTestId(id);
         await expect(stub).toBeVisible();
         await expect(stub).toContainText('Coming in a later phase');
@@ -613,7 +673,8 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
         expect(interactive, `${id} must be non-interactive`).toBe(false);
       }
       await expect(page.getByTestId('closed-banner')).toHaveCount(0);
-      expect(await page.content()).not.toContain('ZZ-INTERNAL');
+      await expectNoLeak(page);
+      await expectNoLeakInPublicApi(page.request, opportunityId);
     } finally {
       await ctx.close();
     }
@@ -634,7 +695,7 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
       await expect(page.getByTestId('opportunity-detail')).toBeVisible();
       await expect(page.getByTestId('closed-banner')).toBeVisible();
       await expect(page.getByTestId('apply-stub')).toHaveCount(0);
-      expect(await page.content()).not.toContain('ZZ-INTERNAL');
+      await expectNoLeak(page);
 
       await page.goto(BOARD_URL);
       await waitForBoard(page);
