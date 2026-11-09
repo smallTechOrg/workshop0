@@ -1,9 +1,10 @@
 "use client";
 
 import { CopyButton } from "@/components/ui/CopyButton";
-import { StubAction, StubCard } from "@/components/ui/StubBadge";
+import { StubAction } from "@/components/ui/StubBadge";
 import { longDeadline, type PublicOpportunityDetail } from "@/lib/board";
 import { UrgencyPill } from "@/components/board/OpportunityCard";
+import { JoinNetworkCta } from "@/components/board/JoinNetworkCta";
 
 /**
  * The listing page's side card. Open → deadline + "Sign in to apply" (labelled
@@ -64,13 +65,7 @@ export function ListingSidebar({
         )}
       </div>
 
-      <div data-testid="join-network-stub">
-        <StubCard
-          title="Join our network"
-          description="Get matched to opportunities like this — coming soon."
-          className="bg-white"
-        />
-      </div>
+      <JoinNetworkCta variant="card" />
     </div>
   );
 }

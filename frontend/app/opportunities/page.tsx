@@ -25,8 +25,8 @@ import {
 } from "@/lib/board";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { StubAction } from "@/components/ui/StubBadge";
 import { BoardShell } from "@/components/board/BoardShell";
+import { JoinNetworkCta } from "@/components/board/JoinNetworkCta";
 import { OpportunityCard, OpportunityCardSkeleton } from "@/components/board/OpportunityCard";
 import { TopicFilter, TypeAndSortBar, type TopicsState } from "@/components/board/FilterBar";
 import { Pagination } from "@/components/board/Pagination";
@@ -73,10 +73,7 @@ function BoardHeader() {
             trainers — browse what&apos;s open right now.
           </p>
         </div>
-        <div data-testid="join-network-stub" className="flex flex-col items-start gap-1.5">
-          <StubAction label="Join our network" />
-          <p className="text-xs text-stone-500">Get matched to new opportunities — coming soon.</p>
-        </div>
+        <JoinNetworkCta />
       </div>
     </section>
   );
