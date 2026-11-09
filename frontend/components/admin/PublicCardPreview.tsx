@@ -1,5 +1,6 @@
 import { cn } from "@/lib/format";
 import { typeLabel, type LocationMode, type OpportunityType } from "@/lib/adminBoard";
+import { locationLabel, type Location } from "@/lib/locations";
 import { formatCompensation, type CompensationFields } from "@/lib/compensation";
 import { Badge } from "@/components/ui/Badge";
 
@@ -15,17 +16,10 @@ export interface PublicCardPreviewData {
   partner_display_name: string;
   topics: { slug: string; name: string }[];
   location_mode: LocationMode;
-  city: string;
+  locations: Location[];
   compensation: CompensationFields;
   /** ISO timestamp, or null while the deadline field is empty/invalid. */
   deadline: string | null;
-}
-
-function locationText(mode: LocationMode, city: string): string {
-  const c = city.trim();
-  if (mode === "remote") return "Remote";
-  const label = mode === "onsite" ? "Onsite" : "Hybrid";
-  return c ? `${c} · ${label}` : label;
 }
 
 /** Live preview of the board card, mirroring C10's card anatomy. */
@@ -86,7 +80,12 @@ export function PublicCardPreview({
       <dl className="mt-3 space-y-1 text-sm text-stone-600">
         <div className="flex gap-1.5">
           <dt className="sr-only">Location</dt>
-          <dd>📍 {locationText(data.location_mode, data.city)}</dd>
+          <dd>
+            📍{" "}
+            <span data-testid="opp-preview-location">
+              {locationLabel({ location_mode: data.location_mode, locations: data.locations })}
+            </span>
+          </dd>
         </div>
         {comp && (
           <div className="flex gap-1.5" data-testid="opp-preview-compensation">

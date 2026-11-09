@@ -12,11 +12,11 @@ import { useSearchParams } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { formatCompensation } from "@/lib/compensation";
 import { useNowTick } from "@/lib/format";
+import { locationDetailLabel } from "@/lib/locations";
 import {
   boardHref,
   dateRangeLabel,
   getPublicOpportunity,
-  locationLabel,
   partnerName,
   sanitizeFromParam,
   type PublicOpportunityDetail,
@@ -180,7 +180,7 @@ function ListingInner() {
   const dates = dateRangeLabel(o.starts_on, o.ends_on);
   const compensation = formatCompensation(o);
   const meta: { label: string; value: string; testId?: string }[] = [
-    { label: "Location", value: locationLabel(o) },
+    { label: "Location", value: locationDetailLabel(o), testId: "opportunity-location" },
     ...(dates ? [{ label: "Dates", value: dates }] : []),
     ...(o.duration_text ? [{ label: "Duration", value: o.duration_text }] : []),
     ...(compensation

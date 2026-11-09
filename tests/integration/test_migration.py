@@ -222,7 +222,7 @@ def test_0005_seeds_topics_and_downgrade_to_0004_removes_the_board(monkeypatch, 
         assert set(inspect(engine).get_table_names()) == EXPECTED_TABLES
         _assert_seed(_topic_seed(engine))  # re-seeded exactly once, not duplicated
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0007"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0008"
     finally:
         engine.dispose()
 
@@ -275,7 +275,7 @@ def test_0006_creates_the_network_schema_and_0007_is_head_and_creates_the_networ
     url = scratch_database()
     _use(monkeypatch, url)
     config = _alembic_config()
-    assert ScriptDirectory.from_config(config).get_current_head() == "0007"
+    assert ScriptDirectory.from_config(config).get_current_head() == "0008"
     command.upgrade(config, "0006")
 
     engine = create_engine(url)
@@ -409,7 +409,7 @@ def test_0006_downgrade_to_0005_and_back_round_trips(monkeypatch, scratch_databa
         _assert_seed(_topic_seed(engine))  # Phase-10 data untouched
 
         command.upgrade(config, "head")
-        assert _version(engine) == "0007"
+        assert _version(engine) == "0008"
         inspector = inspect(engine)
         assert set(inspector.get_table_names()) == EXPECTED_TABLES
         assert _columns(inspector, "ai_usage")["workshop_id"]["nullable"]
@@ -476,7 +476,7 @@ def test_0007_schema_and_widened_purpose(monkeypatch, scratch_database):
     command.upgrade(config, "head")
     engine = create_engine(url)
     try:
-        assert _version(engine) == "0007"
+        assert _version(engine) == "0008"
         inspector = inspect(engine)
         pcols = _columns(inspector, "partner")
         assert set(pcols) == {
@@ -599,8 +599,111 @@ def test_0007_downgrade_restores_mirror_compensation_and_round_trips(monkeypatch
         assert purposes == ["profile_draft"]  # >16-char purposes removed
 
         command.upgrade(config, "head")
-        assert _version(engine) == "0007"
+        assert _version(engine) == "0008"
         with engine.connect() as connection:
             assert connection.execute(text("SELECT count(*) FROM partner")).scalar() == 2
+    finally:
+        engine.dispose()
+
+
+# --------------------------------------------------------------------------- Phase 11c — 0008
+
+_OPP_LOC_INSERT = (
+    "INSERT INTO opportunity (title, type, summary, description_md, location_mode, city, deadline,"
+    " status, created_at, updated_at)"
+    " VALUES (:t, 'trainer', 's', '', :m, :c, now(), 'draft', now(), now())"
+)
+
+_PRE_0008 = [
+    ("pune", "onsite", "Pune"),
+    ("navi", "hybrid", "  Navi   Mumbai "),
+    ("remote", "remote", None),
+    ("blank", "onsite", "   "),
+    ("zurich", "hybrid", "Zürich"),
+]
+
+
+def _seed_pre_0008(engine) -> None:
+    with engine.begin() as connection:
+        for t, m, c in _PRE_0008:
+            connection.execute(text(_OPP_LOC_INSERT), {"t": t, "m": m, "c": c})
+
+
+def _locations(engine) -> dict[str, tuple]:
+    import json
+
+    with engine.connect() as connection:
+        return {
+            r[0]: (json.loads(r[1]), r[2])
+            for r in connection.execute(text("SELECT title, locations_json, city FROM opportunity"))
+        }
+
+
+def test_0008_upgrade_migrates_single_city_to_locations(monkeypatch, scratch_database):
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    command.upgrade(config, "0007")
+    engine = create_engine(url)
+    try:
+        _seed_pre_0008(engine)
+        command.upgrade(config, "head")
+        assert _version(engine) == "0008"
+        assert ScriptDirectory.from_config(config).get_current_head() == "0008"
+        col = _columns(inspect(engine), "opportunity")["locations_json"]
+        assert not col["nullable"]
+        got = _locations(engine)
+        assert got == {
+            "pune": ([{"city": "Pune", "country": None}], "Pune"),
+            "navi": ([{"city": "Navi Mumbai", "country": None}], "  Navi   Mumbai "),
+            "remote": ([], None),
+            "blank": ([], "   "),
+            "zurich": ([{"city": "Zürich", "country": None}], "Zürich"),
+        }
+        with engine.begin() as connection:  # server_default applies to new rows
+            connection.execute(text(_OPP_LOC_INSERT), {"t": "new", "m": "remote", "c": None})
+        assert _locations(engine)["new"] == ([], None)
+    finally:
+        engine.dispose()
+
+
+def test_0008_downgrade_restores_first_city_and_round_trips(monkeypatch, scratch_database):
+    import json
+
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    command.upgrade(config, "0007")
+    engine = create_engine(url)
+    try:
+        _seed_pre_0008(engine)
+        command.upgrade(config, "head")
+        many = json.dumps(
+            [{"city": c, "country": None} for c in ("Bengaluru", "Pune", "Hyderabad")], ensure_ascii=False
+        )
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE opportunity SET locations_json = :v, city = 'Stale' WHERE title = 'pune'"),
+                {"v": many},
+            )
+        command.downgrade(config, "0007")
+        assert _version(engine) == "0007"
+        assert "locations_json" not in _columns(inspect(engine), "opportunity")
+        with engine.connect() as connection:
+            cities = dict(connection.execute(text("SELECT title, city FROM opportunity")).all())
+        assert cities == {
+            "pune": "Bengaluru",
+            "navi": "Navi Mumbai",  # mirror rewritten from the collapsed first location
+            "remote": None,
+            "blank": "   ",
+            "zurich": "Zürich",
+        }
+
+        command.upgrade(config, "head")
+        assert _version(engine) == "0008"
+        got = _locations(engine)
+        assert got["pune"] == ([{"city": "Bengaluru", "country": None}], "Bengaluru")
+        assert got["zurich"] == ([{"city": "Zürich", "country": None}], "Zürich")
+        assert got["remote"] == ([], None)
     finally:
         engine.dispose()

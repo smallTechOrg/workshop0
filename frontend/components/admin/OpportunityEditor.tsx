@@ -35,6 +35,8 @@ import { LockIcon } from "@/components/admin/LockIcon";
 import { OpportunityStatusPill } from "@/components/admin/OpportunityStatusPill";
 import { PublicCardPreview } from "@/components/admin/PublicCardPreview";
 import { TopicPicker } from "@/components/admin/TopicPicker";
+import { LocationsInput, type LocationsInputHandle } from "@/components/admin/LocationsInput";
+import { LOCATIONS_MAX, locationsOf, type Location } from "@/lib/locations";
 
 // ---------------------------------------------------------------------------
 // Form model
@@ -47,7 +49,8 @@ interface FormState {
   description_md: string;
   topic_ids: number[];
   location_mode: LocationMode;
-  city: string;
+  /** Kept while Remote (sent as `[]`) so switching back restores the chips. */
+  locations: Location[];
   starts_on: string;
   ends_on: string;
   duration_text: string;
@@ -72,7 +75,7 @@ const BODY_KEYS: BodyKey[] = [
   "description_md",
   "topic_ids",
   "location_mode",
-  "city",
+  "locations",
   "starts_on",
   "ends_on",
   "duration_text",
@@ -125,7 +128,7 @@ function emptyForm(): FormState {
     description_md: "",
     topic_ids: [],
     location_mode: "remote",
-    city: "",
+    locations: [],
     starts_on: "",
     ends_on: "",
     duration_text: "",
@@ -149,7 +152,7 @@ function formFrom(o: AdminOpportunity): FormState {
     description_md: o.description_md ?? "",
     topic_ids: o.topics.map((t) => t.id),
     location_mode: o.location_mode,
-    city: o.city ?? "",
+    locations: locationsOf(o).map((l) => ({ city: l.city, country: l.country ?? null })),
     starts_on: o.starts_on ?? "",
     ends_on: o.ends_on ?? "",
     duration_text: o.duration_text ?? "",
@@ -210,7 +213,7 @@ function toBody(f: FormState): Omit<OpportunityBody, "status"> {
     description_md: f.description_md.trim(),
     topic_ids: f.topic_ids,
     location_mode: f.location_mode,
-    city: f.location_mode === "remote" ? null : opt(f.city),
+    locations: f.location_mode === "remote" ? [] : f.locations,
     starts_on: opt(f.starts_on),
     ends_on: opt(f.ends_on),
     duration_text: opt(f.duration_text),
@@ -226,7 +229,8 @@ function toBody(f: FormState): Omit<OpportunityBody, "status"> {
   };
 }
 
-function sameValue(a: unknown, b: unknown): boolean {
+function sameValue(a: unknown, b: unknown, key?: string): boolean {
+  if (key === "locations") return JSON.stringify(a) === JSON.stringify(b); // order matters
   if (Array.isArray(a) && Array.isArray(b)) {
     return [...a].sort().join(",") === [...b].sort().join(",");
   }
@@ -239,7 +243,7 @@ function diffBody(initial: FormState, current: FormState): Partial<OpportunityBo
   const b = toBody(current);
   const out: Partial<OpportunityBody> = {};
   for (const k of BODY_KEYS) {
-    if (!sameValue(a[k], b[k])) (out as Record<string, unknown>)[k] = b[k];
+    if (!sameValue(a[k], b[k], k)) (out as Record<string, unknown>)[k] = b[k];
   }
   return out;
 }
@@ -252,7 +256,7 @@ const FORM_KEY: Record<BodyKey, keyof FormState> = {
   description_md: "description_md",
   topic_ids: "topic_ids",
   location_mode: "location_mode",
-  city: "city",
+  locations: "locations",
   starts_on: "starts_on",
   ends_on: "ends_on",
   duration_text: "duration_text",
@@ -274,7 +278,7 @@ const FIELD_LABEL: Record<BodyKey, string> = {
   description_md: "Description",
   topic_ids: "Topics",
   location_mode: "Location",
-  city: "City",
+  locations: "Locations",
   starts_on: "Starts on",
   ends_on: "Ends on",
   duration_text: "Duration",
@@ -312,9 +316,9 @@ function rebase(
   const f = toBody(prevForm);
   const out: FormState = { ...server };
   for (const k of BODY_KEYS) {
-    const edited = !sameValue(f[k], i[k]);
-    const adopted = sameValue(f[k], s[k]);
-    const refused = k in discard && sameValue(f[k], discard[k]);
+    const edited = !sameValue(f[k], i[k], k);
+    const adopted = sameValue(f[k], s[k], k);
+    const refused = k in discard && sameValue(f[k], discard[k], k);
     if (edited && !adopted && !refused) {
       const fk = FORM_KEY[k];
       (out as unknown as Record<string, unknown>)[fk] = prevForm[fk];
@@ -337,7 +341,7 @@ const DRAFT_FIELD_OF: Partial<Record<keyof FormState, DraftedField>> = {
   description_md: "description_md",
   topic_ids: "topics",
   location_mode: "location",
-  city: "location",
+  locations: "location",
   starts_on: "dates",
   ends_on: "dates",
   duration_text: "duration_text",
@@ -511,7 +515,9 @@ export function OpportunityEditor({
 
   const isNew = opportunity === null;
   const status = opportunity?.status ?? null;
-  const pending = useMemo(() => diffBody(initial, form), [initial, form]);
+  const pendingNow = useMemo(() => diffBody(initial, form), [initial, form]);
+  const pending = pendingNow;
+  const locationsRef = useRef<LocationsInputHandle>(null);
   const dirty = isNew ? true : Object.keys(pending).length > 0;
   const unsavedFields = useMemo<ReadonlySet<string>>(
     () => (isNew ? new Set() : new Set(Object.keys(pending))),
@@ -572,7 +578,10 @@ export function OpportunityEditor({
     }
     if (has("location") && d.location_mode) {
       patch.location_mode = d.location_mode;
-      patch.city = d.location_mode === "remote" ? "" : (d.city ?? "");
+      patch.locations =
+        d.location_mode === "remote"
+          ? []
+          : (d.locations ?? []).slice(0, LOCATIONS_MAX).map((l) => ({ city: l.city, country: l.country ?? null }));
     }
     if (has("dates")) {
       if (d.starts_on) patch.starts_on = d.starts_on;
@@ -662,6 +671,10 @@ export function OpportunityEditor({
   const run = async (action: Action) => {
     setFieldErrors({});
     setFormError(null);
+    // A typed-but-unadded city is committed before anything is sent.
+    const committed = locationsRef.current?.commit() ?? null;
+    const sent: FormState = committed ? { ...form, locations: committed } : form;
+    const pending = committed ? diffBody(initial, sent) : pendingNow;
     const target = TARGET[action];
 
     const statusOnlyAction = action === "close" || action === "unpublish";
@@ -683,7 +696,7 @@ export function OpportunityEditor({
     let body: Partial<OpportunityBody>;
     let keptUnsent = false;
     if (isNew) {
-      body = { ...toBody(form), status: target ?? "draft" };
+      body = { ...toBody(sent), status: target ?? "draft" };
     } else {
       body = statusOnly ? {} : { ...pending };
       if (target && target !== opportunity.stored_status) body.status = target;
@@ -701,9 +714,9 @@ export function OpportunityEditor({
         : await adminPatchOpportunity(adminKey, opportunity.id, body);
       // Fields still holding a value the server refused (and not sent now) are
       // reset to the saved value on the re-seed — the admin has moved on.
-      const current = toBody(form);
+      const current = toBody(sent);
       const discarded = (Object.keys(refusedRef.current) as BodyKey[]).filter(
-        (k) => k in pending && !(k in body) && sameValue(current[k], refusedRef.current[k]),
+        (k) => k in pending && !(k in body) && sameValue(current[k], refusedRef.current[k], k),
       );
       const otherUnsent = Object.keys(pending).filter((k) => !discarded.includes(k as BodyKey)).length > 0;
       const notes = [SUCCESS[action]];
@@ -732,12 +745,14 @@ export function OpportunityEditor({
             </>,
           );
         } else if (err.code === "validation_error") {
-          const parsed = parseFieldError(err.message);
+          const raw = parseFieldError(err.message);
+          // The legacy `city:` message belongs to the locations chips input.
+          const parsed = raw && raw.field === "city" ? { ...raw, field: "locations" } : raw;
           if (parsed && INLINE_FIELDS.has(parsed.field)) {
             setFieldErrors({ [parsed.field]: parsed.reason });
             if (!isNew) {
               const k = parsed.field as BodyKey;
-              refusedRef.current[k] = toBody(form)[k];
+              refusedRef.current[k] = toBody(sent)[k];
             }
             const el = document.getElementById(`opp-${parsed.field.replace(/_/g, "-")}`);
             el?.scrollIntoView?.({ behavior: "smooth", block: "center" });
@@ -971,18 +986,17 @@ export function OpportunityEditor({
                 </select>
               </Field>
               {form.location_mode !== "remote" && (
-                <Field id="opp-city" label="City" required error={err.city} errorField="city">
-                  <input
-                    id="opp-city"
-                    data-testid="opp-city-input"
-                    value={form.city}
-                    maxLength={80}
-                    onChange={(e) => set("city", e.target.value)}
-                    placeholder="Bengaluru"
-                    aria-invalid={Boolean(err.city)}
-                    className={inputCls(Boolean(err.city))}
-                  />
-                </Field>
+                <div className="sm:col-span-2">
+                  <Field id="opp-location-city" label="Locations" required errorField="locations">
+                    <LocationsInput
+                      id="opp-location-city"
+                      handleRef={locationsRef}
+                      value={form.locations}
+                      onChange={(next) => set("locations", next)}
+                      serverError={err.locations}
+                    />
+                  </Field>
+                </div>
               )}
             </div>
 
@@ -1306,7 +1320,7 @@ export function OpportunityEditor({
               partner_display_name: form.partner_display_name,
               topics: previewTopics,
               location_mode: form.location_mode,
-              city: form.city,
+              locations: form.locations,
               compensation: {
                 compensation_min: amount(form.compensation_min),
                 compensation_max: amount(form.compensation_max),

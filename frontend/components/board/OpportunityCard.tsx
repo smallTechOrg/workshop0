@@ -5,10 +5,10 @@ import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatCompensation } from "@/lib/compensation";
 import { cn } from "@/lib/format";
+import { locationLabel, locationsOf, locationTitle } from "@/lib/locations";
 import {
   TYPE_LABELS,
   listingHref,
-  locationLabel,
   partnerName,
   shortDeadline,
   urgencyLabel,
@@ -121,7 +121,13 @@ export function OpportunityCard({
           <div className="flex min-w-0 items-center gap-2">
             <dt className="sr-only">Location</dt>
             <PinIcon className="shrink-0 text-stone-400" />
-            <dd className="min-w-0 truncate">{locationLabel(o)}</dd>
+            <dd
+              data-testid="opportunity-location"
+              title={locationTitle(locationsOf(o)) || undefined}
+              className="min-w-0 truncate"
+            >
+              {locationLabel(o)}
+            </dd>
           </div>
           {compensation && (
             <div className="flex min-w-0 items-center gap-2">

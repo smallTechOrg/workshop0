@@ -2,6 +2,7 @@
 
 import { ApiError } from "@/lib/api";
 import type { CompensationUnit, Currency } from "@/lib/compensation";
+import type { Location } from "@/lib/locations";
 
 export type DraftedField =
   | "title"
@@ -25,7 +26,8 @@ export interface OpportunityDraft {
   description_md: string | null;
   topic_slugs: string[];
   location_mode: "remote" | "onsite" | "hybrid" | null;
-  city: string | null;
+  /** Every drafted venue city, in order (Phase 11c; replaces `city`). */
+  locations: Location[];
   starts_on: string | null;
   ends_on: string | null;
   duration_text: string | null;

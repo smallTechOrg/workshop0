@@ -10,6 +10,7 @@
 import { ApiError } from "@/lib/api";
 import type { CompensationUnit, Currency } from "@/lib/compensation";
 import type { PartnerRef } from "@/lib/adminPartners";
+import type { Location } from "@/lib/locations";
 
 // ---------------------------------------------------------------------------
 // Fetch helper
@@ -122,7 +123,10 @@ export interface AdminOpportunityRow {
   summary: string;
   topics: AdminTopicRef[];
   location_mode: LocationMode;
-  city: string | null;
+  /** Every location, in order (`[]` when remote). Phase 11c. */
+  locations: Location[];
+  /** Legacy, read-only: `locations[0].city`. New UI code reads `locations`. */
+  readonly city: string | null;
   starts_on: string | null;
   ends_on: string | null;
   duration_text: string | null;
@@ -200,7 +204,8 @@ export interface OpportunityBody {
   description_md: string;
   topic_ids: number[];
   location_mode: LocationMode;
-  city: string | null;
+  /** The editor sends only `locations` (legacy `city` is never sent). */
+  locations: Location[];
   starts_on: string | null;
   ends_on: string | null;
   duration_text: string | null;
