@@ -1,6 +1,6 @@
 """Application settings — exact env var names per spec/architecture.md §Environment variables."""
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_DATABASE_URL = "sqlite:///data/workshop0.db"
@@ -55,6 +55,17 @@ class Settings(BaseSettings):
     workshop0_ai_network_model: str = Field(default="claude-sonnet-5-5")
     workshop0_ai_network_fast_model: str = Field(default="claude-haiku-5-5")
 
+    # Phase 12 - transactional email over SMTP (all optional; production boots with every
+    # field absent, in which case outbox rows are `recorded`, not sent).
+    workshop0_smtp_host: str = Field(default="")
+    workshop0_smtp_port: int = Field(default=587)
+    workshop0_smtp_starttls: bool = Field(default=True)
+    workshop0_smtp_user: str = Field(default="")
+    workshop0_smtp_password: SecretStr = Field(default=SecretStr(""), repr=False)
+    workshop0_smtp_from: str = Field(default="")
+    workshop0_email_rate_per_recipient: int = Field(default=10)  # per rolling hour
+    workshop0_email_rate_global: int = Field(default=100)  # per rolling hour
+
     @field_validator("database_url")
     @classmethod
     def _normalize_database_url(cls, value: str) -> str:
@@ -63,6 +74,19 @@ class Settings(BaseSettings):
     @property
     def resolved_admin_key(self) -> str:
         return self.workshop0_admin_key.strip()
+
+    @property
+    def smtp_configured(self) -> bool:
+        """True only when host, user and password are all set."""
+        return bool(
+            self.workshop0_smtp_host.strip()
+            and self.workshop0_smtp_user.strip()
+            and self.workshop0_smtp_password.get_secret_value()
+        )
+
+    @property
+    def resolved_smtp_from(self) -> str:
+        return self.workshop0_smtp_from.strip() or self.workshop0_smtp_user.strip()
 
     @property
     def resolved_base_url(self) -> str:

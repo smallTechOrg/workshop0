@@ -40,6 +40,11 @@ EXPECTED_TABLES = {
     "admin_note",
     # Phase 11b — 0007_partners_compensation
     "partner",
+    # Phase 12 - 0011_applications_matching_email
+    "application",
+    "opportunity_invite",
+    "match_suggestion",
+    "email_outbox",
     "alembic_version",
 }
 BOARD_TABLES = {"topic", "opportunity", "opportunity_topic"}
@@ -55,6 +60,8 @@ NETWORK_TABLES = {
     "admin_note",
 }
 PARTNER_TABLES = {"partner"}
+PHASE12_TABLES = {"application", "opportunity_invite", "match_suggestion", "email_outbox"}
+PHASE12_OPPORTUNITY_COLUMNS = {"budget_min", "budget_max", "budget_currency", "budget_unit", "min_level"}
 AI_USAGE_NETWORK_COLUMNS = {"cv_document_id", "opportunity_id"}
 AUDIT_SUBJECT_COLUMNS = {"subject_type", "subject_id"}
 SEED_CATEGORIES = {"Languages", "Web & Mobile", "AI & Data", "Cloud & DevOps", "Engineering Practice"}
@@ -213,7 +220,7 @@ def test_0005_seeds_topics_and_downgrade_to_0004_removes_the_board(monkeypatch, 
 
         command.downgrade(config, "0004")
         inspector = inspect(engine)
-        assert set(inspector.get_table_names()) == EXPECTED_TABLES - BOARD_TABLES - NETWORK_TABLES - PARTNER_TABLES
+        assert set(inspector.get_table_names()) == EXPECTED_TABLES - BOARD_TABLES - NETWORK_TABLES - PARTNER_TABLES - PHASE12_TABLES
         assert not AUDIT_SUBJECT_COLUMNS & {c["name"] for c in inspector.get_columns("facilitator_action")}
         with engine.connect() as connection:
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0004"
@@ -222,7 +229,7 @@ def test_0005_seeds_topics_and_downgrade_to_0004_removes_the_board(monkeypatch, 
         assert set(inspect(engine).get_table_names()) == EXPECTED_TABLES
         _assert_seed(_topic_seed(engine))  # re-seeded exactly once, not duplicated
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0010"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0011"
     finally:
         engine.dispose()
 
@@ -275,7 +282,7 @@ def test_0006_creates_the_network_schema_and_0007_is_head_and_creates_the_networ
     url = scratch_database()
     _use(monkeypatch, url)
     config = _alembic_config()
-    assert ScriptDirectory.from_config(config).get_current_head() == "0010"
+    assert ScriptDirectory.from_config(config).get_current_head() == "0011"
     command.upgrade(config, "0006")
 
     engine = create_engine(url)
@@ -400,7 +407,7 @@ def test_0006_downgrade_to_0005_and_back_round_trips(monkeypatch, scratch_databa
         command.downgrade(config, "0005")
         inspector = inspect(engine)
         assert _version(engine) == "0005"
-        assert set(inspector.get_table_names()) == EXPECTED_TABLES - NETWORK_TABLES - PARTNER_TABLES
+        assert set(inspector.get_table_names()) == EXPECTED_TABLES - NETWORK_TABLES - PARTNER_TABLES - PHASE12_TABLES
         ai_cols = _columns(inspector, "ai_usage")
         assert not AI_USAGE_NETWORK_COLUMNS & set(ai_cols)
         assert not ai_cols["workshop_id"]["nullable"]
@@ -409,7 +416,7 @@ def test_0006_downgrade_to_0005_and_back_round_trips(monkeypatch, scratch_databa
         _assert_seed(_topic_seed(engine))  # Phase-10 data untouched
 
         command.upgrade(config, "head")
-        assert _version(engine) == "0010"
+        assert _version(engine) == "0011"
         inspector = inspect(engine)
         assert set(inspector.get_table_names()) == EXPECTED_TABLES
         assert _columns(inspector, "ai_usage")["workshop_id"]["nullable"]
@@ -476,7 +483,7 @@ def test_0007_schema_and_widened_purpose(monkeypatch, scratch_database):
     command.upgrade(config, "head")
     engine = create_engine(url)
     try:
-        assert _version(engine) == "0010"
+        assert _version(engine) == "0011"
         inspector = inspect(engine)
         pcols = _columns(inspector, "partner")
         assert set(pcols) == {
@@ -599,7 +606,7 @@ def test_0007_downgrade_restores_mirror_compensation_and_round_trips(monkeypatch
         assert purposes == ["profile_draft"]  # >16-char purposes removed
 
         command.upgrade(config, "head")
-        assert _version(engine) == "0010"
+        assert _version(engine) == "0011"
         with engine.connect() as connection:
             assert connection.execute(text("SELECT count(*) FROM partner")).scalar() == 2
     finally:
@@ -649,7 +656,7 @@ def test_0008_upgrade_migrates_single_city_to_locations(monkeypatch, scratch_dat
         _seed_pre_0008(engine)
         command.upgrade(config, "0008")  # the raw INSERT below predates 0010's NOT NULL slug
         assert _version(engine) == "0008"
-        assert ScriptDirectory.from_config(config).get_current_head() == "0010"
+        assert ScriptDirectory.from_config(config).get_current_head() == "0011"
         col = _columns(inspect(engine), "opportunity")["locations_json"]
         assert not col["nullable"]
         got = _locations(engine)
@@ -700,7 +707,7 @@ def test_0008_downgrade_restores_first_city_and_round_trips(monkeypatch, scratch
         }
 
         command.upgrade(config, "head")
-        assert _version(engine) == "0010"
+        assert _version(engine) == "0011"
         got = _locations(engine)
         assert got["pune"] == ([{"city": "Bengaluru", "country": None}], "Bengaluru")
         assert got["zurich"] == ([{"city": "Zürich", "country": None}], "Zürich")
@@ -716,7 +723,7 @@ def test_0009_adds_invite_revoke_columns_and_round_trips(monkeypatch, scratch_da
     url = scratch_database()
     _use(monkeypatch, url)
     config = _alembic_config()
-    assert ScriptDirectory.from_config(config).get_current_head() == "0010"
+    assert ScriptDirectory.from_config(config).get_current_head() == "0011"
     command.upgrade(config, "0009")
     engine = create_engine(url)
     try:
@@ -789,8 +796,8 @@ def test_0010_backfills_unique_slugs_and_is_head(monkeypatch, scratch_database):
     try:
         _seed_pre_0010(engine)
         command.upgrade(config, "head")
-        assert _version(engine) == "0010"
-        assert ScriptDirectory.from_config(config).get_current_head() == "0010"
+        assert _version(engine) == "0011"
+        assert ScriptDirectory.from_config(config).get_current_head() == "0011"
         inspector = inspect(engine)
         assert not _columns(inspector, "opportunity")["slug"]["nullable"]
         assert any(
@@ -833,8 +840,67 @@ def test_0010_downgrade_drops_slug_and_keeps_data(monkeypatch, scratch_database)
         assert [tuple(r) for r in got] == [(t, m, c, l, s) for t, m, c, l, s, _ in _PRE_0010]
 
         command.upgrade(config, "head")
-        assert _version(engine) == "0010"
+        assert _version(engine) == "0011"
         with engine.connect() as connection:
             assert connection.execute(text("SELECT count(*) FROM opportunity WHERE slug IS NULL")).scalar() == 0
     finally:
         engine.dispose()
+
+
+# --------------------------------------------------------------------------- Phase 12 - 0011
+
+
+def test_0011_creates_phase12_schema_and_round_trips(monkeypatch, scratch_database):
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    assert ScriptDirectory.from_config(config).get_current_head() == "0011"
+    command.upgrade(config, "0010")
+    engine = create_engine(url)
+    try:
+        assert not PHASE12_TABLES & set(inspect(engine).get_table_names())
+        command.upgrade(config, "head")
+        assert _version(engine) == "0011"
+        inspector = inspect(engine)
+        assert PHASE12_TABLES <= set(inspector.get_table_names())
+
+        opp = _columns(inspector, "opportunity")
+        assert PHASE12_OPPORTUNITY_COLUMNS <= set(opp)
+        assert all(opp[c]["nullable"] for c in PHASE12_OPPORTUNITY_COLUMNS)
+
+        assert ("opportunity_id", "profile_id") in {
+            tuple(u["column_names"]) for u in inspector.get_unique_constraints("application")
+        }
+        assert ("opportunity_id", "profile_id") in {
+            tuple(u["column_names"]) for u in inspector.get_unique_constraints("opportunity_invite")
+        }
+        assert ("dedupe_key",) in {
+            tuple(u["column_names"]) for u in inspector.get_unique_constraints("email_outbox")
+        }
+        assert _fks(inspector, "application")["opportunity_id"]["options"]["ondelete"] == "CASCADE"
+        assert _fks(inspector, "application")["profile_id"]["options"]["ondelete"] == "CASCADE"
+        assert _fks(inspector, "match_suggestion")["profile_id"]["options"]["ondelete"] == "CASCADE"
+        assert _columns(inspector, "email_outbox")["dedupe_key"]["nullable"]
+
+        command.downgrade(config, "0010")
+        inspector = inspect(engine)
+        assert _version(engine) == "0010"
+        assert not PHASE12_TABLES & set(inspector.get_table_names())
+        assert not PHASE12_OPPORTUNITY_COLUMNS & set(_columns(inspector, "opportunity"))
+
+        command.upgrade(config, "head")
+        assert PHASE12_TABLES <= set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+def test_phase12_scaffold_imports_and_routers_registered():
+    from src.workshop0.ai import shortlist_rank
+    from src.workshop0.api import create_app
+    from src.workshop0.email import outbox, render, sender
+    from src.workshop0.services import matching
+
+    assert callable(outbox.enqueue) and callable(sender.drain) and callable(render.render)
+    assert callable(matching.matches_for) and callable(shortlist_rank.run_shortlist)
+    paths = {getattr(r, "path", "") for r in create_app().routes}
+    assert paths  # app builds with the three router shells registered

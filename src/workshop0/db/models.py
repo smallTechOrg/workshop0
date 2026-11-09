@@ -370,6 +370,12 @@ class Opportunity(Base):
     partner_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("partner.id", ondelete="RESTRICT"), nullable=True
     )  # admin-only, never public
+    # Phase 12 (0011): admin-only matching fields, never in public payloads.
+    budget_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    budget_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)  # INR|USD
+    budget_unit: Mapped[str | None] = mapped_column(String(8), nullable=True)  # hour|day|course|month
+    min_level: Mapped[str | None] = mapped_column(String(16), nullable=True)  # intermediate|advanced|expert
     deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     partner_display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     partner_internal_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
@@ -579,3 +585,98 @@ class AdminNote(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     author: Mapped[str] = mapped_column(String(254), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+# --------------------------------------------------------------------------- Phase 12
+# Applications, matching, email outbox (migration 0011) - spec/data-model.md Phase 12.
+
+
+class Application(Base):
+    __tablename__ = "application"
+    __table_args__ = (
+        UniqueConstraint("opportunity_id", "profile_id", name="uq_application_opportunity_profile"),
+        Index("ix_application_opportunity_status", "opportunity_id", "status"),
+        Index("ix_application_profile_id", "profile_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunity.id", ondelete="CASCADE"), nullable=False
+    )
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("trainer_profile.id", ondelete="CASCADE"), nullable=False
+    )
+    # applied | shortlisted | selected | not_selected | withdrawn
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="applied")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="self")  # self | invited
+    status_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+
+class OpportunityInvite(Base):
+    """Admin "invite to apply" - one row per (listing, trainer)."""
+
+    __tablename__ = "opportunity_invite"
+    __table_args__ = (
+        UniqueConstraint("opportunity_id", "profile_id", name="uq_opportunity_invite_opportunity_profile"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunity.id", ondelete="CASCADE"), nullable=False
+    )
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("trainer_profile.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by: Mapped[str] = mapped_column(String(254), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class MatchSuggestion(Base):
+    """One row per ranked trainer per shortlist run; only the latest run is shown."""
+
+    __tablename__ = "match_suggestion"
+    __table_args__ = (Index("ix_match_suggestion_run_rank", "opportunity_id", "run_id", "rank"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunity.id", ondelete="CASCADE"), nullable=False
+    )
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("trainer_profile.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[str] = mapped_column(String(22), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    rule_score: Mapped[float] = mapped_column(Numeric(6, 3), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    ranked_by: Mapped[str] = mapped_column(String(8), nullable=False)  # ai | rules
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class EmailOutbox(Base):
+    """Transactional outbox. `recorded` = not sent (SMTP unconfigured or rate limited).
+    `last_error` never contains credentials."""
+
+    __tablename__ = "email_outbox"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_email_outbox_dedupe_key"),
+        Index("ix_email_outbox_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    to_email: Mapped[str] = mapped_column(String(254), nullable=False)
+    template: Mapped[str] = mapped_column(String(48), nullable=False)
+    context_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    subject: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

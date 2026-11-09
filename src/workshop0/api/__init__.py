@@ -86,10 +86,13 @@ def create_app() -> FastAPI:
         board_public,
         facilitator,
         health,
+        matching_admin,
         network_admin,
         network_me,
+        outbox_admin,
         participant,
         partners_admin,
+        pipeline_admin,
         public,
         seo,
     )
@@ -108,6 +111,10 @@ def create_app() -> FastAPI:
     app.include_router(auth_routes.router)  # /api/auth
     app.include_router(network_me.router)  # /api/me
     app.include_router(network_admin.router)  # /api/admin/network (require_admin_key)
+    # Phase 12 - router shells (routes filled by later slices).
+    app.include_router(outbox_admin.router)  # /api/admin/outbox
+    app.include_router(pipeline_admin.router)  # /api/admin/opportunities/{id}/applications...
+    app.include_router(matching_admin.router)  # /api/admin/opportunities/{id}/shortlist|invites
 
     @app.get("/", include_in_schema=False)
     def _landing():
