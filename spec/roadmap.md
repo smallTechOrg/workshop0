@@ -19,6 +19,7 @@ Ground-up rebuild. The old `src/` and `frontend/` are **removed at scaffold**; n
 | 9 | Rename everything to Workshop0 (code, brand, client storage, infra, repo) | delivered (PR #7) |
 | 10 | Opportunity Board: topic taxonomy, admin listings, public board (C8–C10) | specified |
 | 11 | Trainer sign-in, CV-drafted profiles & admin pool (C11–C13) + **11b** Phase-10 feedback: managed partners, paste-to-fill drafting, compensation unit (C9/C10 extended) | specified |
+| 11c | Multi-location opportunities: several cities per listing, editor chips, compact card display, multi-city drafting (C9/C10 extended; SMA-9) | specified |
 | 12 | Applications, matching & email outbox (C14–C16) | specified |
 | 13 | Alerts & digest, public directory, workshop tie-in (C17–C19) | specified |
 
@@ -832,7 +833,7 @@ OIDC — state mismatch, nonce mismatch, wrong `aud`, expired token, bad signatu
 3. **Draft:** **New opportunity** → fill `paste-input` with `tests/fixtures/opportunity_posts/forwarded_genai_workshop.txt` → **Draft**. Within 45 s:
    - title is non-empty;
    - `opp-topic-option-generative-ai` and `opp-topic-option-python` are selected;
-   - location is Hybrid with city Pune;
+   - location is Hybrid, and from Phase 11c the location chips are exactly `Pune` (the single-city input was replaced by the chips input in §Phase 11c);
    - comp min 8000, max 12000, INR, unit `day`;
    - `opp-partner-select` shows Zenvia, and the public partner name is `A Pune edtech`;
    - at least 5 `drafted-chip-*` are visible, and `draft-cost-line` contains `$`;
@@ -893,6 +894,184 @@ kill %1
 
 **Labelled stubs (not bugs):** none new in 11b.
 
+### Phase 11c — Multi-location opportunities
+
+*An incremental sub-phase after Phase 11/11b, which are built and on `main`. It has its own human test. Linear SMA-9. It does not change the scope of Phase 12 or 13. The only knock-on effects are that their migrations are renumbered `0009`/`0010` and that Phase-12 "same city" matching means "any listed city" (agent.md §Shortlist ranker).*
+
+**Goal:** An admin gives a listing several cities. For example, a Hybrid workshop runs in **Bengaluru (India), Pune and Hyderabad**. The admin adds them as chips in the editor, with the country optional, and duplicates are ignored. The public card reads **`Bengaluru · Pune · +1 · Hybrid`** and the listing page lists every location. Pasting a partner post that names several venue cities drafts all of them, and leaves out the cities that are only where remote participants, the head office or the signature are. Existing single-city listings, clients and tests keep working unchanged.
+
+**Capabilities extended (no new numbers):** C9 gains **multi-location listings** (the editor chips input, the rules and the multi-city drafting). C10 gains the **multi-location display**. Contract: [api.md](api.md) §Phase 11c. Schema: [data-model.md](data-model.md) §Phase 11c. Drafter: [agent.md](agent.md) §Opportunity drafter. UI and exact strings: [capabilities.md](capabilities.md) §C9 additions — Phase 11c / §C10 → Location display.
+
+> **Assumed:** this is feedback on delivered capabilities, so C9/C10 are extended and no C20 is added. The capability count is unchanged, and the Phase-11b precedent applies.
+
+**Non-goals (explicit):**
+- **No location or city filter.** None exists today on the public board (`type`, `topic`, `sort`) or the admin list (`status`, `type`, `q`), so none is added, and admin `q` does not start matching cities (api.md §Phase 11c → Filters);
+- **trainer profiles keep a single `city`** (`trainer_profile.city`, the profile form, the pool, the CV drafter). Trainer locations are out of scope;
+- no country list, autocomplete, geocoding or city normalization beyond trim, collapsing whitespace and case-insensitive dedupe;
+- no per-location dates, capacity or work mode. `location_mode` stays one value per listing, and remote listings carry no cities;
+- no change to Phase 12/13 scope, and the `city` column is not dropped (it stays as a mirror);
+- no new endpoint, error code, dependency, setting or environment variable.
+
+**Mini-scaffold (orchestrator, one commit, before the fan-out; see §Parallel fan-out rule):**
+- **Python stub `src/workshop0/services/locations.py`**, owned and filled by M2. The constants are real in the stub, and function bodies `raise NotImplementedError`:
+  - `CITY_MAX = 80`, `COUNTRY_MAX = 80`, `LOCATIONS_MAX = 10`;
+  - `class Location(TypedDict): city: str; country: str | None`;
+  - `collapse(text: str) -> str`: trims and collapses internal whitespace to single spaces;
+  - `location_key(city: str, country: str | None) -> tuple[str, str]`: returns `(collapse(city).casefold(), collapse(country or "").casefold())`;
+  - `dedupe(locations: list[Location]) -> list[Location]`: order-preserving, first wins, and every item rebuilt with exactly `city`/`country`;
+  - `parse_stored(locations_json: str | None, city: str | None, location_mode: str) -> list[Location]`: the read rule in data-model.md §Phase 11c;
+  - `dump(locations: list[Location]) -> str`: `json.dumps(locations, ensure_ascii=False)`.
+
+No TypeScript stub is needed, because one slice owns all of the frontend.
+
+**Slices.** M1 runs first. It is small, and every DB test needs its column. M2, M3 and M4 then fan out concurrently, which is 3 slots. M5 is written in the same wave if a 4th slot is free, otherwise right after. Its verification waits for M1–M4. Build dependencies are none, because M3 builds against the `locations.py` stub.
+
+| Slice | Owns (exclusive paths) | Delivers | Tests need |
+|---|---|---|---|
+| **M1 schema-locations** | `src/workshop0/db/models.py`, `alembic/versions/0008_multi_location.py`, `tests/integration/test_migration.py` | `Opportunity.locations_json` (`Text`, not null, `default="[]"`, `server_default="[]"`) and migration `0008` (`revision = "0008"`, `down_revision = "0007"`, `batch_alter_table`) with the data migration and downgrade, exactly per data-model.md §Phase 11c. `test_migration.py`: every "0007 is head" assertion becomes `0008`; `EXPECTED_TABLES` is unchanged (no new table); plus the 0008 tests below. `tests/integration/test_sqlite_to_postgres.py` must stay green **without being edited** | — |
+| **M2 opportunity-api** | `src/workshop0/services/locations.py` (fills the stub), `src/workshop0/services/opportunities.py`, `tests/unit/test_locations.py` (new), `tests/unit/test_board_rules.py`, `tests/integration/test_board_locations.py` (new), `tests/integration/test_board_{admin,public,leak,audit}.py` (edited only where the contract changed: the payload key sets gain `locations`, and the leak test adds the `locations_json` key and the item-shape check) | The `locations` request field with the validation and messages in api.md §Phase 11c, legacy `city` → one-element list (`locations` wins when both are sent), merged-state mode rules with the body-dependent required message, and the `city` mirror written on every write. `FIELDS` reports `locations` instead of `city` in `changed_fields`, comparing order-sensitive normalized lists. `locations` is added to `public_card`, `admin_row` and `admin_full` through `parse_stored`, with `city` derived from it. `api/board_admin.py`, `api/board_public.py` and `tests/conftest.py` stay **read-only**: the shared `opportunity_body` fixture keeps sending the legacy `city`, which still works | M1 |
+| **M3 opportunity-drafter** | `src/workshop0/ai/opportunity_draft.py`, `src/workshop0/ai/prompts/opportunity_draft_{system,user}.md`, `tests/unit/test_opportunity_draft_guardrails.py`, `tests/integration/ai_network/test_opportunity_draft.py`, `tests/integration/ai_network/test_opportunity_draft_api.py`, `tests/fixtures/opportunity_posts/**` | Schema `locations` array (replacing `city`), the location prompt rules, the location guardrail (using `locations.location_key`/`collapse`) and contact scrub, the `draft.locations` key and `drafted_fields` → `location` coverage, all per agent.md §Opportunity drafter and api.md §Phase 11c → Drafting response. New fixture `multi_city_bootcamp.{txt,expected.json}`. The four existing `*.expected.json` swap `"city"` for `"location_cities"` (+ `"location_cities_exclude": ["hyderabad"]` on the forwarded GenAI post). **`injection.txt` is not edited**, and its new assertions are in agent.md. The `DRAFT_KEYS` sets in both test files swap `city` for `locations` | M2 (`locations.py`), M1 (the API test creates a listing) |
+| **M4 frontend** | `frontend/lib/locations.ts` (new; the **only** location formatter), `frontend/lib/board.ts`, `frontend/lib/adminBoard.ts`, `frontend/lib/adminDraft.ts`, `frontend/components/admin/LocationsInput.tsx` (new), `frontend/components/admin/OpportunityEditor.tsx`, `frontend/components/admin/PublicCardPreview.tsx`, `frontend/components/board/OpportunityCard.tsx`, `frontend/app/opportunities/view/page.tsx` | `lib/locations.ts` exports `interface Location {city: string; country: string \| null}`, `LOCATIONS_MAX`/`CITY_MAX`/`COUNTRY_MAX`, `locationKey(l)`, `addLocations(current, cityInput, countryInput): {next: Location[]; duplicate: boolean; error: string \| null}` (comma-splits, collapses, dedupes, caps at 10; errors `"City must be 80 characters or fewer"` / `"Country must be 80 characters or fewer"`), `locationLabel(o)`, `locationDetailLabel(o)` and `locationTitle(locations)`, with the exact strings in capabilities.md §C10. `board.ts` loses its `locationLabel`, and every importer switches to `lib/locations.ts`. The public and admin types gain `locations: Location[]` and keep `city` as read-only. `OpportunityBody` sends `locations` and no longer sends `city`. `OpportunityDraft.city` is replaced by `locations`. Editor: the `LocationsInput` chips UI replaces the City input (capabilities.md §C9 additions — Phase 11c), `FormState.city` becomes `locations: Location[]`, `toBody` sends `[]` while Remote, `diffBody`/`rebase` compare `locations` **in order** (JSON equality, not the sorted compare used for `topic_ids`), `locations:` and `city:` server errors map to `opp-locations-error`, and a draft maps `d.locations` into the chips. `PublicCardPreviewData.city` becomes `locations`. The card, the listing meta grid and the preview use the shared formatter | runtime only (M1–M3) |
+| **M5 e2e-docs** | `tests/e2e/opportunity-locations.spec.ts` (new), `tests/e2e/opportunity-board.spec.ts`, `tests/e2e/opportunity-drafting.spec.ts`, `README.md` | The journey below. In `opportunity-board.spec.ts`, the editor helper's `opp-city-input` fill becomes "type the city into `opp-location-city-input`, press Enter, expect one `opp-location-chip`", and its API seeding keeps the legacy `city`. In `opportunity-drafting.spec.ts`, the `opp-city-input` fallback becomes: after the draft, `opp-location-select` has the value `hybrid`, `opp-location-chip` has a count of 1 with the text `Pune`, and no chip contains `Hyderabad`; the chip-based "add Pune if empty" fallback is kept only for the publish step. `tests/e2e/helpers.ts` stays read-only. README: the Opportunity Board section gains one paragraph on multiple locations (chips, the card rule, drafting), and its gate snippet's `grep -q '^0007'` becomes `'^0008'` | runtime: all |
+
+> **Assumed:** M4 is one frontend slice rather than an editor/board split. The board edits are about 30 lines, and one owner of `lib/locations.ts` avoids a TS stub. This keeps the fan-out within the 3–4 concurrent generators available.
+
+**Test-id contract (M4 renders these; M5 asserts them):**
+
+| Surface | Test ids |
+|---|---|
+| Editor locations | `opp-locations` (wrapper, shown only for Onsite/Hybrid), `opp-location-city-input`, `opp-location-country-input`, `opp-location-add`, `opp-location-chip` (one per chip, in order), `opp-location-chip-label` (inside each chip; text exactly `City` or `City, Country`, which is what e2e compares), `opp-location-chip-remove` (inside each chip; an icon button whose only name is its `aria-label`), `opp-locations-hint` (`Already added` / `Up to 10 locations`), `opp-locations-error` |
+| Admin preview | `opp-preview-location` (the location text, e.g. `Bengaluru · Pune · +1 · Hybrid`) |
+| Card + listing | `opportunity-location`: the card's location `dd` (with the `title` attribute) and the listing meta-grid value |
+| Kept | `opp-location-select`, `drafted-chip-location` |
+| Removed | `opp-city-input` |
+
+**Tests the backend slices must write (PostgreSQL; real Anthropic where stated):**
+- **Migration (M1):**
+  - *Fixture at `0007`:* five listings: onsite `"Pune"`; hybrid `"  Navi   Mumbai "`; remote with `city` null; onsite `"   "`; hybrid `"Zürich"`.
+  - *Upgrade:* `upgrade head` → parsed `locations_json` is `[{"city":"Pune","country":null}]`, `[{"city":"Navi Mumbai","country":null}]`, `[]`, `[]` and `[{"city":"Zürich","country":null}]`, and every `city` value is unchanged. Head is `0008`.
+  - *Downgrade:* set one row's `locations_json` to Bengaluru/Pune/Hyderabad with `city = "Stale"` → `downgrade 0007` → that row's `city == "Bengaluru"`, the column is gone, and the other rows' `city` is unchanged.
+  - *Re-upgrade:* that row comes back as `[{"city":"Bengaluru","country":null}]`, which is the documented loss.
+- **Locations unit (M2, `test_locations.py`):**
+  - `collapse`;
+  - `location_key` (case, whitespace, country in the key);
+  - `dedupe` (first wins, order, exact keys);
+  - `parse_stored` returns the list when it is non-empty;
+  - with `[]` + city + onsite it returns the fallback;
+  - with `[]` + city + remote it returns `[]`;
+  - with invalid JSON + city + hybrid it returns the fallback;
+  - with `None` + no city it returns `[]`.
+- **API (M2, `test_board_locations.py`):**
+  - *Round trip:* POST hybrid with `[{Bengaluru, India}, {Pune}, {Hyderabad}]` → admin and public payloads have exactly that list in order and `city == "Bengaluru"`; the DB `city` mirror is `"Bengaluru"`.
+  - *Normalization and dedupe:* `[" pune ", "PUNE", {"Pune","India"}]` → 2 entries; `"  New   Delhi "` → `"New Delhi"`.
+  - *Bounds:* 10 is accepted; 11 distinct → `locations: at most 10 locations`; 11 with one duplicate is accepted with 10 stored; an 81-char city or a blank city → `locations: city must be 1–80 characters`; an 81-char country → the country message; an extra key `state`, a string instead of an array, or `[{"country": "India"}]` → `locations: each location needs a city and an optional country`. Nothing is written on any rejection.
+  - *Mode rules:* onsite + `locations: []` → `locations: add at least one city for onsite or hybrid`; onsite with neither field → `city: required for onsite or hybrid`; remote + 2 locations → stored `[]` and `city` null; PATCH hybrid→remote → `[]`; PATCH remote→onsite with no locations → `city: required for onsite or hybrid`.
+  - *Legacy:* POST onsite `city: "Pune"` → `[{"city":"Pune","country":null}]`; PATCH `city: "Mumbai"` on a 3-location listing → `[{Mumbai}]` with `changed_fields == ["locations"]`; both fields sent → `locations` wins.
+  - *Audit:* a reorder → one `opportunity.update` with `changed_fields == ["locations"]`; the same list again, or a legacy `city` equal to the sole location → no audit row and `updated_at` unchanged.
+  - *Read rule:* a row written by raw SQL with `locations_json='[]'`, `city='Pune'`, `location_mode='onsite'` → the public card has `locations == [{"city":"Pune","country":null}]`.
+- **Leak (M2, extends `test_board_leak.py`):** every public response (topics, list for every type, detail of open, expired and closed listings) still contains none of the Phase-10/11b sentinels or keys, and now also no `locations_json` key; every `locations` item has exactly the keys `{"city", "country"}`.
+- **Drafter (M3):** the agent.md §Opportunity drafter → Testing additions: the location guardrail unit cases; all five fixtures against the real `claude-sonnet-5-5`, including the exact `["pune"]` (Hyderabad excluded) and the three-city bootcamp with Mumbai and Chennai excluded; and the unchanged prompt-injection fixture with its new `locations` shape assertions. Every call still writes one `ai_usage` row with `purpose="opportunity_draft"` and `cost_usd > 0`.
+
+**e2e journey (M5, `tests/e2e/opportunity-locations.spec.ts`, `test.describe.serial`, live single-origin app, admin key from the env as in the existing specs, per-run suffixes because the e2e DB is not reset; `workers: 1`):**
+1. **Chips:** sign in at `/app/admin/` → **New opportunity**. Fill the required fields with title `Multi-city <run>` and internal notes `ZZ-INTERNAL-<run>`, then choose Hybrid.
+   - In `opp-location-city-input` type `Bengaluru`, in `opp-location-country-input` type `India`, and press Enter. Then type `Pune,` (the comma adds it), fill `Hyderabad, pune` (the comma adds `Hyderabad` and leaves `pune` in the input), and press Enter.
+   - The chips are exactly [`Bengaluru, India`, `Pune`, `Hyderabad`], `opp-locations-hint` shows `Already added`, and the City input is empty.
+   - `opp-preview-location` reads `Bengaluru · Pune · +1 · Hybrid`.
+2. **Remove and re-add:** remove `Pune` → the preview reads `Bengaluru · Hyderabad · Hybrid`. Re-add `Pune` → the chips are [`Bengaluru, India`, `Hyderabad`, `Pune`].
+3. **Remote toggle:** switch to Remote → `opp-locations` is hidden and the preview reads `Remote`. Switch back to Hybrid → the same 3 chips are back.
+4. **Blur commit and publish:** type `Chennai` without pressing Enter, then click **Publish**. The POST response has `locations` = Bengaluru (India), Hyderabad, Pune, Chennai in that order, and `city == "Bengaluru"`.
+5. **Public check (fresh context):** on `/app/opportunities/?sort=newest`, the card with this title has `opportunity-location` text exactly `Bengaluru · Hyderabad · +2 · Hybrid` and `title` = `Bengaluru, Hyderabad, Pune, Chennai`. Its listing page has `opportunity-location` = `Bengaluru, India · Hyderabad · Pune · Chennai · Hybrid`. `page.content()` contains neither `ZZ-INTERNAL` nor `locations_json`.
+6. **Format vectors:** published via the admin API, each checked on its card (page 1, newest) and its listing page:
+   - legacy body `{onsite, city: "Pune"}` → card `Pune · Onsite`, listing `Pune · Onsite`;
+   - `{hybrid, [Bengaluru, Pune]}` → `Bengaluru · Pune · Hybrid`;
+   - `{onsite, [Delhi, Noida, Gurugram, Jaipur, Agra]}` → card `Delhi · Noida · +3 · Onsite`, listing `Delhi · Noida · Gurugram · Jaipur · Agra · Onsite`;
+   - remote → `Remote` on both.
+7. **Errors:**
+   - on a new Onsite listing with no chips → **Save draft** → `opp-locations-error` contains `add at least one city`, and nothing typed is lost;
+   - adding 10 chips → `opp-location-city-input` is disabled and `opp-locations-hint` reads `Up to 10 locations`;
+   - an 81-char city + Enter → `opp-locations-error` reads `City must be 80 characters or fewer` and no chip is added.
+8. **Editing a legacy listing:** open the step-6 legacy `Pune` listing in the editor → one chip, `Pune`.
+
+**Gate (exact commands, serial; working directory = the repo root `/Users/sai/workspace/code/workshop0`; PostgreSQL via `TEST_DATABASE_URL`. The real Anthropic key and workspace id are read from the gitignored `.env` by `envval` and never echoed. Background processes are tracked by explicit PIDs and killed at the end, and also on any early exit):**
+
+```bash
+export TEST_DATABASE_URL="postgresql+psycopg://$USER@localhost:5432/workshop0_test"
+export WORKSHOP0_ADMIN_KEY="${WORKSHOP0_ADMIN_KEY:-phase11c-local-gate-key-0123}"
+envval() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | tr -d '"'"'"; }      # .env values are unquoted or simply quoted; never echoed
+export ANTHROPIC_API_KEY="$(envval ANTHROPIC_API_KEY)" ANTHROPIC_WORKSPACE_ID="$(envval ANTHROPIC_WORKSPACE_ID)"
+test -n "$ANTHROPIC_API_KEY" && test -n "$ANTHROPIC_WORKSPACE_ID"                      # BLOCKED (not skipped) without both
+export WORKSHOP0_GOOGLE_CLIENT_ID=test-client WORKSHOP0_GOOGLE_CLIENT_SECRET=test-secret
+export WORKSHOP0_OIDC_ISSUER=http://localhost:8099 WORKSHOP0_SESSION_SECRET="$(openssl rand -hex 32)"
+export WORKSHOP0_ADMIN_EMAILS=admin@example.test WORKSHOP0_BLOB_BACKEND=local
+OIDC_PID=""; SERVER_PID=""
+cleanup() { for p in $SERVER_PID $OIDC_PID; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; OIDC_PID=""; SERVER_PID=""; true; }
+trap cleanup EXIT
+uv sync
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0008'   # 0008 = Phase 11c's M1
+uv run python tests/support/fake_oidc.py --port 8099 & OIDC_PID=$!                    # real OIDC protocol, local issuer (Phase-11 e2e specs need it)
+sleep 2
+uv run pytest tests/unit tests/integration -q                                          # full regression, incl. ai_network/ (REAL Anthropic)
+! uv run pytest tests/unit/ai tests/integration/ai_network -q -rs | grep -q SKIPPED   # real-key tests ran, none skipped
+uv run pytest tests/integration/test_migration.py tests/integration/test_board_locations.py tests/integration/test_board_leak.py tests/integration/test_sqlite_to_postgres.py tests/unit/test_locations.py tests/unit/test_opportunity_draft_guardrails.py tests/integration/ai_network/test_opportunity_draft.py tests/integration/ai_network/test_opportunity_draft_api.py -q   # the 11c files exist and pass (a missing file fails)
+test -f tests/fixtures/opportunity_posts/multi_city_bootcamp.txt && test -f tests/fixtures/opportunity_posts/multi_city_bootcamp.expected.json
+! grep -l '"city"' tests/fixtures/opportunity_posts/*.expected.json                   # the single-city expectation key is gone
+git diff --quiet "$(git merge-base HEAD origin/main)" -- tests/fixtures/opportunity_posts/injection.txt   # prompt-injection fixture untouched
+grep -q 'locations' src/workshop0/ai/prompts/opportunity_draft_system.md
+! grep -il openrouter src/workshop0/ai/opportunity_draft.py
+! grep -nE 'Partner|partner_id|partners|locations_json' src/workshop0/api/board_public.py
+! grep -rn 'opp-city-input' frontend/app frontend/components frontend/lib tests/e2e   # the single-city input is gone everywhere
+grep -qF "'^0008'" README.md
+(cd frontend && ASDF_NODEJS_VERSION=23.11.0 pnpm install && ASDF_NODEJS_VERSION=23.11.0 pnpm build)
+for p in opportunities opportunities/view admin/opportunities/edit; do test -f "frontend/out/$p/index.html"; done
+ASDF_NODEJS_VERSION=23.11.0 pnpm install && ASDF_NODEJS_VERSION=23.11.0 pnpm exec playwright install chromium
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head
+DATABASE_URL="$TEST_DATABASE_URL" uv run python -m src & SERVER_PID=$!
+sleep 3
+curl -fsS http://localhost:8001/api/health > /dev/null
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/admin/opportunities | grep -qx 401
+ASDF_NODEJS_VERSION=23.11.0 pnpm exec playwright test tests/e2e --reporter=line        # every e2e spec, incl. opportunity-locations/-board/-drafting
+PUB_JSON="$(mktemp)"
+curl -fsS 'http://localhost:8001/api/public/opportunities?page_size=50' > "$PUB_JSON"   # after e2e: multi-city + legacy + remote listings are published
+uv run python - "$PUB_JSON" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["data"]
+ops = d["opportunities"]
+assert d["total"] >= 1 and ops, "empty board"
+for o in ops:
+    locs = o["locations"]
+    assert isinstance(locs, list) and len(locs) <= 10, o["id"]
+    assert all(set(l) == {"city", "country"} for l in locs), o["id"]
+    assert o["city"] == (locs[0]["city"] if locs else None), o["id"]
+    assert o["location_mode"] != "remote" or locs == [], o["id"]
+assert any(len(o["locations"]) >= 3 for o in ops), "no multi-city listing on the board"
+PY
+! grep -qE 'locations_json|ZZ-INTERNAL|ZZ-PARTNER-NOTE|Zenvia|partner_internal_name|"partner_id"|"partner"|name_key|internal_notes' "$PUB_JSON"   # public no-leak
+rm -f "$PUB_JSON"
+kill "$SERVER_PID" "$OIDC_PID"; wait "$SERVER_PID" "$OIDC_PID" 2>/dev/null || true; SERVER_PID=""; OIDC_PID=""
+sleep 1
+! curl -s -o /dev/null --max-time 2 http://localhost:8001/api/health                  # server really stopped
+! curl -s -o /dev/null --max-time 2 http://localhost:8099/.well-known/openid-configuration   # fake issuer really stopped
+trap - EXIT
+```
+
+**Gate conditions (beyond the commands; tests in M1–M3 must contain):**
+- *Migration:* every pre-0008 single-city listing becomes exactly one location; remote and blank-city rows become `[]`; the downgrade restores `city` = the first location's city; `test_sqlite_to_postgres.py` passes unedited.
+- *Compatibility:* legacy `city` writes and the `city` read field behave exactly as api.md §Phase 11c says, and every pre-11c board test still passes. The only edits to existing tests are the documented key-set additions and the moved expectation keys.
+- *No leak:* `locations_json` and every Phase-10/11b internal key or sentinel are absent from every public payload and from the rendered public HTML (e2e). Location items have exactly `city` and `country`.
+- *Drafter, against the real `claude-sonnet-5-5`:* all five fixtures' location expectations hold, including the excluded distractor cities. The prompt-injection post still yields only curated slugs and enum values, no internal partner name in public fields (locations included), well-shaped `locations` and no listing row.
+- *Display:* the exact strings in capabilities.md §C10 → Location display, checked by e2e on the card and the listing page for 1, 2, 4 and 5 cities and for remote, and in the preview for 2 and 3 cities and for remote.
+
+**How the user tests it (repo root; local SQLite as usual):**
+1. `uv run alembic upgrade head`, then `uv run alembic current` prints `0008`. Then run `(cd frontend && pnpm build)` and `uv run python -m src`.
+2. **http://localhost:8001/admin** → **Opportunities** → open an existing Onsite or Hybrid listing → its old city is now a single chip. Save → nothing changes on the board.
+3. **+ New opportunity** → Hybrid → type `Bengaluru`, Country `India`, Enter → `Pune,` → `Hyderabad` Enter. Type `pune` again → "Already added". The preview reads **Bengaluru · Pune · +1 · Hybrid**. Remove a chip with **×** and add it back. Switch to Remote and back, and the chips survive. **Publish**.
+4. Private window → **http://localhost:8001/opportunities** → the card reads **Bengaluru · Pune · +1 · Hybrid**, and hovering shows all three cities. Open it → Location reads **Bengaluru, India · Pune · Hyderabad · Hybrid**.
+5. Make a listing Onsite and remove every chip → Save → the inline error asks for at least one city. A Remote listing saves with no city and shows **Remote**.
+6. **Paste-to-fill:** in a new listing, paste `tests/fixtures/opportunity_posts/multi_city_bootcamp.txt` → **Draft** → Onsite with the chips **Bengaluru, Pune, Hyderabad** (not Mumbai or Chennai), with an amber "Drafted — please check" on Location. Paste `forwarded_genai_workshop.txt` → only **Pune** (the remote Hyderabad team is not a venue).
+7. **Production:** no operator step. After the merge deploys, the `workshop0-migrate` job applies `0008`, and existing listings show their single city as before.
+
+**Labelled stubs (not bugs):** none new in 11c. The existing ones are unchanged.
+
 ---
 
 ## Phase 12 — Applications, Matching & Email Outbox
@@ -919,7 +1098,7 @@ kill %1
 
 | Slice | Owns (exclusive paths) | Delivers | Tests need |
 |---|---|---|---|
-| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0008_applications_matching_email.py`, `src/workshop0/email/outbox.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-12 tables/columns, plus `enqueue(...)` (insert-only, with dedupe) | — |
+| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0009_applications_matching_email.py`, `src/workshop0/email/outbox.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-12 tables/columns, plus `enqueue(...)` (insert-only, with dedupe) | — |
 | **S1 applications** | `src/workshop0/services/applications.py`, `src/workshop0/api/network_me.py`, `src/workshop0/api/pipeline_admin.py`, `tests/integration/applications/**` | Apply/withdraw/my-applications (`/api/me/applications…`), `/api/me/matches` (calls `matching.matches_for`), and the pipeline list, bulk status (one audit row, notify emails) and CSV routes. Every route here that enqueues email, including profile create in `network_me.py` (welcome enqueue lives in S7's `profiles.py`), calls `sender.schedule_drain(background_tasks)` | S0, S2, S6 |
 | **S2 matching-rules** | `src/workshop0/services/matching.py` (fills the stub), `tests/integration/matching/**`, `tests/fixtures/network_pool.py` | Prefilter, rule score, `eligible`, `matches_for`. The shared 60-profile fixture `seed_pool()` has an eligible set of exactly 17 and one obvious best | S0 |
 | **S3 shortlist-ranker** | `src/workshop0/ai/shortlist_rank.py` (fills the stub), `src/workshop0/ai/prompts/shortlist_rank_{system,user}.md`, `tests/integration/ai_network/test_shortlist_rank.py` | `run_shortlist`: top 40 by rule score → one real Anthropic call (`claude-sonnet-5-5`, Phase-11 client, `record_usage`) → guardrails → `match_suggestion` rows. Falls back to ranking by rules | S0, S2 |
@@ -953,7 +1132,7 @@ export WORKSHOP0_GOOGLE_CLIENT_ID=test-client WORKSHOP0_GOOGLE_CLIENT_SECRET=tes
 export WORKSHOP0_SESSION_SECRET="$(openssl rand -hex 32)" WORKSHOP0_ADMIN_EMAILS=admin@example.test WORKSHOP0_BLOB_BACKEND=local
 export WORKSHOP0_SMTP_HOST=localhost WORKSHOP0_SMTP_PORT=8025 WORKSHOP0_SMTP_STARTTLS=0 WORKSHOP0_SMTP_USER=bot@example.test WORKSHOP0_SMTP_PASSWORD=x
 uv sync
-DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0008'
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0009'   # 0008 = Phase 11c
 uv run python tests/support/fake_oidc.py --port 8099 &
 uv run python -m aiosmtpd -n -l localhost:8025 &
 sleep 2
@@ -998,7 +1177,7 @@ bash -n deploy/cloudrun/provision.sh
 
 | Slice | Owns (exclusive paths) | Delivers | Tests need |
 |---|---|---|---|
-| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0009_alerts_directory_tiein.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-13 tables/columns | — |
+| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0010_alerts_directory_tiein.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-13 tables/columns | — |
 | **S1 alerts** | `src/workshop0/services/alerts.py` (fills the stub), `src/workshop0/services/opportunities.py` (hook on every transition to effective `open`), `src/workshop0/api/board_admin.py` (adds `schedule_drain` after publish/reopen/patch only), `src/workshop0/email/templates/network_alert.*`, `tests/integration/alerts/**` | Saved-search matching and alert enqueue with dedupe `alert:{search}:{opp}`, written in the transaction that makes the listing open. The alert email carries an unsubscribe link via `unsubscribe.make_token` | S0, S2 |
 | **S2 digest-unsubscribe** | `src/workshop0/services/{digest,unsubscribe}.py`, `src/workshop0/api/network_public.py`, `src/workshop0/email/templates/network_digest.*`, `tests/integration/digest/**` | The `/api/cron/weekly-digest` endpoint (cron key, 404 when unset, idempotent per ISO week, using `alerts.matches`) and the signed one-click `/api/email/unsubscribe` | S0, S1 |
 | **S3 directory** | `src/workshop0/services/directory.py`, `src/workshop0/api/directory_public.py`, `tests/integration/directory/**` | Public directory + profile: allow-list serializer, ≥60 % completeness, private → 404 | S0 |
@@ -1017,7 +1196,7 @@ bash -n deploy/cloudrun/provision.sh
 | **S16 infra-workflows** | `.github/workflows/**` | Conditional `WORKSHOP0_CRON_KEY` secret mapping | — |
 | **S17 docs** | `README.md`, `deploy/RUNBOOK.md` | RUNBOOK "network operations" section (digest, scheduler, the secrets list including both Anthropic secrets, the two-provider note) | — |
 
-**Gate (repo root; the Phase-12 environment, including the Anthropic key + workspace id from `.env` because the regression suite re-runs the Phase-11/12 real-key tests, plus `export WORKSHOP0_CRON_KEY=gate-cron-key`):** the Phase-12 command block with `grep -q '^0009'`, page checks `for p in network/directory network/trainer network/searches network/unsubscribed; do test -f "frontend/out/$p/index.html"; done`, and additionally, with the server up: `curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/cron/weekly-digest | grep -qx 401` and `curl -fsS -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest | grep -q '"enqueued"'`, then `bash -n deploy/cloudrun/provision.sh`. **Conditions:** a listing matching 3 of 5 saved searches → exactly 3 alerts, re-publish → 0 more; digest twice in one ISO week → one email per user (fixture: 40 users, 12 opted out, precomputed recipients); unsubscribe link flips exactly one preference; directory payloads contain only allow-listed keys (serialized-JSON assertion with sentinel email/rate/note values); a private or <60 % profile 404s publicly; linking a trainer to a workshop writes an audit row and shows on `/api/me/workshops`; participant join/tracker journeys (existing e2e) still pass and require no sign-in; zero `stub-badge` elements on network pages.
+**Gate (repo root; the Phase-12 environment, including the Anthropic key + workspace id from `.env` because the regression suite re-runs the Phase-11/12 real-key tests, plus `export WORKSHOP0_CRON_KEY=gate-cron-key`):** the Phase-12 command block with `grep -q '^0010'`, page checks `for p in network/directory network/trainer network/searches network/unsubscribed; do test -f "frontend/out/$p/index.html"; done`, and additionally, with the server up: `curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/cron/weekly-digest | grep -qx 401` and `curl -fsS -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest | grep -q '"enqueued"'`, then `bash -n deploy/cloudrun/provision.sh`. **Conditions:** a listing matching 3 of 5 saved searches → exactly 3 alerts, re-publish → 0 more; digest twice in one ISO week → one email per user (fixture: 40 users, 12 opted out, precomputed recipients); unsubscribe link flips exactly one preference; directory payloads contain only allow-listed keys (serialized-JSON assertion with sentinel email/rate/note values); a private or <60 % profile 404s publicly; linking a trainer to a workshop writes an audit row and shows on `/api/me/workshops`; participant join/tracker journeys (existing e2e) still pass and require no sign-in; zero `stub-badge` elements on network pages.
 
 **How the user tests it:** as a trainer, on the board pick filters → **Save this search** → as admin publish a matching listing → the alert email arrives (or is *recorded* in the Outbox) → click **Unsubscribe** in it → preferences show alerts off. Trigger the digest locally: `curl -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest`. Turn on **Public directory profile** → visit `/app/network/directory/` in a private window → your card is there, without rates or email. As admin, on a workshop card **Facilitators** → add the trainer as co-facilitator → the trainer's **My Workshop0 workshops** shows the dashboard link. Open a workshop join link → the **Join our network** card is visible. Production: `bash deploy/cloudrun/provision.sh` (cron key + scheduler), redeploy, `gcloud scheduler jobs run workshop0-weekly-digest --location us-central1`. **Nothing is a stub.**
 

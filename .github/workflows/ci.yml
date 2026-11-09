@@ -76,11 +76,11 @@ jobs:
             echo "NETWORK_AI_KEYS=absent" >> "$GITHUB_ENV"
             echo "::warning::ANTHROPIC_API_KEY and/or ANTHROPIC_WORKSPACE_ID secret not set: real-key network AI tests will skip (CI only; the local gate forbids skips)."
           fi
-      - name: Migrations apply cleanly (PostgreSQL) and reach 0007
+      - name: Migrations apply cleanly (PostgreSQL) and reach the latest revision (head)
         run: |
           set -euo pipefail
           uv run alembic upgrade head
-          uv run alembic current | grep -q '^0007'
+          uv run alembic current | grep -q '(head)'
         env:
           DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
       - name: Start the local OIDC test issuer (:8099)

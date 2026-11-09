@@ -29,6 +29,7 @@ from src.workshop0.ai import anthropic_client
 from src.workshop0.ai.anthropic_client import LLMError, LLMResult, LLMUnavailable
 from src.workshop0.ai.profile_draft import TopicRef
 from src.workshop0.api._common import api_error
+from src.workshop0.services.locations import CITY_MAX, COUNTRY_MAX, LOCATIONS_MAX, collapse, location_key
 
 log = structlog.get_logger("workshop0")
 
@@ -45,7 +46,6 @@ DESCRIPTION_MAX = 20000
 DURATION_MAX = 80
 NOTE_MAX = 120
 INTERNAL_NOTES_MAX = 5000
-CITY_MAX = 80
 PARTNER_NAME_MAX = 160
 MAX_TOPICS = 8
 AMOUNT_MAX = 100_000_000
@@ -171,7 +171,14 @@ def build_input_schema(topics: list[TopicRef]) -> dict[str, Any]:
             "description_md": {"type": "string"},
             "topics": {"type": "array", "items": slug_schema},
             "location_mode": nullable_enum(LOCATION_MODES),
-            "city": nullable_str,
+            "locations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}, "country": nullable_str},
+                    "required": ["city", "country"],
+                },
+            },
             "starts_on": nullable_str,
             "ends_on": nullable_str,
             "duration_text": nullable_str,
@@ -205,7 +212,7 @@ def build_input_schema(topics: list[TopicRef]) -> dict[str, Any]:
             "description_md",
             "topics",
             "location_mode",
-            "city",
+            "locations",
             "starts_on",
             "ends_on",
             "duration_text",
@@ -302,6 +309,45 @@ def _scrub_pattern(names: set[str]) -> re.Pattern[str] | None:
     return re.compile(r"(?<![\w])(?:" + "|".join(parts) + r")(?![\w])", re.IGNORECASE)
 
 
+def _guard_locations(raw: Any) -> list[dict[str, str | None]]:
+    """Guardrail 2 (Phase 11c): objects only, cleaned/truncated city (empty -> dropped) and
+    country (empty/non-string -> null), first-wins dedupe by `location_key`, at most 10."""
+    out: list[dict[str, str | None]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        city = _clean(item.get("city"), CITY_MAX)
+        if not city:
+            continue
+        country = _clean(item.get("country"), COUNTRY_MAX) or None
+        key = location_key(city, country)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"city": city, "country": country})
+        if len(out) >= LOCATIONS_MAX:
+            break
+    return out
+
+
+def _scrub_locations(locations: list[dict[str, str | None]]) -> list[dict[str, str | None]]:
+    """Guardrail 8 for locations: contacts removed; an item whose city is left empty is dropped;
+    re-deduped since scrubbing can make two items equal."""
+    out: list[dict[str, str | None]] = []
+    seen: set[tuple[str, str]] = set()
+    for loc in locations:
+        city = collapse(_strip_contacts(loc["city"] or ""))
+        if not city:
+            continue
+        country = collapse(_strip_contacts(loc["country"] or "")) or None
+        key = location_key(city, country)
+        if key not in seen:
+            seen.add(key)
+            out.append({"city": city, "country": country})
+    return out
+
+
 def _strip_contacts(text: str) -> str:
     text = _PHONE.sub("", _EMAIL.sub("", text))
     return re.sub(r"[ \t]{2,}", " ", text)
@@ -344,7 +390,7 @@ def drafted_fields_of(draft: dict[str, Any]) -> list[str]:
         "summary": filled("summary"),
         "description_md": filled("description_md"),
         "topics": filled("topic_slugs"),
-        "location": filled("location_mode", "city"),
+        "location": filled("location_mode", "locations"),
         "dates": filled("starts_on", "ends_on"),
         "duration_text": filled("duration_text"),
         "deadline": filled("deadline_on"),
@@ -382,12 +428,10 @@ def guard_draft(
     duration_text = _clean(content.get("duration_text"), DURATION_MAX) or None
     internal_notes = _clean(content.get("internal_notes"), INTERNAL_NOTES_MAX, multiline=True) or None
 
-    # 2. enums + city
+    # 2. enums + locations
     type_ = _enum(content.get("type"), TYPES)
     location_mode = _enum(content.get("location_mode"), LOCATION_MODES)
-    city = _clean(content.get("city"), CITY_MAX) or None
-    if location_mode == "remote":
-        city = None
+    locations = [] if location_mode == "remote" else _guard_locations(content.get("locations"))
 
     # 3. topics
     topic_slugs = _guard_topics(content.get("topics"), {t.slug for t in topics})
@@ -423,6 +467,7 @@ def guard_draft(
     summary = " ".join(_strip_contacts(summary).split())
     description = _strip_contacts(description).strip()
     title = title if len(title) >= TITLE_MIN else ""
+    locations = _scrub_locations(locations)
 
     # 9. rejection
     if not title and not summary and not topic_slugs:
@@ -435,7 +480,7 @@ def guard_draft(
         "description_md": description or None,
         "topic_slugs": topic_slugs,
         "location_mode": location_mode,
-        "city": city,
+        "locations": locations,
         "starts_on": starts.isoformat() if starts else None,
         "ends_on": ends.isoformat() if ends else None,
         "duration_text": duration_text,

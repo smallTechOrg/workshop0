@@ -353,7 +353,9 @@ class Opportunity(Base):
     location_mode: Mapped[str] = mapped_column(
         String(16), nullable=False, default="remote", server_default="remote"
     )
-    city: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(80), nullable=True)  # mirror of locations[0].city
+    # JSON list of {"city", "country"}; parsed via services/locations.parse_stored
+    locations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     starts_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     ends_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     duration_text: Mapped[str | None] = mapped_column(String(80), nullable=True)

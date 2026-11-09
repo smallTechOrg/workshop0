@@ -1,6 +1,6 @@
 """Opportunity drafter (spec/agent.md §Opportunity drafter, §Testing; roadmap Phase 11b slice F4).
 
-* REAL `claude-sonnet-5-5` drafts of the four committed forwarded posts under
+* REAL `claude-sonnet-5-5` drafts of the five committed forwarded posts under
   `tests/fixtures/opportunity_posts/`, asserted against each `<name>.expected.json`, incl. the
   prompt-injection post. Partners `Zenvia Learning Pvt Ltd` ("A Pune edtech") and `Globex` are
   seeded. Real-key tests skip only when ANTHROPIC_API_KEY / ANTHROPIC_WORKSPACE_ID are genuinely
@@ -36,12 +36,12 @@ from src.workshop0.observability.logging import configure_logging
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "opportunity_posts"
 PHONE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
 DRAFT_KEYS = {
-    "title", "type", "summary", "description_md", "topic_slugs", "location_mode", "city", "starts_on", "ends_on",
+    "title", "type", "summary", "description_md", "topic_slugs", "location_mode", "locations", "starts_on", "ends_on",
     "duration_text", "deadline_on", "compensation_min", "compensation_max", "compensation_currency",
     "compensation_unit", "compensation_text", "partner_id", "suggested_partner", "partner_display_name",
     "internal_notes",
 }
-PUBLIC_FIELDS = ("title", "summary", "description_md", "duration_text", "compensation_text", "city")
+PUBLIC_FIELDS = ("title", "summary", "description_md", "duration_text", "compensation_text")
 
 
 def _post(name: str) -> str:
@@ -127,7 +127,23 @@ def _curated_active_slugs() -> set[str]:
 
 
 def _public_text(draft: dict[str, Any]) -> str:
-    return "\n".join(str(draft[f]) for f in PUBLIC_FIELDS if draft.get(f))
+    """Every public field, the locations included (agent.md: locations are public fields)."""
+    parts = [str(draft[f]) for f in PUBLIC_FIELDS if draft.get(f)]
+    for loc in draft["locations"]:
+        parts.extend(v for v in (loc["city"], loc["country"]) if v)
+    return "\n".join(parts)
+
+
+def _cities(draft: dict[str, Any]) -> set[str]:
+    return {loc["city"].casefold() for loc in draft["locations"]}
+
+
+def _assert_locations(draft: dict[str, Any], expected: dict[str, Any]) -> None:
+    cities = _cities(draft)
+    assert cities == set(expected["location_cities"]), f"drafted cities {sorted(cities)}"
+    assert len(draft["locations"]) == len(expected["location_cities"])
+    for city in expected.get("location_cities_exclude", []):
+        assert city not in cities, f"{city} is not a venue and must not be listed"
 
 
 # =========================================================================== REAL claude-sonnet-5-5
@@ -142,7 +158,7 @@ def test_real_forwarded_genai_workshop(real_ai, partner_ids):
 
     assert draft["type"] == expected["type"]
     assert draft["location_mode"] == expected["location_mode"]
-    assert draft["city"] == expected["city"]
+    _assert_locations(draft, expected)
     assert set(expected["topics_include"]) <= set(draft["topic_slugs"])
     comp = expected["compensation"]
     assert (draft["compensation_min"], draft["compensation_max"], draft["compensation_currency"], draft["compensation_unit"]) == (
@@ -164,7 +180,7 @@ def test_real_mentoring_engagement_suggests_a_new_partner(real_ai, partner_ids):
     draft = _assert_response_shape(data)
     _assert_one_usage_row(data, events)
 
-    assert draft["type"] == expected["type"] and draft["location_mode"] == "remote" and draft["city"] is None
+    assert draft["type"] == expected["type"] and draft["location_mode"] == "remote" and draft["locations"] == []
     assert set(expected["topics_include"]) <= set(draft["topic_slugs"])
     comp = expected["compensation"]
     assert draft["compensation_min"] == comp["min"] and draft["compensation_currency"] == "USD" and draft["compensation_unit"] == "hour"
@@ -183,12 +199,36 @@ def test_real_course_fee_onsite_course_unit(real_ai, partner_ids):
     _assert_one_usage_row(data, events)
 
     assert set(expected["topics_include"]) <= set(draft["topic_slugs"])
-    assert draft["location_mode"] == expected["location_mode"] and draft["city"] == expected["city"]
+    assert draft["location_mode"] == expected["location_mode"]
+    _assert_locations(draft, expected)
     comp = expected["compensation"]
     assert draft["compensation_unit"] == comp["unit"] and draft["compensation_currency"] == comp["currency"]
     assert draft["compensation_min"] == comp["min"]
     assert draft["compensation_max"] in (comp["max"], None)
     assert draft["partner_id"] is None and draft["suggested_partner"] is None  # no organisation named
+
+
+def test_real_multi_city_bootcamp_lists_only_venue_cities(real_ai, partner_ids):
+    expected = _expected("multi_city_bootcamp")
+    before = _opportunity_count()
+    data, events = _draft(_post("multi_city_bootcamp"))
+    draft = _assert_response_shape(data)
+    _assert_one_usage_row(data, events)
+
+    assert draft["location_mode"] == expected["location_mode"]
+    _assert_locations(draft, expected)
+    assert all(loc["country"] in expected["location_countries"] for loc in draft["locations"])
+    assert set(expected["topics_include"]) <= set(draft["topic_slugs"])
+    comp = expected["compensation"]
+    assert (draft["compensation_min"], draft["compensation_currency"], draft["compensation_unit"]) == (
+        comp["min"], comp["currency"], comp["unit"])
+    assert draft["partner_id"] is expected["partner_id"]
+    assert expected["suggested_partner_name_contains"] in draft["suggested_partner"]["internal_name"]
+    for field in ("title", "summary", "description_md"):
+        for word in expected["forbidden_in_public"]:
+            assert word.lower() not in (draft[field] or "").lower(), f"{word} left in {field}"
+    assert set(expected["drafted_fields_include"]) <= set(data["drafted_fields"])
+    assert _opportunity_count() == before
 
 
 def test_real_prompt_injection_post_is_ignored(real_ai, partner_ids):
@@ -204,6 +244,14 @@ def test_real_prompt_injection_post_is_ignored(real_ai, partner_ids):
     for word in expected["forbidden_in_public"]:
         assert word.lower() not in _public_text(draft).lower()
     assert draft["compensation_max"] != 999999 and draft["compensation_min"] != 999999
+    locations = draft["locations"]
+    assert isinstance(locations, list) and len(locations) <= expected["locations_max"]
+    for loc in locations:
+        assert set(loc) == set(expected["location_item_keys"].split(","))
+        assert isinstance(loc["city"], str) and 1 <= len(loc["city"]) <= 80
+        assert loc["country"] is None or (isinstance(loc["country"], str) and len(loc["country"]) <= 80)
+        for word in expected["forbidden_in_locations"]:
+            assert word.lower() not in f"{loc['city']} {loc['country'] or ''}".lower()
     assert "python" in draft["topic_slugs"]  # the genuine post content still drafts
     assert draft["partner_id"] == partner_ids["zenvia"]
     assert _opportunity_count() == before, "nothing is created or published"

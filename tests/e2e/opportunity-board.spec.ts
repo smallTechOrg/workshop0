@@ -384,7 +384,14 @@ async function fillEditor(
     opts.location,
     opts.location === 'hybrid' ? 'Hybrid' : 'Remote',
   );
-  if (opts.city) await fillStable(page.getByTestId('opp-city-input'), opts.city);
+  if (opts.city) {
+    // Phase 11c: the single City input is now a chips input (type + Enter).
+    const cityInput = page.getByTestId('opp-location-city-input');
+    await fillStable(cityInput, opts.city);
+    await cityInput.press('Enter');
+    await expect(page.getByTestId('opp-location-chip')).toHaveCount(1);
+    await expect(page.getByTestId('opp-location-chip-label')).toHaveText(opts.city);
+  }
   await fillDeadline(page, opts.deadlineDays);
   if (opts.partnerDisplay) {
     await fillStable(page.getByTestId('opp-partner-display-input'), opts.partnerDisplay);

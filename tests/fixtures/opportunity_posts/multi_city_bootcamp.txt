@@ -1,0 +1,26 @@
+Subject: Trainers wanted - 5-day Data Engineering + SQL bootcamp, three cities, March 2027
+
+Hello smallTech team,
+
+Initech Analytics is rolling out an internal data upskilling programme and we are looking for
+trainers to deliver a 5-day onsite bootcamp on Data Engineering and SQL. We will run one cohort
+each in Bengaluru, Pune and Hyderabad, India, at our client delivery centres, with around 25
+analysts per cohort. A trainer may take one cohort or several.
+
+Our head office is in Mumbai, but no sessions will be held there. The programme manager joins
+from Chennai over Zoom for the kick-off and the final demo day only; nobody attends in Chennai.
+
+Content we need: SQL from joins to window functions, data modelling, building batch ELT pipelines,
+orchestration basics and data quality checks. Participants know Excel and some SQL; labs on a
+cloud warehouse are expected every day.
+
+Fee: Rs 15,000 per day per trainer. Venue, lunch and local travel are covered by us.
+The cohorts start on 1 March 2027 and run Monday to Friday.
+
+Please reply with your profile and the cohort(s) you can take.
+
+Regards,
+Rahul Mehta
+Programme Manager, Initech Analytics
+14th Floor, Nariman Point, Mumbai 400021
+rahul.mehta@initech.example | +91 99300 55512

@@ -356,7 +356,7 @@ Every other failure uses the existing catalogue (`invalid_admin_key`, `not_found
  "published_at": "2026-11-10T09:00:00Z", "status": "open",
  "public_url": "http://localhost:8001/opportunities/12"}
 ```
-**PublicOpportunityDetail** = card + `"description_md": "…"`.
+**PublicOpportunityDetail** = card + `"description_md": "…"`. From Phase 11c the card also carries `locations` and `city` is derived from it (§Phase 11c).
 
 **Hard rule (gate-tested):** no public response ever contains the keys `partner_internal_name`, `internal_notes`, `stored_status`, or the values of those fields. Public serializers are an explicit allow-list (the field list above), never "model minus some fields".
 
@@ -569,7 +569,7 @@ The response (`OpportunityDraft` = `draft`):
 ```json
 {"data": {"draft": {"title": "GenAI & Python workshop for 30 engineers", "type": "workshop",
    "summary": "…", "description_md": "…",
-   "topic_slugs": ["generative-ai", "python"], "location_mode": "hybrid", "city": "Pune",
+   "topic_slugs": ["generative-ai", "python"], "location_mode": "hybrid", "locations": [{"city": "Pune", "country": null}],
    "starts_on": "2027-02-08", "ends_on": "2027-02-09", "duration_text": "2 days", "deadline_on": "2027-01-15",
    "compensation_min": 8000, "compensation_max": 12000, "compensation_currency": "INR", "compensation_unit": "day",
    "compensation_text": "plus travel",
@@ -585,12 +585,65 @@ The response (`OpportunityDraft` = `draft`):
 - `suggested_partner` is `{"internal_name", "display_name"}` when the post names an organisation that matches no partner (then `partner_id` is null).
 - `drafted_fields` lists the keys, from the fixed set above, whose guarded value is non-empty:
   - `topics` covers `topic_slugs`;
-  - `location` covers `location_mode` and `city`;
+  - `location` covers `location_mode` and `locations` (it covered `city` until Phase 11c, §Phase 11c);
   - `dates` covers `starts_on` and `ends_on`;
   - `deadline` covers `deadline_on`;
   - `compensation` covers the four structured fields and the note;
   - `partner` covers `partner_id` or `suggested_partner`.
 - `cost_usd` is the recorded row's cost, a 6-dp number.
+
+---
+
+# Phase 11c — Multi-location opportunities (contract changes only; no new endpoint)
+
+Normative for slices M2–M5 ([roadmap.md](roadmap.md) §Phase 11c). Schema and invariants: [data-model.md](data-model.md) §Phase 11c. Drafter: [agent.md](agent.md) §Opportunity drafter. No new router, error code, setting or environment variable.
+
+**Location** (shared shape): `{"city": "Bengaluru", "country": "India"}`. `country` may be `null`. Serializers rebuild each item with exactly these two keys and never pass the stored JSON through.
+
+## Request fields (POST and PATCH `/api/admin/opportunities…`; same merge semantics as Phase 10)
+
+- **`locations`** (array of Location \| null). This is the new field, and the editor sends only this one.
+  - Each item is an object with a string `city` and an optional `country` (string \| null). City and country are trimmed and internal whitespace is collapsed. A blank country becomes null.
+  - Duplicates are dropped under the dedupe key in data-model.md §Phase 11c. The first occurrence wins and order is preserved.
+  - `null` means `[]` (clear).
+  - The list is then checked against the merged post-write state. `remote` forces `[]`, and `onsite` or `hybrid` need at least 1 entry.
+- **`city`** (string \| null, **legacy**, still accepted so existing clients, fixtures and the Phase-10/11b tests keep working). It is used only when `locations` is absent from the body. If both are present, `locations` wins and `city` is ignored.
+  - A non-blank value becomes `locations = [{"city": <collapsed value>, "country": null}]`. This **replaces** the whole list, including on PATCH.
+  - `null` or blank becomes `locations = []`.
+  - Its own bound is unchanged: `"city: must be at most 80 characters"`.
+
+**Validation messages (exact):**
+
+| Condition | Message |
+|---|---|
+| `locations` is not an array, an item is not an object, `city` is missing or not a string, or an item has a key other than `city`/`country` | `"locations: each location needs a city and an optional country"` |
+| A city that is blank after trimming, or longer than 80 characters | `"locations: city must be 1–80 characters"` |
+| A country longer than 80 characters, or not a string or null | `"locations: country must be at most 80 characters"` |
+| More than 10 entries **after** dedupe | `"locations: at most 10 locations"` |
+| Merged mode is `onsite`/`hybrid` with an empty list, and the body **contains** `locations` | `"locations: add at least one city for onsite or hybrid"` |
+| Merged mode is `onsite`/`hybrid` with an empty list, and the body does **not** contain `locations` (legacy `city`, or neither field, e.g. `{"location_mode": "onsite"}`) | `"city: required for onsite or hybrid"`. This is the Phase-10 message, unchanged |
+
+> **Assumed (legacy compatibility):** legacy `city` stays accepted on write and emitted on read indefinitely, because existing fixtures, e2e seeding and any external script use it. The required-city message depends on whether the body used `locations`, so every Phase-10 test that asserts `"city: required for onsite or hybrid"` passes unedited. The `draft` object drops `city`, because its only consumer is the editor shipped in the same change.
+
+**Audit:** `changed_fields` reports **`locations`** for any change to the normalized list, including a reorder. It no longer reports `city`. A legacy `city` write that yields the same list as before is a no-op, with no audit row and an unchanged `updated_at`.
+
+## Response fields
+
+**AdminOpportunity (rows and full)** and **PublicOpportunityCard / Detail** each gain:
+- `"locations": [<Location>, …]`. This is always an array (`[]` when remote), produced by the read rule (`services/locations.py::parse_stored`).
+- `"city"` **stays**. It is now **derived** as `locations[0].city`, or `null` when the list is empty, so existing readers keep working. New UI code reads `locations` only.
+
+Example (public card, the changed keys only): `"location_mode": "hybrid", "city": "Bengaluru", "locations": [{"city": "Bengaluru", "country": "India"}, {"city": "Pune", "country": null}, {"city": "Hyderabad", "country": null}]`.
+
+`locations` is added to the explicit public allow-list. The Phase-10/11b **hard rule** is extended: no public response contains the key `locations_json`, and every Location object has exactly the keys `city` and `country`.
+
+## Filters
+
+Today's public board filters are `type`, `topic` and `sort` only, and the admin list filters by `status`, `type` and `q` (over title and partner names). **Neither has a city or location filter, so Phase 11c adds none.** `q` does not start matching cities. If a location filter is added later, it must match **any** listed city, case-insensitively.
+
+## Drafting response (`POST /api/admin/opportunity-draft`)
+
+The `draft` object replaces `"city"` with **`"locations": [<Location>, …]`** (always present, `[]` when not drafted or remote). The draft has a single consumer, the editor, so no legacy `city` key is kept there. The **`drafted_fields`** value stays **`location`**. It now covers `location_mode` and `locations` (a non-empty list), and the fixed set of values is unchanged.
 
 ---
 

@@ -12,6 +12,9 @@
 
 import { ApiError } from "@/lib/api";
 import type { CompensationUnit, Currency } from "@/lib/compensation";
+import type { Location, LocationMode } from "@/lib/locations";
+
+export type { Location, LocationMode } from "@/lib/locations";
 
 // ---------------------------------------------------------------------------
 // Fetch helper (same envelope handling as lib/api.ts)
@@ -65,8 +68,6 @@ export const OPPORTUNITY_TYPES = [
 ] as const;
 export type OpportunityType = (typeof OPPORTUNITY_TYPES)[number];
 
-export type LocationMode = "remote" | "onsite" | "hybrid";
-
 /** Effective status. The public list only ever returns `open`. */
 export type PublicOpportunityStatus = "open" | "expired" | "closed";
 
@@ -90,7 +91,10 @@ export interface PublicOpportunityCard {
   partner_display_name: string | null;
   topics: PublicTopicRef[];
   location_mode: LocationMode;
-  city: string | null;
+  /** Every location, in order (`[]` when remote). Phase 11c. */
+  locations: Location[];
+  /** Legacy, read-only: `locations[0].city`. New UI code reads `locations`. */
+  readonly city: string | null;
   starts_on: string | null;
   ends_on: string | null;
   duration_text: string | null;
@@ -235,13 +239,6 @@ export const DEFAULT_PARTNER_NAME = "smallTech partner network";
 export function partnerName(o: { partner_display_name: string | null }): string {
   const n = o.partner_display_name?.trim();
   return n ? n : DEFAULT_PARTNER_NAME;
-}
-
-/** "Remote" · "Bengaluru · Onsite" · "Bengaluru · Hybrid" */
-export function locationLabel(o: { location_mode: LocationMode; city: string | null }): string {
-  if (o.location_mode === "remote") return "Remote";
-  const mode = o.location_mode === "onsite" ? "Onsite" : "Hybrid";
-  return o.city ? `${o.city} · ${mode}` : mode;
 }
 
 /** "30 Nov" (adds the year when it isn't the current one). */

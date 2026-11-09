@@ -148,14 +148,14 @@ A curated list of tech topics that listings (and, from Phase 11, trainer profile
 
 ---
 
-## C9 — Opportunity management for admins *(Phase 10; partners, paste-to-fill and compensation in Phase 11b)*
+## C9 — Opportunity management for admins *(Phase 10; partners, paste-to-fill and compensation in Phase 11b; multiple locations in Phase 11c)*
 
 Admins create, edit, publish and close listings; listings auto-expire at their deadline.
 
 **Pages (same key gate as Admin Home; Admin Home's header gains a real **Opportunities** link and a **Trainer network** labelled stub):**
 - **Opportunities — `/app/admin/opportunities/`**: status tabs **All · Draft · Open · Expired · Closed** with counts; search box (title / partner names); table rows: title, type pill, public partner name with the internal partner name beneath in muted text and a lock icon, topics (≤3 + "+n"), deadline (relative: "in 5 days" / "expired 2 days ago"), status pill, updated. Row click → editor. Header button **+ New opportunity**. Empty state: "No opportunities yet — post the first one." Paginated (25). Labelled stubs on this page: **Applicants** column and **Suggested trainers** action (Phase 12), **Trainer pool** nav (Phase 11), **Outbox** nav (Phase 12).
 - **Editor — `/app/admin/opportunities/edit/?id=<id>`** (no `id` = new): two clearly separated groups.
-  - **Public details** — title, type, summary (280 counter), description (markdown Write/Preview tabs, the existing Markdown primitive), topics (searchable multi-select grouped by category, max 8, active topics only), location mode (Remote / Onsite / Hybrid; city appears and is required for Onsite/Hybrid), start/end dates, duration, compensation (public text), **deadline** (date + time in the admin's local time zone, shown with its UTC equivalent; defaults to 30 days out at 23:59), **public partner name** (placeholder "smallTech partner network").
+  - **Public details** — title, type, summary (280 counter), description (markdown Write/Preview tabs, the existing Markdown primitive), topics (searchable multi-select grouped by category, max 8, active topics only), location mode (Remote / Onsite / Hybrid; city appears and is required for Onsite/Hybrid. From Phase 11c this is a multi-city chips input, §C9 additions — Phase 11c), start/end dates, duration, compensation (public text), **deadline** (date + time in the admin's local time zone, shown with its UTC equivalent; defaults to 30 days out at 23:59), **public partner name** (placeholder "smallTech partner network").
   - **Internal — only admins see this** (tinted panel with a lock icon) — internal partner name, internal notes.
   - A live **public card preview** renders exactly what the board will show (proving the internal fields are absent).
   - Actions by state: draft → **Save draft** / **Publish**; open → **Save** / **Close** / **Unpublish**; expired → banner "Expired — extend the deadline to reopen" + **Save** / **Close**; closed → **Reopen** (requires a future deadline) / **Save**. Field errors from `validation_error` render inline on the named field; nothing typed is ever lost on error. After save: toast + the status pill updates; **Copy public link** (the pretty `/opportunities/<id>` URL) is shown once the listing has been published.
@@ -178,7 +178,7 @@ Admins create, edit, publish and close listings; listings auto-expire at their d
 - **Compensation (public details):** amount **min** and **max** (one is enough; equal means a single value), **currency** (INR / USD), **unit** (per hour / per day / per course / per month), and an optional **note** (the former compensation text, e.g. "plus travel", "Pro bono"). Currency and unit are required once an amount is entered. Errors show inline.
 - **Paste the forwarded description** box, at the top of a new listing and collapsed under **Draft from a forwarded description** on an existing one:
   1. The admin pastes the partner's email or post, optionally ticks **Keep the partner's name in the public text**, and clicks **Draft**. A skeleton shows while drafting (up to ~20 s).
-  2. The form is pre-filled for review: title, type, summary, a **cleaned public description**, topics (**only from the curated list**), Remote / Hybrid / Onsite and city, start/end dates, duration, deadline, compensation with unit and note, the partner, the public partner name and internal notes.
+  2. The form is pre-filled for review: title, type, summary, a **cleaned public description**, topics (**only from the curated list**), Remote / Hybrid / Onsite and the cities (every city the post names as a venue, from Phase 11c), start/end dates, duration, deadline, compensation with unit and note, the partner, the public partner name and internal notes.
      - The **partner** is either matched against the partner list or offered as "Suggested new partner: *name* — **Add**".
      - The cleaned description has the partner's identity removed (unless kept), and its contacts, emails and phone numbers moved into the internal notes.
   3. Every filled field carries an amber **"Drafted — please check"** chip, which disappears once that field is edited.
@@ -204,14 +204,43 @@ Admins create, edit, publish and close listings; listings auto-expire at their d
 - **Graceful degradation:** with drafting unavailable, the box shows "AI drafting not configured", no AI call is made, and a listing can still be created and published by hand.
 - **Compensation validation:** an amount without currency or unit, or `max < min`, is rejected inline.
 
+### C9 additions — Phase 11c (multi-location listings)
+
+A listing can name **one or more locations**. Each location is a city with an optional country. The work mode (Remote / Onsite / Hybrid) is unchanged. Rules and storage: data-model.md §Phase 11c. Contract: api.md §Phase 11c.
+
+**Editor — Locations (replaces the single City field).** It appears only for Onsite or Hybrid, in the same place the City field was. It is a chips input:
+- a **City** text input and a narrower **Country (optional)** text input, plus an **Add** button;
+- **Enter** in the City input, or clicking **Add**, adds a chip from the two inputs and clears both. If the City text contains commas, each comma-separated part becomes its own chip;
+- **typing or pasting a comma** adds every part before the last comma as a chip, each with the current Country value, and clears the Country input. The text after the last comma stays in the City input. So `Pune,` adds `Pune`, and pasting `Hyderabad, pune` adds `Hyderabad` and leaves `pune` to be added with Enter;
+- leaving the City input (blur) with text still in it adds that chip too, so a typed but un-added city is never silently lost on Save;
+- each chip reads `City` or `City, Country` and has a **×** remove button with `aria-label="Remove <City>"`;
+- chip order is the order added.
+
+The chips input behaves as follows:
+- **Duplicates:** adding a city that is already a chip, ignoring case and extra spaces with the same country, adds nothing and shows a muted hint "Already added" for about 2 s.
+- **Limits:** with 10 chips, the City input is disabled and shows "Up to 10 locations". A city over 80 characters, or a country over 80, shows the inline error "City must be 80 characters or fewer" or "Country must be 80 characters or fewer", and is not added.
+- **Server errors:** a `validation_error` on `locations:` or on the legacy `city:` renders inline under the chips input. For example, saving Onsite with no chips shows the server's "add at least one city for onsite or hybrid" (or "required for onsite or hybrid").
+- **Switching to Remote** hides the chips but keeps them in the form. They are sent as `[]` while Remote, and switching back restores them.
+- **Paste-to-fill:** drafting fills the chips with every drafted city, and the "Drafted — please check" chip on Location covers the mode and the cities. Removing or adding a chip counts as editing the field and clears the drafted chip.
+- **Public card preview:** it uses the same location rule as the board card (C10).
+
+**Success criteria (11c):**
+- **Migration:** a listing saved with one city before 11c shows that city as its only location after migration. A downgrade restores `city` to the first location's city.
+- **Multiple cities:** a listing saved with Bengaluru (India), Pune and Hyderabad returns them in that order, with `city = "Bengaluru"`.
+- **Dedupe:** `" pune "` after `Pune` is dropped on save.
+- **Limits:** 11 distinct cities are rejected with `locations: at most 10 locations`.
+- **Required for onsite and hybrid:** Onsite or Hybrid with no city is rejected inline. Remote saves with no city and returns `locations: []`.
+- **Legacy clients:** a write with only the legacy `city` stores exactly one location, and existing clients keep getting `city`.
+- **Drafting:** a post naming three venue cities drafts all three, and cities that are only remote participants, the head office or a signature address are not drafted (agent.md fixtures).
+
 ---
 
-## C10 — Public opportunity board *(Phase 10; compensation display Phase 11b)*
+## C10 — Public opportunity board *(Phase 10; compensation display Phase 11b; multi-location display Phase 11c)*
 
 Anyone on the internet can browse what's open; applying arrives with sign-in (Phase 11–12).
 
 **Pages (no auth; linked from the landing page footer as "Opportunities for trainers"; pretty URL `/opportunities`):**
-- **Board — `/app/opportunities/`**: header strip "Opportunities from the smallTech partner network" + one-line subline; **Join our network** CTA (labelled stub in Phase 10 — real in Phase 11). Filter bar: **type** segmented chips (All + the four types), **topic** chips grouped by category with open counts (multi-select = match any), **sort** (Newest / Closing soon). Filter state lives in the URL query (`?type=&topic=&topic=&sort=&page=`) so filtered views are shareable and survive reload. **Cards** (responsive grid): type pill, title, partner display name (or "smallTech partner network"), summary, topic chips (≤4 + "+n"), location (Remote / City · Onsite / City · Hybrid), compensation when present (display rule below; from Phase 11b), **"Apply by 30 Nov"** with an amber "Closes in 3 days" pill when ≤7 days remain. **Pagination**: Previous / Next + "Page 2 of 3", 12 per page. States: loading = skeleton cards; no listings at all = "No open opportunities right now — check back soon."; filters match nothing = "Nothing matches these filters" + **Clear filters**; error = human sentence + Retry.
+- **Board — `/app/opportunities/`**: header strip "Opportunities from the smallTech partner network" + one-line subline; **Join our network** CTA (labelled stub in Phase 10 — real in Phase 11). Filter bar: **type** segmented chips (All + the four types), **topic** chips grouped by category with open counts (multi-select = match any), **sort** (Newest / Closing soon). Filter state lives in the URL query (`?type=&topic=&topic=&sort=&page=`) so filtered views are shareable and survive reload. **Cards** (responsive grid): type pill, title, partner display name (or "smallTech partner network"), summary, topic chips (≤4 + "+n"), location (Remote / City · Onsite / City · Hybrid; several cities per the Phase-11c rule below), compensation when present (display rule below; from Phase 11b), **"Apply by 30 Nov"** with an amber "Closes in 3 days" pill when ≤7 days remain. **Pagination**: Previous / Next + "Page 2 of 3", 12 per page. States: loading = skeleton cards; no listings at all = "No open opportunities right now — check back soon."; filters match nothing = "Nothing matches these filters" + **Clear filters**; error = human sentence + Retry.
 - **Listing — `/app/opportunities/view/?id=<id>`** (pretty `/opportunities/<id>`): back link to the board (preserving filters when arriving from it), title, type pill, partner display name, meta grid (location, dates, duration, compensation, deadline in the viewer's local time), topic chips, rendered markdown description. Side card: when open — "Applications open until …" + **Sign in to apply** (labelled stub in Phase 10; real in Phase 12) + **Copy link**; when expired or closed — a neutral banner "Applications for this opportunity have closed." and no apply control. A **Join our network** stub card ("Get matched to opportunities like this — coming soon"). Draft/unknown id → friendly not-found state "This opportunity isn't available — it may have been removed." + link to the board. The browser tab title is the listing title.
 - **Landing page:** one plain link "Opportunities for trainers" in the footer (no other landing change; still no admin link).
 - **Compensation display (Phase 11b; the one rule for card, listing and admin preview):** the amount part uses the currency symbol (INR `₹`, en-IN digit grouping; USD `$`, en-US grouping), then ` / ` and the unit (`hour`, `day`, `course`, `month`). The note is appended after ` · `.
@@ -226,6 +255,17 @@ Anyone on the internet can browse what's open; applying arrives with sign-in (Ph
     - neither → no compensation line.
 
   There is no compensation filter on the board.
+- **Location display (Phase 11c; one formatter, `frontend/lib/locations.ts`, used by the card, the listing page and the admin preview).** `Mode` is `Onsite` or `Hybrid`. Separators are ` · ` (space, middle dot U+00B7, space).
+  - **Card and admin preview (`locationLabel`):**
+    - remote → `Remote`, unchanged; any cities are ignored;
+    - 0 cities (onsite/hybrid; only reachable through the read-rule edge) → `Onsite` / `Hybrid`, unchanged;
+    - 1 city → `Bengaluru · Hybrid`, unchanged;
+    - 2 cities → `Bengaluru · Pune · Hybrid`;
+    - 3 or more → the first two, then `+N` for the rest: `Bengaluru · Pune · +1 · Hybrid`, `Bengaluru · Pune · +3 · Onsite`.
+    - Countries are never shown on the card. The card's location element carries `title` = every city joined with `, ` (e.g. `Bengaluru, Pune, Hyderabad`), so the hidden cities can be read on hover.
+  - **Listing page (`locationDetailLabel`):** every location in order, each as `City` or `City, Country`, then the mode, for example `Bengaluru, India · Pune · Hyderabad · Hybrid`. Remote → `Remote`.
+  - There is **no location filter** on the board, before or after 11c (api.md §Phase 11c → Filters).
+  - **Success (11c):** the exact strings above render on the card and the listing page for 1, 2, 4 and 5 cities and for remote, and in the preview for 2 and 3 cities and for remote (e2e). Public payloads carry `locations` items with only `city` and `country`.
 
 **Success criteria:** the board lists only open, non-expired listings · with 30 open listings, three pages of 12/12/6 with no duplicates and no gaps · type and topic filters return exactly the matching set and persist in the URL across reload · a closed or expired listing's detail URL still renders with the closed banner · a draft's URL renders not-found · the rendered HTML of board and listing pages never contains the internal partner name · works at 360 px and 1440 px with no horizontal scroll · every stub (Join our network, Sign in to apply) carries the "Coming in a later phase" pill and is non-interactive.
 

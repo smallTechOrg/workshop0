@@ -25,7 +25,7 @@ FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "opportunity_posts
 URL = "/api/admin/opportunity-draft"
 POST = (FIXTURES / "forwarded_genai_workshop.txt").read_text(encoding="utf-8")
 DRAFT_KEYS = {
-    "title", "type", "summary", "description_md", "topic_slugs", "location_mode", "city", "starts_on", "ends_on",
+    "title", "type", "summary", "description_md", "topic_slugs", "location_mode", "locations", "starts_on", "ends_on",
     "duration_text", "deadline_on", "compensation_min", "compensation_max", "compensation_currency",
     "compensation_unit", "compensation_text", "partner_id", "suggested_partner", "partner_display_name",
     "internal_notes",
