@@ -1,14 +1,18 @@
 """Token generation + auth lookups per spec/architecture.md §Auth model."""
 
 import secrets
+from typing import TYPE_CHECKING
 
-from fastapi import Header
+from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.workshop0.api._common import api_error
 from src.workshop0.config.settings import get_settings
 from src.workshop0.db.models import Participant, Workshop
+
+if TYPE_CHECKING:
+    from src.workshop0.auth.deps import AdminActor
 
 
 def generate_admin_token() -> str:
@@ -29,14 +33,15 @@ def admin_key_matches(provided: str | None, expected: str) -> bool:
     return secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
 
-def require_admin_key(x_admin_key: str | None = Header(default=None)) -> None:
-    """FastAPI dependency for the admin surface."""
-    if not admin_key_matches(x_admin_key, get_settings().resolved_admin_key):
-        raise api_error(
-            "invalid_admin_key",
-            "The access key is missing or does not match this server's WORKSHOP0_ADMIN_KEY.",
-            401,
-        )
+def require_admin_key(request: Request) -> "AdminActor":
+    """FastAPI dependency for the admin surface.
+
+    From Phase 11 it delegates to `auth.deps.require_admin`: a valid `X-Admin-Key` behaves
+    exactly as before (401 `invalid_admin_key` otherwise), and a signed-in admin session
+    (email in WORKSHOP0_ADMIN_EMAILS, checked per request) passes without the key."""
+    from src.workshop0.auth.deps import require_admin
+
+    return require_admin(request)
 
 
 def workshop_by_admin_token(session: Session, admin_token: str) -> Workshop:

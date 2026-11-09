@@ -3,7 +3,18 @@ name: CI
 # Runs on every PR and on pushes to the integration branches.
 # Backend unit+integration tests and the frontend production build always run.
 # Playwright e2e runs against a live single-origin server (built frontend served
-# by FastAPI) — the exact shape the app ships in.
+# by FastAPI), which is the exact shape the app ships in.
+#
+# Mirrors the Phase-11 gate (spec/roadmap.md §Phase 11):
+#   - the local OIDC test issuer (tests/support/fake_oidc.py) on :8099 for the
+#     auth integration tests and the sign-in e2e journeys;
+#   - throwaway sign-in settings (test client id/secret, a per-run generated
+#     session secret, admin allowlist, local blob store). None of these are real
+#     credentials; the session secret is generated per run and masked.
+#   - ANTHROPIC_API_KEY / ANTHROPIC_WORKSPACE_ID come from GitHub secrets when
+#     present. When either is absent the real-key tests take their guarded
+#     pytest.skip (CI only). The local gate forbids skips; here the
+#     "none skipped" assertion runs only when both secrets are present.
 
 on:
   pull_request:
@@ -14,11 +25,23 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Phase-11 gate env (test values only; never real credentials).
+  WORKSHOP0_GOOGLE_CLIENT_ID: test-client
+  WORKSHOP0_GOOGLE_CLIENT_SECRET: test-secret
+  WORKSHOP0_OIDC_ISSUER: http://localhost:8099
+  WORKSHOP0_ADMIN_EMAILS: admin@example.test
+  WORKSHOP0_BLOB_BACKEND: local
+  # Real-key network AI (guarded): empty when the secrets are not configured.
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  ANTHROPIC_WORKSPACE_ID: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
+
 jobs:
   backend:
     runs-on: ubuntu-latest
     env:
       TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/workshop0_test
+      WORKSHOP0_ADMIN_KEY: ci-admin-key-0123456789
     services:
       postgres:
         image: postgres:17
@@ -40,12 +63,61 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --frozen
-      - name: Migrations apply cleanly (PostgreSQL)
-        run: uv run alembic upgrade head
+      - name: Generate a per-run session secret + detect network AI keys
+        run: |
+          set -euo pipefail
+          SECRET="$(openssl rand -hex 32)"
+          echo "::add-mask::${SECRET}"
+          echo "WORKSHOP0_SESSION_SECRET=${SECRET}" >> "$GITHUB_ENV"
+          if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ -n "${ANTHROPIC_WORKSPACE_ID:-}" ]; then
+            echo "NETWORK_AI_KEYS=present" >> "$GITHUB_ENV"
+            echo "Anthropic key + workspace id: present (real-key tests run)"
+          else
+            echo "NETWORK_AI_KEYS=absent" >> "$GITHUB_ENV"
+            echo "::warning::ANTHROPIC_API_KEY and/or ANTHROPIC_WORKSPACE_ID secret not set: real-key network AI tests will skip (CI only; the local gate forbids skips)."
+          fi
+      - name: Migrations apply cleanly (PostgreSQL) and reach 0007
+        run: |
+          set -euo pipefail
+          uv run alembic upgrade head
+          uv run alembic current | grep -q '^0007'
         env:
           DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+      - name: Start the local OIDC test issuer (:8099)
+        run: |
+          set -euo pipefail
+          nohup uv run python tests/support/fake_oidc.py --port 8099 > fake_oidc.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8099/.well-known/openid-configuration >/dev/null 2>&1 && { echo "issuer up"; exit 0; }
+            sleep 1
+          done
+          echo "fake OIDC issuer did not start" >&2
+          cat fake_oidc.log >&2 || true
+          exit 1
       - name: Unit + integration tests
         run: uv run pytest tests/unit tests/integration -q
+      - name: Real-key network AI tests ran (none skipped)
+        if: env.NETWORK_AI_KEYS == 'present'
+        run: |
+          set -euo pipefail
+          OUT="$(uv run pytest tests/unit/ai tests/integration/ai_network -q -rs)"
+          echo "$OUT" | tail -20
+          if echo "$OUT" | grep -q SKIPPED; then
+            echo "real-key network AI tests were skipped although both secrets are set" >&2
+            exit 1
+          fi
+      - name: Network AI static guards
+        run: |
+          set -euo pipefail
+          # Note: a `!`-negated command never trips `set -e`, so each guard fails explicitly.
+          # One Anthropic client construction site.
+          if grep -rn --include='*.py' 'Anthropic(' src | grep -v '^src/workshop0/ai/anthropic_client.py:'; then
+            echo "Anthropic( constructed outside src/workshop0/ai/anthropic_client.py" >&2; exit 1
+          fi
+          # Network AI never uses OpenRouter.
+          if grep -il openrouter src/workshop0/ai/{anthropic_client,pricing,usage,profile_draft}.py; then
+            echo "network AI modules reference OpenRouter" >&2; exit 1
+          fi
 
   frontend-build:
     runs-on: ubuntu-latest
@@ -63,6 +135,16 @@ jobs:
         working-directory: frontend
       - run: pnpm build
         working-directory: frontend
+      - name: Phase-11 pages exported + Tailwind compiled
+        run: |
+          set -euo pipefail
+          for p in signin network network/join network/me admin/network admin/network/trainer; do
+            test -f "frontend/out/$p/index.html" || { echo "missing frontend/out/$p/index.html" >&2; exit 1; }
+          done
+          grep -q '\.flex' frontend/out/_next/static/css/*.css
+          if grep -q '@source' frontend/out/_next/static/css/*.css; then
+            echo "uncompiled Tailwind @source directive in the CSS bundle" >&2; exit 1
+          fi
 
   e2e:
     runs-on: ubuntu-latest
@@ -98,21 +180,63 @@ jobs:
         with:
           node-version-file: frontend/.nvmrc
           cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache-dependency-path: |
+            frontend/pnpm-lock.yaml
+            pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
         working-directory: frontend
       - name: Build frontend (served by the API at /app)
         run: pnpm build
         working-directory: frontend
+      - name: Install root e2e deps (Playwright)
+        run: pnpm install --frozen-lockfile
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
+      - name: Generate a per-run session secret + detect network AI keys
+        run: |
+          set -euo pipefail
+          SECRET="$(openssl rand -hex 32)"
+          echo "::add-mask::${SECRET}"
+          echo "WORKSHOP0_SESSION_SECRET=${SECRET}" >> "$GITHUB_ENV"
+          if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ -n "${ANTHROPIC_WORKSPACE_ID:-}" ]; then
+            echo "NETWORK_AI_KEYS=present" >> "$GITHUB_ENV"
+          else
+            echo "NETWORK_AI_KEYS=absent" >> "$GITHUB_ENV"
+            echo "::warning::ANTHROPIC_API_KEY and/or ANTHROPIC_WORKSPACE_ID secret not set: the server boots with network AI unavailable (CV drafting is 'skipped')."
+          fi
+      - name: Start the local OIDC test issuer (:8099)
+        run: |
+          set -euo pipefail
+          nohup uv run python tests/support/fake_oidc.py --port 8099 > fake_oidc.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8099/.well-known/openid-configuration >/dev/null 2>&1 && { echo "issuer up"; exit 0; }
+            sleep 1
+          done
+          echo "fake OIDC issuer did not start" >&2
+          cat fake_oidc.log >&2 || true
+          exit 1
       - name: Migrate + boot server
         run: |
+          set -euo pipefail
           uv run alembic upgrade head
-          uv run python -m src &
-          for i in $(seq 1 20); do curl -fsS http://localhost:8001/api/health && break || sleep 1; done
+          nohup uv run python -m src > server.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8001/api/health >/dev/null 2>&1 && { echo "server up"; break; }
+            sleep 1
+          done
+          curl -fsS http://localhost:8001/api/health >/dev/null || { cat server.log >&2; exit 1; }
+      - name: Phase-11 smoke (pretty invite redirect, signed-out CV paste)
+        run: |
+          set -euo pipefail
+          curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8001/invite/abc | grep -qx 307
+          curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/me/cv/text | grep -qx 401
       - name: Playwright e2e
-        run: BASE_URL=http://localhost:8001 pnpm exec playwright test --reporter=line
+        run: BASE_URL=http://localhost:8001 pnpm exec playwright test tests/e2e --reporter=line
+      - name: Server + issuer logs (on failure)
+        if: failure()
+        run: |
+          tail -200 server.log || true
+          tail -100 fake_oidc.log || true
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

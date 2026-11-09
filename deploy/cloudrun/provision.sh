@@ -5,8 +5,10 @@
 #
 # Run from the repo root as an operator authenticated to gcloud (and gh, optional).
 # Prints `CREATED <what>` for every resource it creates, `EXISTS <what>` for every
-# pre-existing one. Touches only workshop0-prefixed resources. Secret values are
-# piped via stdin and never printed. Exits non-zero on any failure.
+# pre-existing one, and `SKIPPED <what>` for an optional resource whose value is absent
+# (Google client secret, Anthropic key/workspace id: export them or put them in .env and
+# re-run). Touches only workshop0-prefixed resources. Secret values are piped via stdin
+# (never argv) and never printed. Exits non-zero on any failure.
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-ai-agent-boilerplate0}"
@@ -29,7 +31,11 @@ DBINIT_JOB="workshop0-dbinit"
 # dbinit runs from a public Google image (the app image does not exist before the
 # first deploy); psycopg is pip-installed at job start, dbinit.py is passed as base64.
 DBINIT_IMAGE="gcr.io/google.com/cloudsdktool/google-cloud-cli:slim"
-SECRETS=(workshop0-database-url workshop0-openrouter-api-key workshop0-admin-key)
+# Phase 11: private CV bucket (architecture.md §CV storage).
+CV_BUCKET="${CV_BUCKET:-${PROJECT_ID}-workshop0-cvs}"
+SECRETS=(workshop0-database-url workshop0-openrouter-api-key workshop0-admin-key
+         workshop0-session-secret workshop0-google-client-secret
+         workshop0-anthropic-api-key workshop0-anthropic-workspace-id)
 
 DRY=0
 ROTATE=""
@@ -52,6 +58,7 @@ G=(--project "$PROJECT_ID")
 created() { echo "CREATED $1"; }
 exists()  { echo "EXISTS $1"; }
 would()   { echo "WOULD CREATE $1"; }
+skipped() { echo "SKIPPED $1"; }
 info()    { echo "INFO $1"; }
 die()     { echo "ERROR $1" >&2; exit 1; }
 
@@ -89,7 +96,7 @@ gcloud auth list --filter=status:ACTIVE --format='value(account)' | grep -q . ||
 
 # 1. APIs ------------------------------------------------------------------
 enabled="$(gcloud services list --enabled "${G[@]}" --format='value(config.name)')"
-for api in run artifactregistry secretmanager sqladmin iamcredentials; do
+for api in run artifactregistry secretmanager sqladmin iamcredentials storage; do
   if grep -qx "${api}.googleapis.com" <<<"$enabled"; then exists "api ${api}"
   elif [ $DRY -eq 1 ]; then would "api ${api}"
   else gcloud services enable "${api}.googleapis.com" "${G[@]}" >/dev/null; created "api ${api}"; fi
@@ -201,6 +208,19 @@ put_secret() { # name, value-producing function
 val_dburl()  { make_url "$PW"; }
 val_openrouter() { source_value OPENROUTER_API_KEY; }
 val_adminkey()   { source_value WORKSHOP0_ADMIN_KEY; }
+val_session()    { openssl rand -hex 32; }   # generated; goes straight into the pipe
+val_google()     { source_value WORKSHOP0_GOOGLE_CLIENT_SECRET; }
+val_anthropic_key()       { source_value ANTHROPIC_API_KEY; }
+val_anthropic_workspace() { source_value ANTHROPIC_WORKSPACE_ID; }
+
+# Optional operator-supplied secret: an absent source value prints SKIPPED, never dies.
+# Only a create or an explicit --rotate needs the value; an existing secret is left as is.
+put_optional_secret() { # name, source-env-key, value-producing function
+  local name="$1" key="$2" fn="$3"
+  if secret_exists "$name" && [ "$ROTATE" != "$name" ]; then exists "secret $name"; return; fi
+  if ! have_source "$key"; then skipped "secret $name (set $key and re-run)"; return; fi
+  put_secret "$name" "$fn"
+}
 
 # Pre-flight: refuse before creating anything half-way if a needed source value is missing.
 if ! secret_exists workshop0-openrouter-api-key || [ "$ROTATE" = "workshop0-openrouter-api-key" ]; then
@@ -212,6 +232,10 @@ fi
 put_secret workshop0-database-url val_dburl
 put_secret workshop0-openrouter-api-key val_openrouter
 put_secret workshop0-admin-key val_adminkey
+put_secret workshop0-session-secret val_session
+put_optional_secret workshop0-google-client-secret WORKSHOP0_GOOGLE_CLIENT_SECRET val_google
+put_optional_secret workshop0-anthropic-api-key ANTHROPIC_API_KEY val_anthropic_key
+put_optional_secret workshop0-anthropic-workspace-id ANTHROPIC_WORKSPACE_ID val_anthropic_workspace
 PW=""
 
 # 7. IAM -------------------------------------------------------------------
@@ -222,8 +246,22 @@ bind_secret() { # secret member role label
   elif [ $DRY -eq 1 ]; then would "iam $4 on $1"
   else gcloud secrets add-iam-policy-binding "$1" --member "$2" --role "$3" "${G[@]}" >/dev/null; created "iam $4 on $1"; fi
 }
+# Source env key of each optional secret (absent value => secret SKIPPED above).
+optional_secret_key() {
+  case "$1" in
+    workshop0-google-client-secret)   echo WORKSHOP0_GOOGLE_CLIENT_SECRET ;;
+    workshop0-anthropic-api-key)      echo ANTHROPIC_API_KEY ;;
+    workshop0-anthropic-workspace-id) echo ANTHROPIC_WORKSPACE_ID ;;
+    *) echo "" ;;
+  esac
+}
 for s in "${SECRETS[@]}"; do
-  if ! secret_exists "$s" && [ $DRY -eq 1 ]; then would "iam secretAccessor(runtime) + viewer(deployer) on $s"; continue; fi
+  if ! secret_exists "$s"; then
+    k="$(optional_secret_key "$s")"
+    if [ -n "$k" ] && ! have_source "$k"; then skipped "iam secretAccessor(runtime) + viewer(deployer) on $s (secret not created)"; continue; fi
+    if [ $DRY -eq 1 ]; then would "iam secretAccessor(runtime) + viewer(deployer) on $s"; continue; fi
+    die "secret $s is missing after the secrets step"
+  fi
   bind_secret "$s" "$RUN_MEMBER" roles/secretmanager.secretAccessor "secretAccessor($RUN_SA_ID)"
   bind_secret "$s" "$DEPLOYER_MEMBER" roles/secretmanager.viewer "viewer($DEPLOYER_SA_ID)"
 done
@@ -252,6 +290,48 @@ else
   gcloud iam service-accounts add-iam-policy-binding "$RUN_SA" --member "$DEPLOYER_MEMBER" \
     --role roles/iam.serviceAccountUser "${G[@]}" >/dev/null
   created "iam serviceAccountUser -> $DEPLOYER_SA_ID on $RUN_SA_ID"
+fi
+
+# 7b. CV bucket (private) + runtime IAM for objects and V4 signed URLs -------
+# Uniform bucket-level access, public access prevention enforced, no lifecycle rule.
+CV_BUCKET_URL="gs://${CV_BUCKET}"
+if gcloud storage buckets describe "$CV_BUCKET_URL" "${G[@]}" >/dev/null 2>&1; then
+  exists "bucket $CV_BUCKET"
+  if [ $DRY -eq 0 ]; then
+    flags="$(gcloud storage buckets describe "$CV_BUCKET_URL" "${G[@]}" \
+      --format='value(uniform_bucket_level_access,public_access_prevention)' 2>/dev/null || true)"
+    if ! grep -qi 'true' <<<"$flags" || ! grep -qi 'enforced' <<<"$flags"; then
+      gcloud storage buckets update "$CV_BUCKET_URL" --uniform-bucket-level-access \
+        --public-access-prevention "${G[@]}" >/dev/null
+      info "bucket $CV_BUCKET uniform access + public access prevention re-applied"
+    fi
+  fi
+elif [ $DRY -eq 1 ]; then would "bucket $CV_BUCKET ($REGION, uniform access, public access prevention)"
+else
+  gcloud storage buckets create "$CV_BUCKET_URL" --location "$REGION" --uniform-bucket-level-access \
+    --public-access-prevention "${G[@]}" >/dev/null
+  created "bucket $CV_BUCKET ($REGION, uniform access, public access prevention)"
+fi
+
+if [ -n "$(gcloud storage buckets get-iam-policy "$CV_BUCKET_URL" "${G[@]}" --flatten='bindings[].members' \
+     --filter="bindings.role=roles/storage.objectAdmin AND bindings.members=$RUN_MEMBER" --format='value(bindings.role)' 2>/dev/null)" ]; then
+  exists "iam storage.objectAdmin -> $RUN_SA_ID on $CV_BUCKET"
+elif [ $DRY -eq 1 ]; then would "iam storage.objectAdmin -> $RUN_SA_ID on $CV_BUCKET"
+else
+  gcloud storage buckets add-iam-policy-binding "$CV_BUCKET_URL" --member "$RUN_MEMBER" \
+    --role roles/storage.objectAdmin "${G[@]}" >/dev/null
+  created "iam storage.objectAdmin -> $RUN_SA_ID on $CV_BUCKET"
+fi
+
+# V4 signed URLs are signed via the IAM signBlob API with the runtime SA's own token
+# (no key files): the SA needs serviceAccountTokenCreator on itself.
+if sa_has_role "$RUN_SA" "$RUN_MEMBER" roles/iam.serviceAccountTokenCreator; then
+  exists "iam serviceAccountTokenCreator -> $RUN_SA_ID on itself"
+elif [ $DRY -eq 1 ]; then would "iam serviceAccountTokenCreator -> $RUN_SA_ID on itself"
+else
+  gcloud iam service-accounts add-iam-policy-binding "$RUN_SA" --member "$RUN_MEMBER" \
+    --role roles/iam.serviceAccountTokenCreator "${G[@]}" >/dev/null
+  created "iam serviceAccountTokenCreator -> $RUN_SA_ID on itself"
 fi
 
 # 8. dbinit job: create DB `workshop0` (owner workshop0_app) + schema privilege probe ----

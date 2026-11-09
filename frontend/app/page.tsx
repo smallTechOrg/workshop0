@@ -480,7 +480,13 @@ export default function LandingPage() {
             <span aria-hidden="true">⛵</span> Workshop0 — free and
             self-hosted, run by whoever operates this instance.
           </p>
-          <p className="flex items-center gap-4">
+          <p className="flex flex-wrap items-center gap-4">
+            <a
+              href="/app/opportunities/"
+              className="underline underline-offset-4 hover:text-stone-800"
+            >
+              Opportunities for trainers
+            </a>
             <a
               href="https://smalltech.in"
               rel="noopener noreferrer"

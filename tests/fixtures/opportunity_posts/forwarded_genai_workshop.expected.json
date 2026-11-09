@@ -1,0 +1,14 @@
+{
+  "type": "workshop",
+  "location_mode": "hybrid",
+  "city": "Pune",
+  "topics_include": ["generative-ai", "python"],
+  "compensation": {"min": 8000, "max": 12000, "currency": "INR", "unit": "day"},
+  "starts_on": "2027-02-08",
+  "ends_on": "2027-02-09",
+  "deadline_on": "2027-01-15",
+  "partner": "zenvia",
+  "partner_display_name": "A Pune edtech",
+  "forbidden_in_public": ["Zenvia"],
+  "internal_notes_contains": "p.nair@zenvia.example"
+}

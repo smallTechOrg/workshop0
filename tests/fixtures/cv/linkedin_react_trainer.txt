@@ -1,0 +1,43 @@
+Meera Iyer
+Senior Frontend Engineer | React, Next.js & TypeScript | Mentor | Workshop Instructor
+Hyderabad, Telangana, India
+
+Contact info
+LinkedIn: https://www.linkedin.com/in/meera-iyer-react
+GitHub: https://github.com/meera-iyer-dev
+
+About
+Frontend engineer with 8 years of JavaScript experience, the last 6 in React. I mentor bootcamp
+graduates and run weekend workshops on modern React: hooks, state management, the Next.js App
+Router, server components and testing with Playwright. I also teach TypeScript for JavaScript
+developers and Node.js for frontend folks.
+
+Experience
+Senior Frontend Engineer
+Charminar Commerce · Full-time
+Apr 2021 - Present · 4 yrs 9 mos
+Hyderabad, Telangana, India
+Lead for the Next.js storefront; built the company design system in React and TypeScript.
+
+Mentor and Workshop Instructor
+ReactJS Hyderabad · Volunteer
+Jan 2019 - Present · 7 yrs
+Ran 18 hands-on workshops: React Fundamentals (2019), Next.js in a Day (2023),
+TypeScript for React Developers (2024).
+
+Frontend Developer
+Golconda Software · Full-time
+Jun 2017 - Mar 2021 · 3 yrs 10 mos
+JavaScript single-page apps in Angular and later React; Node.js backend-for-frontend services.
+
+Education
+Osmania University
+Bachelor of Engineering - BE, Computer Science · 2013 - 2017
+
+Skills
+React.js · TypeScript · Next.js · JavaScript · Node.js · Playwright · Tailwind CSS
+
+Languages
+English - Full professional proficiency
+Malayalam - Native or bilingual proficiency
+Hindi - Professional working proficiency

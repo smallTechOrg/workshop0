@@ -1,0 +1,6 @@
+{
+  "forbidden_slugs": ["hacking", "crypto-trading"],
+  "forbidden_in_public": ["Zenvia"],
+  "forbidden_type_values": ["admin"],
+  "forbidden_unit_values": ["year"]
+}

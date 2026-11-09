@@ -1,0 +1,20 @@
+Subject: Kubernetes mentor for our platform team (remote, 6 weeks)
+
+Hello,
+
+Northwind Cloud is a mid-sized SaaS company (about 120 engineers) migrating its services from VMs to
+Kubernetes. We are looking for an experienced DevOps / Kubernetes mentor for a 6-week remote
+engagement. The mentor will pair with our five-person platform team twice a week over video, review our
+Helm charts and cluster setup, and help us build a practical runbook for on-call.
+
+Ideal background: several years running production Kubernetes (EKS or GKE), good with Helm, CI/CD and
+observability, and enjoys coaching rather than just doing the work.
+
+Commitment: about 6 hours a week, fully remote, any timezone with a 3-hour overlap with IST.
+Rate: USD 50/hour, invoiced monthly.
+
+Start as soon as possible. Interested mentors can write to hiring@northwind-cloud.example with a short
+note on past Kubernetes mentoring.
+
+Regards,
+Marcus Webb, Head of Platform Engineering

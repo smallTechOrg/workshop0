@@ -115,6 +115,19 @@ export interface MilestoneMeta {
 // Admin surface (header X-Admin-Key)
 // ---------------------------------------------------------------------------
 
+/**
+ * Every admin call also carries the session cookie and the CSRF header, so a
+ * Google-signed-in admin with no key can mutate (a session-authenticated
+ * mutation without `X-Requested-With: workshop0` is 403 `csrf_failed` —
+ * architecture.md §Network identity). `X-Admin-Key` is still sent as before.
+ */
+function adminInit(adminKey: string): Pick<RequestInit, "headers" | "credentials"> {
+  return {
+    credentials: "include",
+    headers: { "X-Admin-Key": adminKey, "X-Requested-With": "workshop0" },
+  };
+}
+
 /** Where a workshop came from — spec/api.md §Phase 6. */
 export type WorkshopOrigin = "admin" | "public";
 
@@ -167,9 +180,7 @@ export interface CreateWorkshopBody {
 export function adminListWorkshops(
   adminKey: string,
 ): Promise<{ workshops: AdminWorkshopSummary[] }> {
-  return request("/api/admin/workshops", {
-    headers: { "X-Admin-Key": adminKey },
-  });
+  return request("/api/admin/workshops", adminInit(adminKey));
 }
 
 export function adminCreateWorkshop(
@@ -178,7 +189,7 @@ export function adminCreateWorkshop(
 ): Promise<{ workshop: WorkshopFull }> {
   return request("/api/admin/workshops", {
     method: "POST",
-    headers: { "X-Admin-Key": adminKey },
+    ...adminInit(adminKey),
     body: JSON.stringify(body),
   });
 }

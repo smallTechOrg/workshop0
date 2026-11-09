@@ -40,6 +40,21 @@ class Settings(BaseSettings):
     workshop0_ai_model: str = Field(default="anthropic/claude-sonnet-4-6")
     workshop0_ai_confidence: float = Field(default=0.75)
 
+    # Phase 11 — network identity (validation lives in auth/startup.py).
+    workshop0_google_client_id: str = Field(default="")
+    workshop0_google_client_secret: str = Field(default="")
+    workshop0_oidc_issuer: str = Field(default="https://accounts.google.com")
+    workshop0_session_secret: str = Field(default="")
+    workshop0_admin_emails: str = Field(default="")
+    # Phase 11 — CV storage.
+    workshop0_blob_backend: str = Field(default="local")
+    workshop0_gcs_bucket: str = Field(default="")
+    # Phase 11 — network AI (Anthropic direct; spec/agent.md §Provider).
+    anthropic_api_key: str = Field(default="")
+    anthropic_workspace_id: str = Field(default="")
+    workshop0_ai_network_model: str = Field(default="claude-sonnet-5-5")
+    workshop0_ai_network_fast_model: str = Field(default="claude-haiku-5-5")
+
     @field_validator("database_url")
     @classmethod
     def _normalize_database_url(cls, value: str) -> str:

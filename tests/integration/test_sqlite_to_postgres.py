@@ -37,6 +37,8 @@ def _load(name: str):
 imp = _load("sqlite_to_postgres")
 
 APP_TABLES = [t.name for t in imp.Base.metadata.sorted_tables]
+ID_TABLES = [t.name for t in imp.Base.metadata.sorted_tables if "id" in t.c]
+SEEDED_TOPICS = 40  # alembic 0005 seed: present in every migrated target before any import
 
 
 # --------------------------------------------------------------------------- fixtures
@@ -98,6 +100,15 @@ def _pg_scalar(url: str, sql: str, **params):
             return c.execute(text(sql), params).scalar()
     finally:
         engine.dispose()
+
+
+def _assert_target_untouched(url: str) -> None:
+    """A migrated target nobody imported into: app tables empty, only the topic seed."""
+    counts = _pg_counts(url)
+    assert {t: n for t, n in counts.items() if t not in imp.REFERENCE_TABLES} == {
+        t: 0 for t in APP_TABLES if t not in imp.REFERENCE_TABLES
+    }
+    assert counts["topic"] == SEEDED_TOPICS
 
 
 def _sha(path: Path) -> str:
@@ -190,7 +201,7 @@ def test_leaderboard_over_imported_db_equals_source(monkeypatch, source, target,
 
 def test_sequences_reset_so_fresh_inserts_get_ids_above_imported_max(monkeypatch, source, target):
     assert _run(source, target) == imp.EXIT_OK
-    maxima = {t: _pg_scalar(target, f'SELECT max(id) FROM "{t}"') for t in APP_TABLES}
+    maxima = {t: _pg_scalar(target, f'SELECT max(id) FROM "{t}"') for t in ID_TABLES}
     assert maxima["participant"] >= 300
     sconn = sqlite3.connect(f"file:{source}?mode=ro&immutable=1", uri=True)
     slug = sconn.execute("SELECT join_slug FROM workshop WHERE name = 'Fixture Big Workshop'").fetchone()[0]
@@ -213,7 +224,7 @@ def test_sequences_reset_so_fresh_inserts_get_ids_above_imported_max(monkeypatch
     settings_module._settings = None
 
     # And for every other table with rows, the next sequence value is exactly max(id)+1.
-    for t in APP_TABLES:
+    for t in ID_TABLES:
         if t == "participant" or not maxima[t]:
             continue
         nxt = _pg_scalar(target, f"SELECT nextval(pg_get_serial_sequence('\"{t}\"', 'id'))")
@@ -229,6 +240,55 @@ def test_empty_source_tables_get_sequences_that_start_at_one(source, target):
     assert _run(source, target) == imp.EXIT_OK
     assert _pg_counts(target)["ai_usage"] == 0
     assert _pg_scalar(target, "SELECT nextval(pg_get_serial_sequence('ai_usage', 'id'))") == 1
+
+
+def test_topic_reference_table_is_replaced_by_the_source_including_admin_edits(source, target):
+    """Both sides carry the 40-topic seed (same revision). The target's seed must not
+    count as "already has data", and the source's admin-added / renamed topics — and a
+    listing tagged with them — must arrive intact, with the topic sequence past them."""
+    assert _pg_scalar(target, "SELECT count(*) FROM topic") == SEEDED_TOPICS
+    conn = sqlite3.connect(source)
+    assert conn.execute("SELECT count(*) FROM topic").fetchone()[0] == SEEDED_TOPICS
+    conn.execute(
+        "INSERT INTO topic (id, slug, name, category, position, active, created_at, updated_at)"
+        " VALUES (41, 'elixir', 'Elixir', 'Languages', 40, 1, '2026-11-01 10:00:00', '2026-11-01 10:00:00')"
+    )
+    conn.execute("UPDATE topic SET name = 'Golang', active = 0 WHERE slug = 'go'")
+    conn.execute(
+        "INSERT INTO opportunity (id, title, type, summary, description_md, location_mode, city,"
+        " starts_on, ends_on, deadline, status, published_at, created_at, updated_at)"
+        " VALUES (1, 'Elixir bootcamp', 'engagement', 'Teach Elixir', '', 'onsite', 'Pune',"
+        " '2026-12-05', '2026-12-06', '2026-11-30 18:29:59', 'open', '2026-11-01 10:00:00',"
+        " '2026-11-01 10:00:00', '2026-11-01 10:00:00')"
+    )
+    conn.execute("INSERT INTO opportunity_topic (opportunity_id, topic_id) VALUES (1, 41)")
+    conn.commit()
+    conn.close()
+
+    assert _run(source, target) == imp.EXIT_OK
+    assert _pg_counts(target) == _sqlite_counts(source)
+    assert _pg_scalar(target, "SELECT count(*) FROM topic") == SEEDED_TOPICS + 1
+    assert _pg_scalar(target, "SELECT name FROM topic WHERE slug = 'elixir'") == "Elixir"
+    assert _pg_scalar(target, "SELECT active FROM topic WHERE slug = 'elixir'") is True
+    assert _pg_scalar(target, "SELECT name FROM topic WHERE slug = 'go'") == "Golang"
+    assert _pg_scalar(target, "SELECT active FROM topic WHERE slug = 'go'") is False
+    assert _pg_scalar(target, "SELECT starts_on FROM opportunity WHERE id = 1").isoformat() == "2026-12-05"
+    assert _pg_scalar(target, "SELECT deadline FROM opportunity WHERE id = 1") == datetime(
+        2026, 11, 30, 18, 29, 59, tzinfo=timezone.utc
+    )
+    assert _pg_scalar(target, "SELECT topic_id FROM opportunity_topic WHERE opportunity_id = 1") == 41
+    assert _pg_scalar(target, "SELECT nextval(pg_get_serial_sequence('topic', 'id'))") == 42
+
+
+def test_a_target_holding_only_the_topic_seed_is_not_refused_but_other_data_is(source, target, capsys):
+    assert _run(source, target) == imp.EXIT_OK  # seed-only target: imported, not refused
+    capsys.readouterr()
+    engine = create_engine(target)
+    with engine.begin() as c:  # leave only the topic table populated
+        c.execute(text("TRUNCATE " + ", ".join(f'"{t}"' for t in APP_TABLES if t != "topic") + " CASCADE"))
+    engine.dispose()
+    assert _run(source, target) == imp.EXIT_OK
+    assert _pg_counts(target) == _sqlite_counts(source)
 
 
 # --------------------------------------------------------------------------- refusals
@@ -280,7 +340,7 @@ def test_revision_mismatch_aborts_before_writing(source, target, capsys):
     assert _run(source, target) == imp.EXIT_REFUSED
     out = capsys.readouterr().out
     assert "mismatch" in out and "0003" in out and "alembic upgrade head" in out
-    assert sum(_pg_counts(target).values()) == 0
+    _assert_target_untouched(target)
 
 
 def test_unmigrated_target_and_bad_inputs_are_refused(source, scratch_database, tmp_path, capsys):
@@ -309,7 +369,7 @@ def test_forced_mid_copy_failure_leaves_target_empty(source, target, capsys):
     out = capsys.readouterr().out
     assert "copied participant" in out and "copied milestone_completion" in out  # it got far
     assert "FAILED" in out and "Rolled back" in out
-    assert sum(_pg_counts(target).values()) == 0
+    _assert_target_untouched(target)
     assert _pg_scalar(target, "SELECT count(*) FROM alembic_version") == 1  # untouched
 
 
@@ -319,7 +379,7 @@ def test_failure_after_a_table_via_hook_rolls_back_everything(source, target):
             raise RuntimeError("simulated crash")
 
     assert imp.run_import(source, target, _after_table=boom) == imp.EXIT_FAILED
-    assert sum(_pg_counts(target).values()) == 0
+    _assert_target_untouched(target)
 
 
 def test_failed_replace_keeps_the_previous_data(source, target):
@@ -340,7 +400,7 @@ def test_verification_mismatch_exits_nonzero_and_rolls_back(monkeypatch, source,
     out = capsys.readouterr().out
     assert any(line.startswith("broadcast") and line.rstrip().endswith("MISMATCH") for line in out.splitlines())
     assert "FAILED" in out
-    assert sum(_pg_counts(target).values()) == 0
+    _assert_target_untouched(target)
 
 
 # --------------------------------------------------------------------------- real-world quirks
@@ -380,7 +440,7 @@ def test_garbage_datetime_or_bool_fails_with_location_not_value(source, target, 
     assert _run(source, target) == imp.EXIT_FAILED
     out = capsys.readouterr().out
     assert "workshop.ended_at" in out and "SECRET-garbage" not in out
-    assert sum(_pg_counts(target).values()) == 0
+    _assert_target_untouched(target)
 
 
 def test_old_app_style_values_import_correctly(source, target):
@@ -474,7 +534,8 @@ def test_cli_without_target_exits_2():
 
 def test_cli_bad_batch_size_is_a_usage_error(source, target):
     result = _cli("--sqlite", str(source), "--target-url", target, "--batch-size", "0")
-    assert result.returncode == 2 and sum(_pg_counts(target).values()) == 0
+    assert result.returncode == 2
+    _assert_target_untouched(target)
 
 
 def test_fixture_generator_refuses_to_overwrite(fixture_db):

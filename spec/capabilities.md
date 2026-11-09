@@ -1,6 +1,6 @@
 # Capabilities — Workshop0 (v0.2)
 
-Four core capabilities (C1–C4) carry the product; C5–C7 open it to the public in Phase 6; everything else is deferred to a named phase (§Deferred). API shapes live in [api.md](api.md); schema in [data-model.md](data-model.md); phase plan in [roadmap.md](roadmap.md). This file also carries the UI specification (pages, components, states, stub placements) — there is no separate ui.md.
+Four core capabilities (C1–C4) carry the product; C5–C7 open it to the public in Phase 6; C8–C19 add the Trainer Network & Opportunity Board in Phases 10–13; everything else is deferred to a named phase (§Deferred). API shapes live in [api.md](api.md); schema in [data-model.md](data-model.md); phase plan in [roadmap.md](roadmap.md). This file also carries the UI specification (pages, components, states, stub placements) — there is no separate ui.md.
 
 ## Design system (applies to every page)
 
@@ -125,6 +125,183 @@ The admin keeps the only cross-workshop view, and can now see where each worksho
 `creator_email` appears here and nowhere else — never on a facilitator, participant or public surface.
 
 **Success criteria:** entering the key at `/admin` lists every workshop including public-created ones · a public-created workshop shows its `Public` badge and the exact email the creator entered · an admin-created workshop shows `Admin` and no email · every pre-existing admin flow still works from the new URL · `/` never exposes the admin console or its link.
+
+---
+
+# Trainer Network & Opportunity Board (C8–C19, Phases 10–13)
+
+smallTech's network of freelance and in-house tech trainers — and more broadly mentors, engineers and learners — lives inside Workshop0, beside a **publicly browsable, admin-curated board of opportunities** from the partner network. Only smallTech admins post, edit and close listings; partners never touch the platform (admins forward shortlisted profiles out of band). Existing workshop/participant token-link flows are unchanged by everything in this section. Shapes: [api.md](api.md) §Phase 10–13; schema: [data-model.md](data-model.md) §Trainer Network.
+
+**Copy rule (all network surfaces):** user-facing UI never says "AI" — drafted fields read "From your CV — please check", ranked lists read "Suggested". AI cost and token counts appear on admin surfaces only. Admin surfaces may name AI (e.g. the opportunity editor's "AI drafting not configured" state and its cost line); drafted fields there read "Drafted — please check". Opportunity `type` labels everywhere: `workshop` = **Workshop / training**, `engagement` = **Longer engagement**, `role` = **Job / contract role**, `cofacilitation` = **Workshop0 co-facilitator / TA**.
+
+---
+
+## C8 — Topic taxonomy *(Phase 10)*
+
+A curated list of tech topics that listings (and, from Phase 11, trainer profiles) are tagged with, so filtering and matching speak one vocabulary.
+
+- Ships with **40 seeded topics in 5 categories** (data-model.md §topic).
+- **Admin Topics page — `/app/admin/topics/`**: table of all topics grouped by category (name, slug, active toggle, number of listings using it); an **Add topic** row (name + category, category input suggests existing categories); inline rename. Deactivating asks for confirmation and explains: "Hidden from filters and pickers; listings already tagged keep it." Slugs are shown read-only.
+- Public filters list active topics only, grouped by category, with the number of open listings each (0 → shown muted).
+
+**Success criteria:** a fresh database exposes exactly 40 active topics through the public topics endpoint · an admin-added topic appears in the public filter list immediately (with count 0) · a duplicate name (any case) is rejected with `topic_exists` and creates nothing · a deactivated topic disappears from public filters and from the editor's picker but still renders on a listing already tagged with it · every create/rename/toggle writes an audit row.
+
+---
+
+## C9 — Opportunity management for admins *(Phase 10; partners, paste-to-fill and compensation in Phase 11b)*
+
+Admins create, edit, publish and close listings; listings auto-expire at their deadline.
+
+**Pages (same key gate as Admin Home; Admin Home's header gains a real **Opportunities** link and a **Trainer network** labelled stub):**
+- **Opportunities — `/app/admin/opportunities/`**: status tabs **All · Draft · Open · Expired · Closed** with counts; search box (title / partner names); table rows: title, type pill, public partner name with the internal partner name beneath in muted text and a lock icon, topics (≤3 + "+n"), deadline (relative: "in 5 days" / "expired 2 days ago"), status pill, updated. Row click → editor. Header button **+ New opportunity**. Empty state: "No opportunities yet — post the first one." Paginated (25). Labelled stubs on this page: **Applicants** column and **Suggested trainers** action (Phase 12), **Trainer pool** nav (Phase 11), **Outbox** nav (Phase 12).
+- **Editor — `/app/admin/opportunities/edit/?id=<id>`** (no `id` = new): two clearly separated groups.
+  - **Public details** — title, type, summary (280 counter), description (markdown Write/Preview tabs, the existing Markdown primitive), topics (searchable multi-select grouped by category, max 8, active topics only), location mode (Remote / Onsite / Hybrid; city appears and is required for Onsite/Hybrid), start/end dates, duration, compensation (public text), **deadline** (date + time in the admin's local time zone, shown with its UTC equivalent; defaults to 30 days out at 23:59), **public partner name** (placeholder "smallTech partner network").
+  - **Internal — only admins see this** (tinted panel with a lock icon) — internal partner name, internal notes.
+  - A live **public card preview** renders exactly what the board will show (proving the internal fields are absent).
+  - Actions by state: draft → **Save draft** / **Publish**; open → **Save** / **Close** / **Unpublish**; expired → banner "Expired — extend the deadline to reopen" + **Save** / **Close**; closed → **Reopen** (requires a future deadline) / **Save**. Field errors from `validation_error` render inline on the named field; nothing typed is ever lost on error. After save: toast + the status pill updates; **Copy public link** (the pretty `/opportunities/<id>` URL) is shown once the listing has been published.
+  - **Activity** list at the bottom: the listing's audit rows (who / what / when).
+
+**Success criteria:** create as draft → not visible publicly; publish → visible on the board within one page load · internal partner name and internal notes never appear on any public page or public API response · publishing with a past deadline is rejected inline · a listing whose deadline passes shows **Expired** in admin and disappears from the board without any action · close → gone from the board, detail page shows the closed banner · every create / update / publish / unpublish / close writes exactly one audit row visible in Activity.
+
+### C9 additions — Phase 11b (Phase-10 feedback)
+
+**Partners, a managed list.** **Partners — `/app/admin/partners/`** works like the Topics page.
+- **Columns:** the table shows internal name (with a lock icon), default public name, notes (truncated, admin-only), number of listings and an active toggle.
+- **Add partner** row: internal name (required), default public name (optional, placeholder "smallTech partner network"), notes.
+- **Editing:** inline rename and edit. Deactivating asks for confirmation: "Hidden from the partner picker; listings already using it keep it."
+- **Entry points:** linked from the editor's partner field (**Manage partners**) and from the admin header (**Partners**).
+- **Migration:** existing free-text partner names are migrated in. One partner is created per distinct name, ignoring case and extra spaces, and every existing listing is linked to it.
+
+**Editor changes:**
+- **Partner (internal panel):** the free-text internal partner field becomes a **partner dropdown**. It is searchable, lists active partners with their default public name muted, has a **None** option, and an inline **+ Add partner** that opens a small form (internal name, default public name, notes) and selects the new partner.
+- **Public partner name:** choosing a partner fills the listing's **public partner name** with the partner's default public name when that field is empty. The public partner name stays per listing and remains the **only** partner text ever shown publicly.
+- **Compensation (public details):** amount **min** and **max** (one is enough; equal means a single value), **currency** (INR / USD), **unit** (per hour / per day / per course / per month), and an optional **note** (the former compensation text, e.g. "plus travel", "Pro bono"). Currency and unit are required once an amount is entered. Errors show inline.
+- **Paste the forwarded description** box, at the top of a new listing and collapsed under **Draft from a forwarded description** on an existing one:
+  1. The admin pastes the partner's email or post, optionally ticks **Keep the partner's name in the public text**, and clicks **Draft**. A skeleton shows while drafting (up to ~20 s).
+  2. The form is pre-filled for review: title, type, summary, a **cleaned public description**, topics (**only from the curated list**), Remote / Hybrid / Onsite and city, start/end dates, duration, deadline, compensation with unit and note, the partner, the public partner name and internal notes.
+     - The **partner** is either matched against the partner list or offered as "Suggested new partner: *name* — **Add**".
+     - The cleaned description has the partner's identity removed (unless kept), and its contacts, emails and phone numbers moved into the internal notes.
+  3. Every filled field carries an amber **"Drafted — please check"** chip, which disappears once that field is edited.
+  4. **Nothing is saved or published by drafting.** The admin still clicks Save draft / Publish.
+  5. A small cost line under the box reads "Drafted with claude-sonnet-5-5 · $0.0042". This is an admin surface, so naming AI and showing cost is allowed. Spend also appears in the Network AI spend card.
+  6. If typed input would be overwritten, a confirm asks first.
+- **Not configured:** when drafting is unavailable (no Anthropic key, or no workspace id), the box shows a neutral **"AI drafting not configured"** state with the Draft button disabled. The rest of the editor works exactly as before.
+- **Failure:** a failed draft shows "Drafting failed — fill the form by hand or try again", and nothing typed is lost.
+
+**Success criteria (11b):**
+- **Migration:** on migration, N distinct free-text partner names (ignoring case and whitespace) become exactly N partners, and every named listing is linked to one.
+- **Partner uniqueness:** a duplicate partner name in any case or spacing is rejected with `partner_exists` and creates nothing.
+- **Deactivation:** a deactivated partner is absent from the dropdown but still shown on a listing already using it.
+- **No leak:** partner internal names, partner notes and internal notes never appear in any public page or public API response.
+- **Drafting the three ordinary fixture posts** against the real model:
+  - fills the expected type, location, topics and compensation unit;
+  - picks topics only from the curated list;
+  - matches the seeded partner when the post names it, and otherwise suggests a new one;
+  - leaves no partner name, email or phone in the public fields;
+  - creates no listing.
+- **Prompt injection:** a post containing instructions ("ignore previous instructions…") yields only curated topics and enum values, and creates no listing.
+- **Usage record:** each draft writes one usage record with purpose `opportunity_draft`, the model id and a cost > 0.
+- **Graceful degradation:** with drafting unavailable, the box shows "AI drafting not configured", no AI call is made, and a listing can still be created and published by hand.
+- **Compensation validation:** an amount without currency or unit, or `max < min`, is rejected inline.
+
+---
+
+## C10 — Public opportunity board *(Phase 10; compensation display Phase 11b)*
+
+Anyone on the internet can browse what's open; applying arrives with sign-in (Phase 11–12).
+
+**Pages (no auth; linked from the landing page footer as "Opportunities for trainers"; pretty URL `/opportunities`):**
+- **Board — `/app/opportunities/`**: header strip "Opportunities from the smallTech partner network" + one-line subline; **Join our network** CTA (labelled stub in Phase 10 — real in Phase 11). Filter bar: **type** segmented chips (All + the four types), **topic** chips grouped by category with open counts (multi-select = match any), **sort** (Newest / Closing soon). Filter state lives in the URL query (`?type=&topic=&topic=&sort=&page=`) so filtered views are shareable and survive reload. **Cards** (responsive grid): type pill, title, partner display name (or "smallTech partner network"), summary, topic chips (≤4 + "+n"), location (Remote / City · Onsite / City · Hybrid), compensation when present (display rule below; from Phase 11b), **"Apply by 30 Nov"** with an amber "Closes in 3 days" pill when ≤7 days remain. **Pagination**: Previous / Next + "Page 2 of 3", 12 per page. States: loading = skeleton cards; no listings at all = "No open opportunities right now — check back soon."; filters match nothing = "Nothing matches these filters" + **Clear filters**; error = human sentence + Retry.
+- **Listing — `/app/opportunities/view/?id=<id>`** (pretty `/opportunities/<id>`): back link to the board (preserving filters when arriving from it), title, type pill, partner display name, meta grid (location, dates, duration, compensation, deadline in the viewer's local time), topic chips, rendered markdown description. Side card: when open — "Applications open until …" + **Sign in to apply** (labelled stub in Phase 10; real in Phase 12) + **Copy link**; when expired or closed — a neutral banner "Applications for this opportunity have closed." and no apply control. A **Join our network** stub card ("Get matched to opportunities like this — coming soon"). Draft/unknown id → friendly not-found state "This opportunity isn't available — it may have been removed." + link to the board. The browser tab title is the listing title.
+- **Landing page:** one plain link "Opportunities for trainers" in the footer (no other landing change; still no admin link).
+- **Compensation display (Phase 11b; the one rule for card, listing and admin preview):** the amount part uses the currency symbol (INR `₹`, en-IN digit grouping; USD `$`, en-US grouping), then ` / ` and the unit (`hour`, `day`, `course`, `month`). The note is appended after ` · `.
+  - **Amount forms:**
+    - min < max → `₹8,000–12,000 / day` (en dash, one symbol);
+    - min = max → `₹20,000 / course`;
+    - min only → `From $50 / hour`;
+    - max only → `Up to ₹1,50,000 / month`.
+  - **Note:**
+    - amount + note → `₹20,000 / course · plus travel`;
+    - note only, e.g. legacy text → `Pro bono`;
+    - neither → no compensation line.
+
+  There is no compensation filter on the board.
+
+**Success criteria:** the board lists only open, non-expired listings · with 30 open listings, three pages of 12/12/6 with no duplicates and no gaps · type and topic filters return exactly the matching set and persist in the URL across reload · a closed or expired listing's detail URL still renders with the closed banner · a draft's URL renders not-found · the rendered HTML of board and listing pages never contains the internal partner name · works at 360 px and 1440 px with no horizontal scroll · every stub (Join our network, Sign in to apply) carries the "Coming in a later phase" pill and is non-interactive.
+
+---
+
+## C11 — Network sign-in & accounts *(Phase 11)*
+
+Near-zero-friction, self-serve identity for the network; Google sign-in only at launch.
+
+- **Sign in — `/app/signin/`** (and wherever a sign-in is needed): one **Continue with Google** button; error banners per callback error code (e.g. "That Google account's email isn't verified"). If sign-in isn't configured on the server: a labelled, non-error state. A small header **account menu** on network pages: avatar, name, "My profile", "Sign out".
+- **Admins as users:** an email on the admin allowlist who signs in is an admin; the admin console's key gate gains **Continue with Google** beside the key field. The access key keeps working exactly as before. Admin actions are attributed to the admin's email (or "admin key").
+- **Invite links — `/invite/<token>`**: an admin creates an invite for an email (Phase 11: copy the link; Phase 12: emailed). The invitee signs in with that same email and lands in onboarding already **Verified**. Wrong account → "This invite was sent to as***@example.com — sign in with that Google account." Expired → "This invite has expired — ask smallTech for a new one."
+- **Consent** at signup (required checkbox): "smallTech may share my profile with partner organisations for matching." The date and wording version are recorded.
+- **Delete my account** (profile page, danger zone): type your email to confirm → profile, CV and account are removed immediately; signed out; confirmation screen.
+
+**Success criteria:** first-time sign-in creates exactly one account; a second sign-in reuses it · an unverified-email ID token is refused · an allowlisted email sees the admin console without the key; removing it from the allowlist revokes access on the next request · invite + matching email → verified profile; mismatching email → refused and no profile verified · deletion removes the user, profile, CV blob and sessions (asserted in the DB and storage) and leaves an audit row with only a masked email · existing workshop/participant flows work unchanged and need no sign-in.
+
+---
+
+## C12 — CV-drafted trainer profile *(Phase 11)*
+
+Sign in, drop a CV, review one screen, you're in.
+
+- **Onboarding — `/app/network/join/`** (step 1 of 2): three ways in, as tabs — **Upload CV** (PDF/DOCX ≤5 MB, drag-and-drop), **LinkedIn PDF** (a short how-to: LinkedIn profile → More → Save to PDF, then upload it here), **Paste text** (CV or LinkedIn "About/Experience" text). A one-line note: "We can't read LinkedIn links directly — LinkedIn doesn't allow it." After submit: "Reading your CV…" skeleton (≤60 s), then step 2.
+- **Review — step 2**: one screen, everything editable, pre-filled where possible; every pre-filled field shows a small amber chip **"From your CV — please check"**. Sections: headline, bio, topics (from the curated list, each with a level: Intermediate / Advanced / Expert), location (city + remote OK), links (LinkedIn / GitHub / website), past workshops & talks, rate range + currency (INR / USD) + per hour / per day / per course / per month + "open to pro-bono" (labelled "Visible to smallTech only"), availability (weekly day-part grid Mon–Sun × Morning / Afternoon / Evening, available-from date, blackout date ranges). Only headline and ≥1 topic are required. Consent checkbox. **Create my profile** → profile is live → My profile. If pre-fill wasn't possible the form starts empty with "We couldn't pre-fill from your CV — fill in the basics below; you can add the rest later."
+- **My profile — `/app/network/me/`**: view/edit every field, replace CV, **completeness meter** (0–100 %, the ten checks in api.md) with a nudge listing the top 3 missing items, verified badge when granted, danger zone. Labelled stubs: **My applications** (Phase 12), **Matched for you** (Phase 12), **Saved searches & alerts** (Phase 13), **Public directory profile** toggle (Phase 13).
+- Board: **Join our network** CTA becomes real (→ sign-in → onboarding); "Sign in to apply" stays a labelled stub until Phase 12.
+
+**Success criteria:** a real multi-page PDF CV and a DOCX CV each produce a draft whose topics are only curated slugs with valid levels, and whose headline is non-empty · pasted text works identically · a scanned (image-only) PDF returns `cv_unreadable` with the paste-text suggestion · with drafting unavailable the review screen still works and the profile can be created · the review screen marks exactly the drafted fields · completeness matches the ten-check formula · rates never appear on any non-admin surface other than the owner's own profile.
+
+---
+
+## C13 — Admin trainer pool *(Phase 11)*
+
+- **Trainer pool — `/app/admin/network/`**: search box, topic filter (any), verified filter, tag filter; table (25/page): name + avatar, headline, top topics with levels, city / remote, rate (admin only), verified badge, completeness %, tags, joined. **Export CSV** (current filters). **Invites** panel: create invite (email + optional name) → copyable link; list with status (pending / accepted / expired). **Network AI spend** card (total cost, calls, tokens).
+- **Trainer detail — `/app/admin/network/trainer/?id=<id>`**: full profile, **Download CV**, **Verify / Unverify**, tags editor, private notes (append-only list with author + time), drafting cost for this trainer, activity (audit).
+- Labelled stubs: rule-based matching filters (level, budget, availability, location) and **Suggested for a listing** (Phase 12); **Email invite** (Phase 12).
+
+**Success criteria:** with 60 seeded profiles the search, topic and verified filters return exactly the precomputed sets across pages · CV download works on both the local and cloud storage backends and writes an audit row · verify / notes / tags each write an audit row · the CSV row count equals the filtered total.
+
+---
+
+## C14 — Apply & applicant pipeline *(Phase 12)*
+
+- Listing page: **Apply** (signed-in with a profile) → optional note (≤1000) → **Send application** — one click. Signed out → sign-in → back to the listing. Signed in without a profile → onboarding (CV autofill) → back to the listing with the apply panel open. Already applied → status chip instead of the button.
+- **My applications — `/app/network/applications/`**: one row per application with a status timeline **Applied → Shortlisted → Selected / Not selected** (and Withdrawn), listing link, withdraw while Applied/Shortlisted.
+- **Admin pipeline — `/app/admin/opportunities/pipeline/?id=<id>`**: applicants grouped by status (Applied / Shortlisted / Selected / Not selected / Withdrawn) with trainer summary, note, source (self / invited), CV link; multi-select → **Move to…** with "Email the trainers about this change" (on by default); **Export CSV**. The Applicants column in the opportunities table becomes real counts.
+
+**Success criteria:** one application per trainer per listing (second attempt → `already_applied`) · applying to an expired/closed listing → `opportunity_closed` · a bulk move of 12 applicants writes one audit row and enqueues exactly 12 emails (one per trainer, deduplicated on retry) · the trainer sees the new status on their next page load.
+
+## C15 — Matching *(Phase 12)*
+
+- **Rule filters** on the trainer pool: topic + minimum level, budget (max rate, same currency and unit), available for a date range (available-from and blackouts), location mode / city, verified, tag.
+- **Suggested trainers** for a listing (button on the editor and pipeline): ranks the eligible pool and shows the top 10 with a one-sentence reason each, rule score, and the run's cost (admin only); **Invite to apply** (single or bulk) → the trainer gets an email and an "Invited" badge on the listing and in Matched for you.
+- **Matched for you — `/app/network/matches/`**: up to 10 open listings ranked against the trainer's profile (topic overlap weighted by level, availability vs listing dates, location fit), invited ones first.
+
+**Success criteria:** over a 60-profile fixture the rule filters return exactly the precomputed eligible set · every suggestion comes from the eligible set, ≤10, each with a non-empty reason; the fixture's single obvious best match ranks in the top 3 · without drafting/ranking available, suggestions fall back to rule order labelled "Ranked by rules" with zero errors.
+
+## C16 — Email outbox & notifications *(Phase 12)*
+
+- Emails: **network invite**, **welcome** (profile created), **application received**, **application status changed**, **invited to apply** (Phase 13 adds alerts and the weekly digest). Plain, branded, every link absolute to the public domain.
+- Every email is written to the **outbox** first. With SMTP configured it is sent (retried up to 3 times); without SMTP it is **recorded** and the admin **Outbox — `/app/admin/outbox/`** page shows a prominent label "Email sending isn't configured — messages are recorded here, not sent." Outbox table: to, template, subject, status, attempts, last error, time; **Retry** on failed.
+
+**Success criteria:** with SMTP unset no request fails and every email lands as `recorded` · with a real SMTP server configured, queued mail is delivered and marked `sent` · a duplicate enqueue with the same dedupe key creates no second row.
+
+## C17 — Saved searches, alerts & weekly digest *(Phase 13)*
+
+Trainers save board filters (type / topics / location) as named searches with alerts on/off; a newly opened matching listing triggers one alert email per search; a weekly digest (Monday 09:00 IST) summarises new matching listings. Email preferences page with per-kind toggles; every alert/digest email carries a one-click unsubscribe. **Success:** publishing one listing that matches 3 of 5 saved searches enqueues exactly 3 alerts; re-publishing enqueues none; the digest run twice in one week sends once.
+
+## C18 — Public trainer directory & visibility *(Phase 13)*
+
+Profiles are private to admins by default; a trainer may opt in to a public directory profile. **Directory — `/app/network/directory/`** (topic filter, verified badge) and **public profile — `/app/network/trainer/?id=<id>`** show name, photo, headline, topics + levels, city / remote, links, bio, past work. **Never** shown publicly: email, rates, CV, admin notes, tags. **Success:** a private profile 404s publicly; public payloads contain only the allow-listed fields (asserted on serialized JSON).
+
+## C19 — Workshop tie-in *(Phase 13)*
+
+Admins link network trainers to a Workshop0 workshop as lead / co-facilitator / TA (Admin Home workshop card → **Facilitators**); a linked trainer sees **My Workshop0 workshops** with the facilitator dashboard link. A `cofacilitation` listing may name its workshop; marking an applicant **Selected** offers "Link as facilitator". A **Join our network** card appears on the participant join page and on the tracker once all milestones are complete. **Success:** linking writes an audit row and shows on the trainer's page; unlinking removes access to the link from their page (the facilitator token itself is unchanged); participant pages remain account-free.
 
 ---
 

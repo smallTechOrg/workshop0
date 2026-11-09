@@ -2,6 +2,7 @@
 
 import { getWithLegacy } from "@/lib/storageCompat";
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import {
   ApiError,
   adminListWorkshops,
@@ -16,15 +17,28 @@ import { StubBadge, StubCard } from "@/components/ui/StubBadge";
 import { useToast } from "@/components/ui/Toast";
 import { WorkshopCard } from "@/components/facilitator/WorkshopCard";
 import { CreateWorkshopModal } from "@/components/facilitator/CreateWorkshopModal";
+import {
+  AdminSessionSignIn,
+  loadNetworkIdentity,
+  type NetworkIdentity,
+} from "@/components/admin/AdminGate";
+import { signOut as networkSignOut } from "@/lib/networkAuth";
 
 const LS_ADMIN_KEY = "workshop0_admin_key";
 
 type Phase = "boot" | "gate" | "authed";
+/** How the gate was passed: the access key, or a signed-in admin session. */
+type Mode = "key" | "session";
 
 export default function AdminHomePage() {
   const toast = useToast();
   const [phase, setPhase] = useState<Phase>("boot");
   const [adminKey, setAdminKey] = useState("");
+  const [mode, setMode] = useState<Mode>("key");
+  const [identity, setIdentity] = useState<NetworkIdentity>({
+    googleEnabled: false,
+    user: null,
+  });
   const [keyInput, setKeyInput] = useState("");
   const [gateError, setGateError] = useState<string | null>(null);
   const [gateChecking, setGateChecking] = useState(false);
@@ -45,6 +59,7 @@ export default function AdminHomePage() {
           // Private-mode browsers: the key just won't persist.
         }
         setAdminKey(key);
+        setMode("key");
         setWorkshops(list);
         setGateError(null);
         setPhase("authed");
@@ -73,22 +88,54 @@ export default function AdminHomePage() {
     [],
   );
 
-  useEffect(() => {
-    let saved: string | null = null;
+  /** A signed-in admin session passes without a key (the cookie authorises). */
+  const enterWithSession = useCallback(async (): Promise<boolean> => {
     try {
-      saved = getWithLegacy(LS_ADMIN_KEY);
-    } catch {
-      // ignore
+      const { workshops: list } = await adminListWorkshops("");
+      setAdminKey("");
+      setMode("session");
+      setWorkshops(list);
+      setGateError(null);
+      setPhase("authed");
+      return true;
+    } catch (err) {
+      setIdentity((prev) => ({ ...prev, user: null }));
+      setGateError(
+        err instanceof ApiError && (err.status === 401 || err.status === 403)
+          ? "Your sign-in has expired — sign in again, or enter the access key."
+          : "Couldn't reach the server — check it's running, then try again.",
+      );
+      return false;
     }
-    if (saved) {
-      void validateKey(saved, true);
-    } else {
-      setPhase("gate");
-    }
-  }, [validateKey]);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const id = await loadNetworkIdentity();
+      if (cancelled) return;
+      setIdentity(id);
+      if (id.user?.is_admin && (await enterWithSession())) return;
+      if (cancelled) return;
+      let saved: string | null = null;
+      try {
+        saved = getWithLegacy(LS_ADMIN_KEY);
+      } catch {
+        // ignore
+      }
+      if (saved) {
+        void validateKey(saved, true);
+      } else {
+        setPhase("gate");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [validateKey, enterWithSession]);
 
   const refreshList = useCallback(async () => {
-    if (!adminKey) return;
+    if (mode === "key" && !adminKey) return;
     setRefreshing(true);
     setListError(null);
     try {
@@ -97,14 +144,20 @@ export default function AdminHomePage() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setPhase("gate");
-        setGateError("Your key no longer matches this server — enter it again.");
+        if (mode === "session") {
+          setIdentity((prev) => ({ ...prev, user: null }));
+          setMode("key");
+          setGateError("Your sign-in has expired — sign in again, or enter the access key.");
+        } else {
+          setGateError("Your key no longer matches this server — enter it again.");
+        }
       } else {
         setListError("Couldn't refresh the list — check your connection and try again.");
       }
     } finally {
       setRefreshing(false);
     }
-  }, [adminKey]);
+  }, [adminKey, mode]);
 
   const onCreated = (workshop: WorkshopFull) => {
     setCreateOpen(false);
@@ -114,6 +167,13 @@ export default function AdminHomePage() {
   };
 
   const signOut = () => {
+    if (mode === "session") {
+      void networkSignOut().catch(() => {
+        // Best effort — the gate is shown either way.
+      });
+      setIdentity((prev) => ({ ...prev, user: null }));
+      setMode("key");
+    }
     try {
       window.localStorage.setItem(LS_ADMIN_KEY, "");
     } catch {
@@ -152,9 +212,12 @@ export default function AdminHomePage() {
               Workshop0
             </h1>
             <p className="mt-1 text-sm text-stone-500">
-              Enter this server's facilitator access key to manage workshops.
+              {identity.googleEnabled
+                ? "Sign in with an admin Google account, or enter this server's facilitator access key to manage workshops."
+                : "Enter this server's facilitator access key to manage workshops."}
             </p>
           </div>
+          <AdminSessionSignIn identity={identity} />
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -225,6 +288,20 @@ export default function AdminHomePage() {
           <h1 className="text-xl font-semibold text-stone-900">Workshop0</h1>
         </div>
         <nav aria-label="Admin actions" className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/admin/opportunities/"
+            data-testid="nav-opportunities"
+            className="inline-flex items-center rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-sm font-medium text-stone-800 shadow-sm transition-colors hover:bg-stone-50"
+          >
+            Opportunities
+          </Link>
+          <Link
+            href="/admin/network/"
+            data-testid="nav-trainer-network"
+            className="inline-flex items-center rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-sm font-medium text-stone-800 shadow-sm transition-colors hover:bg-stone-50"
+          >
+            Trainer network
+          </Link>
           <span
             aria-disabled="true"
             className="inline-flex items-center gap-2 rounded-lg border border-dashed border-stone-300 bg-stone-50 px-3 py-1.5 text-sm font-medium text-stone-400 select-none"
