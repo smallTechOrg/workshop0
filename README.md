@@ -56,6 +56,7 @@ Open **http://localhost:8001/** — the public landing page. From there, **Creat
 | `/opportunities` → `/app/opportunities/` | Public **Opportunity Board** — open listings from the smallTech partner network, filterable by type and topic (filters live in the URL), 12 per page. No sign-in |
 | `/opportunities/<id>` → `/app/opportunities/view/?id=<id>` | One listing's public page (closed/expired listings show a "closed" banner; drafts are not found) |
 | `/app/admin/opportunities/` | Admin: post, edit, publish, unpublish, close and reopen listings (same `WORKSHOP0_ADMIN_KEY` gate as Admin Home). Internal partner name and notes are admin-only — never on a public page or API |
+| `/app/admin/partners/` | Admin: the partner list — add, rename, deactivate, default public name and internal note. Partner names and notes are admin-only |
 | `/app/admin/topics/` | Admin: the topic taxonomy (40 seeded topics in 5 categories; add, rename, deactivate) |
 | `/app/signin/` | Trainer-network sign-in page (**Continue with Google**; shows a labelled "not set up" state when sign-in is not configured) |
 | `/network` → `/app/network/` | Network home — routes you to sign-in, onboarding or your profile |
@@ -134,7 +135,18 @@ Sign in as `admin@example.test` to act as an admin. Any other email signs in as 
 
 CVs are stored under `data/blobs/` locally (`WORKSHOP0_BLOB_BACKEND=local`, the default, gitignored with `data/`). Production uses a private GCS bucket (`WORKSHOP0_BLOB_BACKEND=gcs`, `WORKSHOP0_GCS_BUCKET`), and downloads go through a 5-minute signed URL. Only the CV text (up to 24,000 characters) is sent to Anthropic. The file itself never leaves storage except when an admin or the owner downloads it.
 
-> **Phase 11b** (partners list, paste-to-fill opportunity drafting, compensation units) is being specified concurrently. It will be documented here once specified.
+Partners, paste-to-fill drafting and compensation units are covered under [Opportunity Board (Phase 11b)](#opportunity-board-phase-11b) below.
+
+## Opportunity Board (Phase 11b)
+
+**Partners.** Admins manage the partner list at `/app/admin/partners/` (also reachable from a listing via **Manage partners**). Adding a name that already exists (ignoring case and extra spaces) is rejected. Deactivated partners leave the editor dropdown but still show on listings that use them. The real partner name and notes are never on a public page or API; the public sees only the default public name (for example "A Pune edtech").
+
+**Paste-to-fill drafting.** On **+ New opportunity**, paste a forwarded partner email into the box and click **Draft**. The form fills in from the text, and each drafted field carries an amber **Drafted — please check** chip. Drafting needs both `ANTHROPIC_API_KEY` and `ANTHROPIC_WORKSPACE_ID` in `.env`. Without them the box says **AI drafting not configured** and manual editing, saving and publishing still work.
+- Pasted text is untrusted input. The drafter can only choose from your curated topics and enum values.
+- A draft is never auto-published. Nothing is saved until you click **Save draft**, and publishing is a separate step.
+- A cost line (model and dollars) is shown to admins only. Drafting calls also count in **Network AI spend**.
+
+**Compensation.** A listing has an amount (or range), a currency and a unit: **hour**, **day**, **course** or **month**. The board shows it, for example "₹8,000–12,000 / day". An amount needs a currency. Trainer rates use the same four units.
 
 ## Run the tests
 
@@ -211,6 +223,32 @@ bash -n deploy/cloudrun/provision.sh
 ```
 
 GCS storage tests run only when `WORKSHOP0_GCS_BUCKET` is set.
+
+### Phase 11b gate addendum (partners, drafting, compensation)
+
+Run this after the Phase 11 block, in the same shell with the same exports, and with the Phase 11 server already killed.
+
+```bash
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0007'
+uv run pytest tests/integration/test_migration.py tests/integration/test_partners_admin.py tests/integration/test_board_partner_link.py tests/integration/test_board_compensation.py tests/integration/test_board_leak.py tests/unit/test_opportunity_draft_guardrails.py -q
+! uv run pytest tests/integration/ai_network/test_opportunity_draft.py tests/integration/ai_network/test_opportunity_draft_api.py -q -rs | grep -q SKIPPED   # real Anthropic, none skipped
+uv run pytest tests/integration/ai_network/test_opportunity_draft.py tests/integration/ai_network/test_opportunity_draft_api.py -q          # zero failures
+! grep -il openrouter src/workshop0/ai/opportunity_draft.py
+! grep -nE 'Partner|partner_id|partners' src/workshop0/api/board_public.py           # public router never touches partners
+test -f src/workshop0/ai/prompts/opportunity_draft_system.md && test -f src/workshop0/ai/prompts/opportunity_draft_user.md
+test -f frontend/out/admin/partners/index.html
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head
+DATABASE_URL="$TEST_DATABASE_URL" uv run python -m src &
+sleep 3
+for u in /api/admin/partners /api/admin/opportunity-draft/config; do curl -sS -o /dev/null -w '%{http_code}\n' "http://localhost:8001$u" | grep -qx 401; done
+curl -fsS -H "X-Admin-Key: $WORKSHOP0_ADMIN_KEY" http://localhost:8001/api/admin/opportunity-draft/config | uv run python -c 'import json,sys; d=json.load(sys.stdin)["data"]; assert d["available"] is True and d["model"]=="claude-sonnet-5-5", d'
+pnpm exec playwright test tests/e2e/opportunity-drafting.spec.ts tests/e2e/opportunity-board.spec.ts --reporter=line
+curl -fsS 'http://localhost:8001/api/public/opportunities?page_size=50' > /tmp/w0-public.json             # after e2e: published listings with sentinel partners exist
+uv run python -c 'import json; d=json.load(open("/tmp/w0-public.json"))["data"]; assert d["total"]>=1; assert any(o.get("compensation_unit")=="day" for o in d["opportunities"]), "no structured compensation on the board"'
+! grep -qE 'ZZ-INTERNAL|ZZ-PARTNER-NOTE|Zenvia|partner_internal_name|"partner_id"|"partner"|name_key|internal_notes' /tmp/w0-public.json
+kill %1
+```
+
 
 ## Run with Docker (local dev)
 
