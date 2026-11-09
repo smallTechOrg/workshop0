@@ -3,6 +3,7 @@
 
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -37,6 +38,8 @@ EXPECTED_TABLES = {
     "network_invite",
     "trainer_tag",
     "admin_note",
+    # Phase 11b — 0007_partners_compensation
+    "partner",
     "alembic_version",
 }
 BOARD_TABLES = {"topic", "opportunity", "opportunity_topic"}
@@ -51,6 +54,7 @@ NETWORK_TABLES = {
     "trainer_tag",
     "admin_note",
 }
+PARTNER_TABLES = {"partner"}
 AI_USAGE_NETWORK_COLUMNS = {"cv_document_id", "opportunity_id"}
 AUDIT_SUBJECT_COLUMNS = {"subject_type", "subject_id"}
 SEED_CATEGORIES = {"Languages", "Web & Mobile", "AI & Data", "Cloud & DevOps", "Engineering Practice"}
@@ -209,7 +213,7 @@ def test_0005_seeds_topics_and_downgrade_to_0004_removes_the_board(monkeypatch, 
 
         command.downgrade(config, "0004")
         inspector = inspect(engine)
-        assert set(inspector.get_table_names()) == EXPECTED_TABLES - BOARD_TABLES - NETWORK_TABLES
+        assert set(inspector.get_table_names()) == EXPECTED_TABLES - BOARD_TABLES - NETWORK_TABLES - PARTNER_TABLES
         assert not AUDIT_SUBJECT_COLUMNS & {c["name"] for c in inspector.get_columns("facilitator_action")}
         with engine.connect() as connection:
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0004"
@@ -218,7 +222,7 @@ def test_0005_seeds_topics_and_downgrade_to_0004_removes_the_board(monkeypatch, 
         assert set(inspect(engine).get_table_names()) == EXPECTED_TABLES
         _assert_seed(_topic_seed(engine))  # re-seeded exactly once, not duplicated
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0006"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0007"
     finally:
         engine.dispose()
 
@@ -267,16 +271,16 @@ def _fks(inspector, table: str) -> dict[str, dict]:
     return {fk["constrained_columns"][0]: fk for fk in inspector.get_foreign_keys(table)}
 
 
-def test_0006_is_head_and_creates_the_network_schema(monkeypatch, scratch_database):
+def test_0006_creates_the_network_schema_and_0007_is_head_and_creates_the_network_schema(monkeypatch, scratch_database):
     url = scratch_database()
     _use(monkeypatch, url)
     config = _alembic_config()
-    assert ScriptDirectory.from_config(config).get_current_head() == "0006"
-    command.upgrade(config, "head")
+    assert ScriptDirectory.from_config(config).get_current_head() == "0007"
+    command.upgrade(config, "0006")
 
     engine = create_engine(url)
     try:
-        assert _version(engine) == "0006"  # what `alembic current` prints
+        assert _version(engine) == "0006"
         inspector = inspect(engine)
         assert NETWORK_TABLES <= set(inspector.get_table_names())
 
@@ -396,7 +400,7 @@ def test_0006_downgrade_to_0005_and_back_round_trips(monkeypatch, scratch_databa
         command.downgrade(config, "0005")
         inspector = inspect(engine)
         assert _version(engine) == "0005"
-        assert set(inspector.get_table_names()) == EXPECTED_TABLES - NETWORK_TABLES
+        assert set(inspector.get_table_names()) == EXPECTED_TABLES - NETWORK_TABLES - PARTNER_TABLES
         ai_cols = _columns(inspector, "ai_usage")
         assert not AI_USAGE_NETWORK_COLUMNS & set(ai_cols)
         assert not ai_cols["workshop_id"]["nullable"]
@@ -405,7 +409,7 @@ def test_0006_downgrade_to_0005_and_back_round_trips(monkeypatch, scratch_databa
         _assert_seed(_topic_seed(engine))  # Phase-10 data untouched
 
         command.upgrade(config, "head")
-        assert _version(engine) == "0006"
+        assert _version(engine) == "0007"
         inspector = inspect(engine)
         assert set(inspector.get_table_names()) == EXPECTED_TABLES
         assert _columns(inspector, "ai_usage")["workshop_id"]["nullable"]
@@ -438,5 +442,165 @@ def test_0006_upgrade_keeps_existing_help_desk_ai_usage_rows(monkeypatch, scratc
                 "SELECT purpose, cost_usd, cv_document_id, opportunity_id FROM ai_usage"
             )).one()
         assert (row[0], float(row[1]), row[2], row[3]) == ("triage_answer", 0.5, None, None)
+    finally:
+        engine.dispose()
+
+
+# --------------------------------------------------------------------------- Phase 11b — 0007
+
+_OPP_INSERT = (
+    "INSERT INTO opportunity (title, type, summary, description_md, location_mode, deadline,"
+    " partner_display_name, partner_internal_name, status, created_at, updated_at)"
+    " VALUES (:t, 'trainer', 's', '', 'remote', now(), :d, :n, 'draft', now(), :u)"
+)
+
+
+def _seed_pre_0007(engine) -> None:
+    rows = [
+        ("a1", "Acme  Corp", "A fintech", "2026-01-01T00:00:00+00:00"),
+        ("a2", "acme corp", "A fintech", "2026-03-01T00:00:00+00:00"),
+        ("a3", " ACME CORP ", "An Acme", "2026-02-01T00:00:00+00:00"),
+        ("b1", "Beta Ltd", None, "2026-01-01T00:00:00+00:00"),
+        ("n1", None, "x", "2026-01-01T00:00:00+00:00"),
+        ("n2", "   ", "x", "2026-01-01T00:00:00+00:00"),
+    ]
+    with engine.begin() as connection:
+        for t, n, d, u in rows:
+            connection.execute(text(_OPP_INSERT), {"t": t, "n": n, "d": d, "u": u})
+
+
+def test_0007_schema_and_widened_purpose(monkeypatch, scratch_database):
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    command.upgrade(config, "head")
+    engine = create_engine(url)
+    try:
+        assert _version(engine) == "0007"
+        inspector = inspect(engine)
+        pcols = _columns(inspector, "partner")
+        assert set(pcols) == {
+            "id", "internal_name", "name_key", "display_name", "notes", "active", "created_at", "updated_at"
+        }
+        assert not pcols["name_key"]["nullable"] and not pcols["internal_name"]["nullable"]
+        assert any(
+            u["column_names"] == ["name_key"] for u in inspector.get_unique_constraints("partner")
+        )
+        ocols = _columns(inspector, "opportunity")
+        assert {"partner_id", "compensation_min", "compensation_max", "compensation_currency",
+                "compensation_unit", "compensation_text", "partner_internal_name"} <= set(ocols)
+        assert ocols["partner_id"]["nullable"]
+        assert _fks(inspector, "opportunity")["partner_id"]["referred_table"] == "partner"
+        assert _fks(inspector, "opportunity")["partner_id"]["options"].get("ondelete") == "RESTRICT"
+        assert "ix_opportunity_partner_id" in {i["name"] for i in inspector.get_indexes("opportunity")}
+        assert ocols["compensation_currency"]["type"].length == 3
+        assert ocols["compensation_unit"]["type"].length == 8
+        assert _columns(inspector, "ai_usage")["purpose"]["type"].length == 32
+        with engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO ai_usage (workshop_id, purpose, model, prompt_tokens, completion_tokens,"
+                " cost_usd, latency_ms, created_at)"
+                " VALUES (NULL, 'opportunity_draft', 'claude-sonnet-5-5', 1, 1, 0, 1, now())"
+            ))
+            # RESTRICT: a referenced partner cannot be deleted; name_key is unique
+            connection.execute(text(
+                "INSERT INTO partner (internal_name, name_key, active, created_at, updated_at)"
+                " VALUES ('P', 'p', true, now(), now())"
+            ))
+        from sqlalchemy.exc import IntegrityError
+
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO partner (internal_name, name_key, created_at, updated_at)"
+                " VALUES ('p', 'p', now(), now())"
+            ))
+    finally:
+        engine.dispose()
+
+
+def test_0007_data_migration_merges_free_text_partners(monkeypatch, scratch_database):
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    command.upgrade(config, "0006")
+    engine = create_engine(url)
+    try:
+        _seed_pre_0007(engine)
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            partners = connection.execute(text(
+                "SELECT id, internal_name, name_key, display_name, notes, active FROM partner ORDER BY name_key"
+            )).all()
+            assert [(p[1], p[2], p[3], p[4], p[5]) for p in partners] == [
+                ("acme corp", "acme corp", "A fintech", None, True),  # latest (a2) spelling, most common public name
+                ("Beta Ltd", "beta ltd", None, None, True),
+            ]
+            links = dict(connection.execute(text("SELECT title, partner_id FROM opportunity")).all())
+        acme, beta = partners[0][0], partners[1][0]
+        assert links == {"a1": acme, "a2": acme, "a3": acme, "b1": beta, "n1": None, "n2": None}
+        with engine.connect() as connection:  # mirror untouched
+            mirror = connection.execute(text(
+                "SELECT partner_internal_name FROM opportunity WHERE title='a1'"
+            )).scalar()
+        assert mirror == "Acme  Corp"
+    finally:
+        engine.dispose()
+
+
+def test_0007_downgrade_restores_mirror_compensation_and_round_trips(monkeypatch, scratch_database):
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    command.upgrade(config, "0006")
+    engine = create_engine(url)
+    try:
+        _seed_pre_0007(engine)
+        command.upgrade(config, "head")
+        with engine.begin() as connection:
+            connection.execute(text(
+                "UPDATE opportunity SET compensation_min=5000, compensation_max=8000,"
+                " compensation_currency='INR', compensation_unit='day' WHERE title='a1'"
+            ))
+            connection.execute(text(
+                "UPDATE opportunity SET compensation_min=100, compensation_currency='USD',"
+                " compensation_unit='hour', compensation_text='note' WHERE title='b1'"
+            ))
+            connection.execute(text(
+                "UPDATE opportunity SET compensation_max=9, compensation_currency='USD',"
+                " compensation_unit='month' WHERE title='a2'"
+            ))
+            connection.execute(text(
+                "UPDATE opportunity SET partner_internal_name='stale' WHERE title='a3'"
+            ))
+            connection.execute(text(
+                "INSERT INTO ai_usage (workshop_id, purpose, model, prompt_tokens, completion_tokens,"
+                " cost_usd, latency_ms, created_at) VALUES"
+                " (NULL, 'opportunity_draft', 'm', 1, 1, 0, 1, now()),"
+                " (NULL, 'profile_draft', 'm', 1, 1, 0, 1, now())"
+            ))
+
+        command.downgrade(config, "0006")
+        inspector = inspect(engine)
+        assert _version(engine) == "0006"
+        assert "partner" not in inspector.get_table_names()
+        assert not {"partner_id", "compensation_min", "compensation_max", "compensation_currency",
+                    "compensation_unit"} & set(_columns(inspector, "opportunity"))
+        assert _columns(inspector, "ai_usage")["purpose"]["type"].length == 16
+        with engine.connect() as connection:
+            opp = {r[0]: (r[1], r[2]) for r in connection.execute(text(
+                "SELECT title, partner_internal_name, compensation_text FROM opportunity"
+            ))}
+            purposes = [r[0] for r in connection.execute(text("SELECT purpose FROM ai_usage"))]
+        assert opp["a1"] == ("acme corp", "INR 5000-8000 / day")
+        assert opp["a3"][0] == "acme corp"  # mirror rewritten from the partner
+        assert opp["b1"] == ("Beta Ltd", "note")  # existing note kept
+        assert opp["a2"][1] == "USD 9 / month"
+        assert opp["n1"] == (None, None)
+        assert purposes == ["profile_draft"]  # >16-char purposes removed
+
+        command.upgrade(config, "head")
+        assert _version(engine) == "0007"
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT count(*) FROM partner")).scalar() == 2
     finally:
         engine.dispose()

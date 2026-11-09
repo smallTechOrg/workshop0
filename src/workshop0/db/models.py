@@ -280,7 +280,7 @@ class AiUsage(Base):
     opportunity_id: Mapped[int | None] = mapped_column(
         ForeignKey("opportunity.id", ondelete="SET NULL"), nullable=True
     )
-    purpose: Mapped[str] = mapped_column(String(16), nullable=False)  # triage_answer|profile_draft|shortlist_rank
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)  # triage_answer|profile_draft|opportunity_draft|shortlist_rank
     model: Mapped[str] = mapped_column(String(120), nullable=False)
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -312,6 +312,26 @@ class Topic(Base):
     )
 
 
+class Partner(Base):
+    """Admin-managed partner list (migration 0007, spec/data-model.md §Phase 11b).
+    `name_key` = casefold of the whitespace-collapsed internal_name (unique). Admin-only."""
+
+    __tablename__ = "partner"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    internal_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    name_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+
 class Opportunity(Base):
     """One admin-curated listing. `status` is the STORED status (draft|open|closed);
     the effective status (adds `expired`) is computed on read — see
@@ -322,6 +342,7 @@ class Opportunity(Base):
     __table_args__ = (
         Index("ix_opportunity_status_deadline", "status", "deadline"),
         Index("ix_opportunity_published_at", "published_at"),
+        Index("ix_opportunity_partner_id", "partner_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -336,7 +357,14 @@ class Opportunity(Base):
     starts_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     ends_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     duration_text: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    compensation_text: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    compensation_text: Mapped[str | None] = mapped_column(String(120), nullable=True)  # optional note
+    compensation_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    compensation_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    compensation_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)  # INR|USD
+    compensation_unit: Mapped[str | None] = mapped_column(String(8), nullable=True)  # hour|day|course|month
+    partner_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("partner.id", ondelete="RESTRICT"), nullable=True
+    )  # admin-only, never public
     deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     partner_display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     partner_internal_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
