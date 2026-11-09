@@ -118,6 +118,12 @@ jobs:
           exit 1
       - name: Unit + integration tests
         run: uv run pytest tests/unit tests/integration -q
+      # The OIDC test issuer was started via `uv run` and keeps the uv cache busy; if it is
+      # still running, setup-uv's post-job "Pruning cache" hangs ~5 min and fails the job
+      # even though every test passed. Stop it so the post step can finish.
+      - name: Stop the OIDC test issuer
+        if: always()
+        run: pkill -f fake_oidc.py || true
 
   deploy:
     name: Build, migrate, deploy
