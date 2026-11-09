@@ -75,10 +75,12 @@ async function completeIssuer(page: Page, email: string): Promise<void> {
 }
 
 /** Click a visible "Continue with Google" button, then complete the issuer. */
-async function continueWithGoogle(page: Page, email: string): Promise<void> {
-  const google = page.getByRole('button', { name: 'Continue with Google' })
-    .or(page.getByRole('link', { name: 'Continue with Google' }))
-    .first();
+async function continueWithGoogle(
+  page: Page,
+  email: string,
+  testId: 'google-signin' | 'admin-google-signin' = 'google-signin',
+): Promise<void> {
+  const google = page.getByTestId(testId);
   await waitForHydration(google);
   await google.click();
   await completeIssuer(page, email);
@@ -95,7 +97,7 @@ async function freshContext(browser: Browser): Promise<BrowserContext> {
 }
 
 /** A labelled stub: an element carrying `label` that also holds a stub pill. */
-function stubWithLabel(page: Page, label: string | RegExp): Locator {
+function stubWithLabel(page: Page | Locator, label: string | RegExp): Locator {
   return page
     .locator('[aria-disabled="true"]')
     .filter({ hasText: label })
@@ -195,7 +197,7 @@ test('admin signs in with Google, curates the pool and invites a trainer', async
   // --- Admin Home via the issuer, never typing the key -----------------------
   await admin.goto(`${ADMIN_BASE}/`);
   await expect(admin.getByTestId('admin-key-input')).toBeVisible({ timeout: 20_000 });
-  await continueWithGoogle(admin, ADMIN_EMAIL);
+  await continueWithGoogle(admin, ADMIN_EMAIL, 'admin-google-signin');
   await expect(admin).toHaveURL(/\/app\/admin\/?(\?.*)?$/);
   await expect(admin.getByTestId('new-workshop-button')).toBeVisible({ timeout: 20_000 });
   await expect(admin.getByTestId('admin-key-input')).toHaveCount(0);
@@ -209,14 +211,15 @@ test('admin signs in with Google, curates the pool and invites a trainer', async
   await waitForHydration(nav);
   await nav.click();
   await expect(admin).toHaveURL(/\/app\/admin\/network\/?(\?.*)?$/);
-  await expect(admin.getByText('Network AI spend')).toBeVisible();
+  await expect(admin.getByTestId('network-ai-spend')).toContainText('Network AI spend');
 
   // Admin-side labelled stubs on the pool page (C13): matching filters, Email invite.
-  await expect(stubWithLabel(admin, /level|budget|availability|matching/i)).toBeVisible();
-  await expect(stubWithLabel(admin, /Email invite/i)).toBeVisible();
+  await expect(stubWithLabel(admin, /Matching filters/)).toBeVisible();
+  await expect(stubWithLabel(admin, 'Email invite')).toBeVisible();
+  await expect(stubWithLabel(admin, 'Outbox')).toBeVisible();
 
   // --- The seeded trainer is listed (search narrows to this run) -------------
-  const search = admin.getByRole('searchbox').or(admin.getByPlaceholder(/search/i)).first();
+  const search = admin.getByRole('searchbox', { name: 'Search trainers' });
   await waitForHydration(search);
   await search.fill(RUN);
   const row = admin.getByTestId('pool-row').filter({ hasText: HEADLINE });
@@ -229,10 +232,7 @@ test('admin signs in with Google, curates the pool and invites a trainer', async
   await expect(admin.getByText(HEADLINE).first()).toBeVisible();
 
   // Download CV → a real .pdf download event with the original bytes' magic.
-  const cvBtn = admin
-    .getByRole('button', { name: 'Download CV' })
-    .or(admin.getByRole('link', { name: 'Download CV' }))
-    .first();
+  const cvBtn = admin.getByRole('button', { name: 'Download CV' });
   await waitForHydration(cvBtn);
   const [cvDl] = await Promise.all([admin.waitForEvent('download'), cvBtn.click()]);
   expect(cvDl.suggestedFilename().toLowerCase()).toMatch(/\.pdf$/);
@@ -242,21 +242,23 @@ test('admin signs in with Google, curates the pool and invites a trainer', async
   // Verify → badge, and the action flips to Unverify.
   await admin.getByRole('button', { name: 'Verify', exact: true }).click();
   await expect(admin.getByRole('button', { name: 'Unverify' })).toBeVisible();
-  await expect(admin.getByTestId('verified-badge').first()).toBeVisible();
+  await expect(admin.getByTestId('verified-badge')).toBeVisible();
+  await expect(admin.getByTestId('trainer-ai-cost')).toBeVisible();
 
   // Tag.
-  const tagInput = admin.getByLabel(/tag/i).or(admin.getByPlaceholder(/tag/i)).first();
+  const tagInput = admin.getByLabel('Add a tag');
   await waitForHydration(tagInput);
   await tagInput.fill(TAG);
   await tagInput.press('Enter');
-  await expect(admin.getByText(TAG).first()).toBeVisible();
+  await expect(admin.getByTestId('trainer-tag').filter({ hasText: TAG })).toBeVisible();
 
   // Private note (append-only, author shown).
-  const noteInput = admin.getByLabel(/note/i).or(admin.getByPlaceholder(/note/i)).first();
+  const noteInput = admin.getByLabel('New private note');
   await noteInput.fill(NOTE);
-  await admin.getByRole('button', { name: /add note/i }).click();
-  await expect(admin.getByText(NOTE)).toBeVisible();
-  await expect(admin.getByText(ADMIN_EMAIL).first()).toBeVisible();
+  await admin.getByRole('button', { name: 'Add note' }).click();
+  const noteRow = admin.getByTestId('trainer-note').filter({ hasText: NOTE });
+  await expect(noteRow).toBeVisible();
+  await expect(noteRow).toContainText(ADMIN_EMAIL);
 
   // Server truth: verified, tag and note persisted.
   const detail = await adminCtx.request.get(`${ORIGIN}/api/admin/network/trainers/${trainerId}`);
@@ -267,18 +269,15 @@ test('admin signs in with Google, curates the pool and invites a trainer', async
 
   // --- Back to the pool: badge + tag in the row, Export CSV ------------------
   await admin.goto(POOL_URL);
-  const search2 = admin.getByRole('searchbox').or(admin.getByPlaceholder(/search/i)).first();
+  const search2 = admin.getByRole('searchbox', { name: 'Search trainers' });
   await waitForHydration(search2);
   await search2.fill(RUN);
   const row2 = admin.getByTestId('pool-row').filter({ hasText: HEADLINE });
   await expect(row2).toBeVisible();
-  await expect(row2).toContainText(TAG);
+  await expect(row2.getByTestId('pool-row-tag').filter({ hasText: TAG })).toBeVisible();
   await expect(row2.getByTestId('verified-badge')).toBeVisible();
 
-  const csvBtn = admin
-    .getByRole('button', { name: 'Export CSV' })
-    .or(admin.getByRole('link', { name: 'Export CSV' }))
-    .first();
+  const csvBtn = admin.getByRole('button', { name: 'Export CSV' });
   const [csvDl] = await Promise.all([admin.waitForEvent('download'), csvBtn.click()]);
   expect(csvDl.suggestedFilename()).toMatch(/^workshop0-trainers-\d{8}\.csv$/);
   const csv = fs.readFileSync(await saveDownload(csvDl), 'utf8');
@@ -288,17 +287,19 @@ test('admin signs in with Google, curates the pool and invites a trainer', async
   const inviteUrl = await createInvite(admin, INVITEE_EMAIL);
   const invitee = await openInviteAs(browser, inviteUrl, INVITEE_EMAIL);
   await expect(invitee.page).toHaveURL(/\/app\/network\/join\//);
-  await expect(invitee.page.getByText('Verified', { exact: true }).first()).toBeVisible({
-    timeout: 20_000,
-  });
+  await expect(invitee.page.getByTestId('invite-verified')).toBeVisible({ timeout: 20_000 });
+  await expect(invitee.page.getByTestId('verified-badge')).toBeVisible();
   await invitee.ctx.close();
 
   // --- Second invite opened with a different email → mismatch --------------
   const inviteUrl2 = await createInvite(admin, INVITEE2_EMAIL);
   const wrong = await openInviteAs(browser, inviteUrl2, WRONG_EMAIL);
   await expect(wrong.page).toHaveURL(/error=invite_email_mismatch/);
-  await expect(wrong.page.getByText(/This invite was sent to/)).toBeVisible();
-  await expect(wrong.page.getByText(/sign in with that Google account/)).toBeVisible();
+  await expect(wrong.page.getByTestId('signin-error')).toHaveAttribute('data-code', 'invite_email_mismatch');
+  await expect(wrong.page.getByTestId('signin-error')).toContainText(
+    /This invite was sent to .+ — sign in with that Google account\./,
+  );
+  expect(new URL(wrong.page.url()).searchParams.get('invite_email')).toBeTruthy();
   const wrongMe = data<{ user: unknown }>(
     await (await wrong.ctx.request.get(`${ORIGIN}/api/auth/me`)).json(),
   );
@@ -307,7 +308,9 @@ test('admin signs in with Google, curates the pool and invites a trainer', async
 
   // Invite list shows the accepted one.
   await admin.reload();
-  await expect(admin.getByText(INVITEE_EMAIL).first()).toBeVisible();
+  await expect(
+    admin.getByTestId('invite-row').filter({ hasText: INVITEE_EMAIL }),
+  ).toContainText('Accepted');
 
   // --- Opportunities page: Trainer pool nav is real; Phase-12 stubs pill ----
   await admin.goto(`${ADMIN_BASE}/opportunities/`);
@@ -324,9 +327,9 @@ test('the seeded trainer sees the My profile stubs and the Verified badge', asyn
   const page = await trainerCtx.newPage();
   await page.goto(`${APP_BASE}/network/me/`);
   await expect(page.getByText(HEADLINE).first()).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText('Verified', { exact: true }).first()).toBeVisible();
-  for (const label of ['My applications', 'Matched for you', /Saved searches/, /Public directory/]) {
-    await expect(stubWithLabel(page, label)).toBeVisible();
+  await expect(page.getByTestId('verified-badge')).toBeVisible();
+  for (const label of ['My applications', 'Matched for you', 'Saved searches & alerts', 'Public directory profile']) {
+    await expect(stubWithLabel(page.getByTestId('profile-stubs'), label)).toBeVisible();
   }
   await page.close();
 });
@@ -334,26 +337,15 @@ test('the seeded trainer sees the My profile stubs and the Verified badge', asyn
 /** Create an invite on the pool page's Invites panel and return its copyable URL. */
 async function createInvite(admin: Page, email: string): Promise<string> {
   if (!/\/app\/admin\/network\/?(\?.*)?$/.test(admin.url())) await admin.goto(POOL_URL);
-  const panel = admin
-    .getByRole('region', { name: /invite/i })
-    .or(admin.locator('section', { has: admin.getByRole('heading', { name: /invites?/i }) }))
-    .first();
-  const emailInput = panel.getByLabel(/email/i).or(panel.getByPlaceholder(/email/i)).first();
+  const panel = admin.getByRole('region', { name: 'Invites' });
+  const emailInput = panel.getByLabel('Email', { exact: true });
   await waitForHydration(emailInput);
   await emailInput.fill(email);
-  await panel.getByRole('button', { name: /create invite/i }).click();
-  let url = '';
-  await expect
-    .poll(
-      async () => {
-        const text = await panel.innerText();
-        const m = text.match(/https?:\/\/\S+?\/invite\/[A-Za-z0-9_-]+/);
-        url = m ? m[0] : '';
-        return url;
-      },
-      { timeout: 15_000 },
-    )
-    .not.toBe('');
+  await panel.getByRole('button', { name: 'Create invite' }).click();
+  const created = panel.getByTestId('invite-created');
+  await expect(created).toContainText(email);
+  const url = ((await created.getByTestId('invite-url').textContent()) ?? '').trim();
+  expect(url).toMatch(/\/invite\/[A-Za-z0-9_-]+$/);
   return url;
 }
 

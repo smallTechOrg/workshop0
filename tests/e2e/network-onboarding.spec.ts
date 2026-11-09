@@ -55,7 +55,7 @@ let listingId = 0;
  * callback has bounced the browser back onto the app (`/app/…`, not signin).
  */
 async function signInWithFakeIssuer(p: Page, email: string): Promise<void> {
-  const google = p.getByRole('link', { name: 'Continue with Google' });
+  const google = p.getByTestId('google-signin');
   await waitForHydration(google);
   await google.click();
   // The authorize page lives on the issuer's origin, not the app's.
@@ -155,7 +155,7 @@ test.describe('network onboarding — sign in, CV-drafted profile, delete', () =
     await join.click();
     await page.waitForURL(/\/app\/signin\//);
     expect(new URL(page.url()).searchParams.get('next')).toBe('/app/network/join/');
-    await expect(page.getByRole('link', { name: 'Continue with Google' })).toBeVisible();
+    await expect(page.getByTestId('google-signin')).toBeVisible();
   });
 
   test('first sign-in through the local issuer lands on onboarding', async () => {
@@ -167,26 +167,29 @@ test.describe('network onboarding — sign in, CV-drafted profile, delete', () =
     expect(me!.email).toBe(EMAIL);
     expect(me!.has_profile).toBe(false);
     firstUserId = me!.id;
-    await expect(page.getByText("We can't read LinkedIn links directly")).toBeVisible();
+    await expect(page.getByTestId('linkedin-links-note')).toContainText("We can't read LinkedIn links directly");
   });
 
   test('upload the CV → Reading your CV… → pre-filled review with chips and curated topics', async () => {
     test.setTimeout(DRAFT_TIMEOUT + 60_000);
-    const fileInput = page.locator('input[type="file"]').first();
-    await waitForHydration(page.getByRole('tab', { name: /upload cv/i }));
-    await fileInput.setInputFiles(CV_PDF);
-    // Some UIs upload on select; others need an explicit submit.
-    const submit = page.getByRole('button', { name: /upload|read my cv|continue/i }).first();
-    if (await submit.isVisible().catch(() => false)) await submit.click();
+    const uploadTab = page.getByTestId('cv-tab-upload');
+    await waitForHydration(uploadTab);
+    await uploadTab.click();
+    await page.getByTestId('cv-file-input').setInputFiles(CV_PDF);
+    const submit = page.getByTestId('cv-submit');
+    await expect(submit).toHaveText('Read my CV');
+    await expect(submit).toBeEnabled();
+    await submit.click();
 
-    await expect(page.getByText('Reading your CV…')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('cv-reading')).toContainText('Reading your CV…', { timeout: 15_000 });
 
-    const chips = page.getByText('From your CV — please check');
+    const chips = page.getByTestId('autofill-chip');
     await expect(chips.first()).toBeVisible({ timeout: DRAFT_TIMEOUT });
+    await expect(chips.first()).toContainText('From your CV — please check');
     expect(await chips.count()).toBeGreaterThanOrEqual(1);
-    await expect(page.getByText('Reading your CV…')).toHaveCount(0);
+    await expect(page.getByTestId('cv-reading')).toHaveCount(0);
     // A real draft, not the "couldn't pre-fill" empty state.
-    await expect(page.getByText("We couldn't pre-fill from your CV")).toHaveCount(0);
+    await expect(page.getByTestId('review-no-prefill')).toHaveCount(0);
 
     // The server's draft: ready, non-empty headline, ≥1 curated topic.
     const draftRes = await ctx.request.get(`${ORIGIN}/api/me/cv/draft`);
@@ -199,7 +202,7 @@ test.describe('network onboarding — sign in, CV-drafted profile, delete', () =
 
     // The headline field shows the drafted value.
     headline = String(draft.draft.headline);
-    await expect(page.getByLabel(/headline/i).first()).toHaveValue(headline);
+    await expect(page.getByTestId('profile-headline')).toHaveValue(headline);
 
     // Curated topics are shown by their curated names on the review screen.
     const topicsRes = await ctx.request.get(`${ORIGIN}/api/public/topics`);
@@ -215,8 +218,9 @@ test.describe('network onboarding — sign in, CV-drafted profile, delete', () =
   });
 
   test('consent → Create my profile → My profile shows completeness, nudges and stubs', async () => {
-    const create = page.getByRole('button', { name: 'Create my profile' });
-    const consent = page.getByRole('checkbox', { name: /smallTech may share my profile/i });
+    const create = page.getByTestId('profile-submit');
+    await expect(create).toHaveText('Create my profile');
+    const consent = page.getByTestId('profile-consent');
     await waitForHydration(consent);
     await consent.check();
     await expect(consent).toBeChecked();
@@ -237,15 +241,18 @@ test.describe('network onboarding — sign in, CV-drafted profile, delete', () =
     if (body.completeness.missing.length > 0) {
       await expect(page.getByTestId('completeness-nudges')).toBeVisible();
     }
-    await expect(page.getByText(headline).first()).toBeVisible();
+    await expect(page.getByTestId('profile-headline-text')).toHaveText(headline);
 
     for (const label of [
       'My applications',
       'Matched for you',
-      'Saved searches',
+      'Saved searches & alerts',
       'Public directory profile',
     ]) {
-      const stub = page.locator('[aria-disabled="true"]').filter({ hasText: label }).first();
+      const stub = page
+        .getByTestId('profile-stubs')
+        .locator('[aria-disabled="true"]')
+        .filter({ hasText: label });
       await expect(stub, `${label} is a labelled stub`).toBeVisible();
       await expect(stub).toContainText(STUB_PILL);
     }
@@ -269,21 +276,18 @@ test.describe('network onboarding — sign in, CV-drafted profile, delete', () =
     expect(me!.has_profile).toBe(true);
     const res = await ctx.request.get(`${ORIGIN}/api/me/profile`);
     expect((await res.json()).data.profile.id).toBe(profileId);
-    await expect(page.getByText(headline).first()).toBeVisible();
+    await expect(page.getByTestId('profile-headline-text')).toHaveText(headline);
   });
 
   test('Delete my account → confirmation → signing in again starts fresh onboarding', async () => {
-    await page.getByRole('button', { name: 'Delete my account' }).first().click();
-    const confirmInput = page.getByLabel(/email/i).last();
+    await page.getByTestId('delete-account').click();
+    const confirmInput = page.getByTestId('delete-confirm-email');
     await expect(confirmInput).toBeVisible();
     await confirmInput.fill(EMAIL);
-    await page
-      .getByRole('dialog')
-      .getByRole('button', { name: /delete/i })
-      .or(page.getByRole('button', { name: /^delete( my account)?( permanently)?$/i }).last())
-      .first()
-      .click();
-    await expect(page.getByText(/account (has been|was) deleted|your account is deleted/i).first()).toBeVisible();
+    const confirm = page.getByTestId('delete-confirm');
+    await expect(confirm).toHaveText('Delete permanently');
+    await confirm.click();
+    await expect(page.getByTestId('account-deleted')).toContainText('Your account has been deleted');
     await expect.poll(authMe, { timeout: 15_000 }).toBeNull();
 
     await gotoSignIn(page);
