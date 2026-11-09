@@ -25,12 +25,26 @@ Workshops are created fresh per session — from scratch or from a persistent **
 - **Visually excellent.** A modern, polished UI with a consistent design system — this is the product's face to external participants. Every view designs its empty, loading, error, and populated states.
 - **Honest AI.** AI answers are always badged as AI, always escapable to a human, always audited with the exact context the AI used, and always costed (per-workshop spend visible).
 
+## The Trainer Network & Opportunity Board (Phases 10–13)
+
+smallTech is building a network of freelance and in-house tech trainers — and more broadly mentors, engineers and learners — and it lives inside Workshop0 for now. Two halves:
+
+- **A public, admin-curated Opportunity Board.** Workshop and training gigs, longer engagements (bootcamps, mentoring, curriculum design), job/contract roles, and Workshop0's own workshops needing co-facilitators or TAs — posted, edited and closed only by smallTech admins on behalf of the partner network. Partners never touch the platform; admins forward shortlisted profiles out of band. Listings expire automatically at their deadline. Internal partner names stay internal.
+- **A self-serve trainer network.** People find the board, sign in with Google, drop a CV (or a LinkedIn PDF, or pasted text), review a pre-filled profile on one screen, and they are in — live instantly, with an admin "Verified" badge for vetted trainers. They apply in one click and track their status; admins search the pool, get suggested shortlists for a listing, invite trainers to apply, and run an applicant pipeline with status emails.
+
+Who it serves, additionally: **smallTech admins** (curate listings and the pool, match, shortlist) and **network members** (discover work, apply, get matched). Quality bar is unchanged: first-time-right, visually excellent, privacy by default (the pool is private to admins; rates are always admin-only; a public directory profile is opt-in; self-serve deletion of profile and CV). Scale: hundreds of trainers, tens of listings, bursty signups (~500/day). The board is the first phase because it is valuable on its own and needs nothing external.
+
+Network identity is deliberately an **isolated, OIDC-shaped module** so it can later move to a central smallTech identity service without touching product code. Workshop facilitators and participants keep their account-free token links — the network never becomes a prerequisite for running or joining a workshop.
+
 ## Explicit non-goals (v0.2)
 
-- **No participant accounts, no facilitator accounts, no auth-provider integration.** Access is via unguessable token links plus a single instance-level facilitator access key.
+> **Amended by the Trainer Network (Phases 10–13):** the network adds Google sign-in accounts (network members and admins only), transactional email (Phase 12) and the public board/directory. The non-goals below still hold for the **workshop** product — no participant or facilitator accounts, no email in the live-workshop loop.
+
+- **No participant accounts, no facilitator accounts, no auth-provider integration** *(for workshops — the trainer network adds its own Google sign-in, see above)*. Access is via unguessable token links plus a single instance-level facilitator access key.
 - **No separate concurrent-workshop isolation model.** Multiple facilitators co-run the *same* workshop; running several workshops at once is possible but not a designed-for isolation boundary (one team, one instance).
 - **No lecture mode or multi-day cohort mode** — future versions, not v0.2.
-- **No external integrations** (no Slack/email/webhooks/calendar). Standalone.
+- **No external integrations** (no Slack/webhooks/calendar) — the only exceptions are the trainer network's Google sign-in (Phase 11) and its transactional email over SMTP (Phase 12). Standalone otherwise.
+- **No partner-facing platform access, no LinkedIn URL scraping, no calendar-grade availability** for the network — partners are served by admins out of band; profiles import from CV files/pasted text only; availability is a weekly pattern + dates.
 - **No participant-to-participant chat, no breakout rooms.**
 - **No WebSockets/SSE** — live updates are versioned coalesced polling (a deliberate architecture decision, see architecture.md).
 - **No dark mode in v0.2** — one polished light theme; design tokens are structured so dark mode can be added later without rework.

@@ -28,6 +28,13 @@
 | LLM provider | OpenRouter | key: `OPENROUTER_API_KEY` (exact name — project convention); default model `anthropic/claude-sonnet-4-6` via `WORKSHOP0_AI_MODEL` |
 | Deploy (production, Phase 7+) | **Cloud Run + Cloud SQL**, GitHub Actions + Workload Identity Federation | see §Production topology. Supersedes the Phase-5 VM path (Docker Compose + Caddy + SQLite on GCE), removed from the repo in Phase 8 (recoverable from git tag `vm-deploy-final`) |
 | Deploy (local) | Docker Compose (`deploy/docker-compose.yml`) | SQLite + volume; kept for local dev and self-hosters |
+| OIDC / sessions (Phase 11) | `pyjwt[crypto]` ≥2.9 (ID-token + JWKS verification via `PyJWKClient`), `itsdangerous` ≥2.2 (signed short-lived OIDC state cookie), httpx (discovery + code exchange) | No auth SDK: a ~300-line OIDC client inside `src/workshop0/auth/` keeps the module swappable for a central smallTech identity service |
+| File uploads & CV text (Phase 11) | `python-multipart` ≥0.0.9 (FastAPI `UploadFile`), `pypdf` ≥5.0 (PDF text), `python-docx` ≥1.1 (DOCX text) | Image-only PDFs yield no text → `cv_unreadable`; no OCR |
+| Blob storage (Phase 11) | `google-cloud-storage` ≥2.18 in production (private bucket, V4 signed URLs); local disk `data/blobs/` in dev/tests | One `BlobStore` interface, backend chosen by `WORKSHOP0_BLOB_BACKEND` |
+| Email (Phase 12) | stdlib `smtplib` (STARTTLS, Gmail SMTP `smtp.gmail.com:587` + app password) behind an outbox table; `aiosmtpd` (dev dependency) as the real local SMTP sink for tests/e2e | No email SaaS SDK |
+| Test OIDC issuer (Phase 11) | `tests/support/fake_oidc.py` — a tiny standalone FastAPI app implementing discovery / authorize / token / JWKS with a generated RSA key | Exercises the real OIDC protocol path end-to-end without a Google account; real Google is verified in the human test |
+
+> **Assumed (Phase 11+):** these dependencies are added to `pyproject.toml` + `uv.lock` by the orchestrator **before** the Phase-11 fan-out (shared-scaffold rule, roadmap.md), so no slice edits the lockfile. `aiosmtpd` lands in the dev group before Phase 12.
 
 > **Assumed:** Node LTS (22.x) pinned via `frontend/.nvmrc` and `engines`; all frontend `dev`/`build` scripts carry `NODE_OPTIONS=--no-experimental-webstorage` (harness Node ≥25 safety rule).
 
@@ -115,6 +122,37 @@ workshop0/                  ← repo root IS the project; all commands run from 
 
 > The Phase-5 VM deploy path (`docker-compose.prod.yml`, the reverse-proxy config, `deploy.yml`) was deleted in Phase 8; it remains recoverable from git tag `vm-deploy-final`.
 
+**Trainer Network additions (Phases 10–13)** — new paths only; existing files change only where a phase's slice table says so:
+
+```
+src/workshop0/
+├── api/
+│   ├── board_public.py        ← P10: /api/public/topics, /api/public/opportunities[/{id}]
+│   ├── board_admin.py         ← P10: /api/admin/opportunities…, /api/admin/topics…
+│   ├── network_me.py          ← P11: /api/me/* (profile, CV, deletion); P12 applications/matches; P13 searches/prefs/workshops
+│   ├── network_admin.py       ← P11: /api/admin/network/* (pool, invites, CSV, ai-spend); P12 pipeline/shortlist/outbox
+│   ├── outbox_admin.py        ← P12: /api/admin/outbox…
+│   ├── network_public.py      ← P13: /api/email/unsubscribe, /api/cron/weekly-digest
+│   └── directory_public.py    ← P13: /api/public/trainers[/{id}]
+├── auth/                      ← P11: THE identity module (swap seam) — oidc.py, sessions.py, deps.py, routes.py
+├── services/
+│   ├── topics.py · opportunities.py   ← P10 (effective_status lives here)
+│   ├── profiles.py · invites.py · ratelimit.py · cv_text.py   ← P11
+│   ├── applications.py · matching.py  ← P12
+│   └── alerts.py · directory.py · tiein.py   ← P13
+├── storage/                   ← P11: blobstore.py (BlobStore, LocalDiskStore, GcsStore)
+├── ai/                        ← P11: openrouter.py (shared client), profile_draft.py, prompts/profile_draft_*.md · P12: shortlist_rank.py
+└── email/                     ← P12: outbox.py (enqueue — P12 schema slice), sender.py, smtp.py, templates/*.txt|*.html
+frontend/
+├── app/opportunities/{page,view/page}.tsx        ← P10 public board
+├── app/admin/{opportunities/{page,edit/page},topics/page}.tsx   ← P10 admin
+├── app/signin/page.tsx, app/network/{page,join/page,me/page}.tsx   ← P11 (P12: applications/, matches/; P13: directory/, trainer/, searches/, unsubscribed/)
+├── app/admin/network/{page,trainer/page}.tsx     ← P11 (P12: app/admin/outbox/, app/admin/opportunities/pipeline/)
+├── components/{board,admin,network}/
+└── lib/{board,adminBoard}.ts (P10) · lib/{network,adminNetwork}.ts (P11)
+tests/support/fake_oidc.py     ← P11
+```
+
 Import convention: the application package is `src.workshop0.*` (the `src` package exists so `uv run python -m src` boots — harness contract).
 
 ## Process model & single-origin serving
@@ -187,6 +225,53 @@ Two constraints the frontend slice must honour so this is safe (a generator must
 1. **The landing page is a static server component** — no `useRouter`/`usePathname`/`useSearchParams`, no data fetching. It hydrates correctly when served at `/`.
 2. **Every link out of the landing page is a plain `<a href="/app/create/">`, not `next/link`** — so navigation off `/` is a full document load into the properly-based route, and the App Router never attempts a client-side RSC fetch for a path outside its `basePath`. (`next/link` remains the norm *inside* `/app/*`, where it is correct.)
 
+## Trainer Network & Opportunity Board (Phases 10–13)
+
+### Routes added
+
+| Path | Serves | Auth | Phase |
+|---|---|---|---|
+| `/opportunities` → 307 `/app/opportunities/` | Public board | none | 10 |
+| `/opportunities/{id}` → 307 `/app/opportunities/view/?id={id}` | Public listing | none | 10 |
+| `/app/admin/opportunities/`, `/app/admin/opportunities/edit/`, `/app/admin/topics/` | Admin board tooling | admin key (P11+: or admin session) | 10 |
+| `/app/signin/`, `/app/network/`, `/app/network/join/`, `/app/network/me/` | Sign-in, network home, onboarding, my profile | session | 11 |
+| `/invite/{token}` → 307 `/app/network/join/?invite={token}`; `/network` → 307 `/app/network/` | Invite + pretty network link | none | 11 |
+| `/app/admin/network/`, `/app/admin/network/trainer/` | Trainer pool | admin | 11 |
+| `/api/auth/google/callback` | OIDC redirect URI | — | 11 |
+
+Pretty redirects live in `src/workshop0/api/__init__.py` with the existing ones (declared before the `/app` mount). Every new page is a static-export route; dynamic ids travel as query params (`?id=`), exactly like `?t=` on the workshop pages. Pages under `/app/opportunities/` read their query with `useSearchParams` inside a `<Suspense>` boundary (required for static export). Public board pages fetch from the browser (no build-time data), so the export stays data-free.
+
+### Board (Phase 10) — design decisions
+
+- **Expiry is computed on read** (`effective_status`, data-model.md) — no scheduler, restart-proof, identical across instances. Public list queries use the SQL predicate `status='open' AND deadline > :now` with `:now` bound from the app clock (portable to SQLite).
+- **Allow-list serializers.** `board_public.py` builds public payloads from an explicit field list; the internal partner name and notes are structurally unreachable from public code. The gate proves it on serialized JSON and rendered HTML.
+- **Admin actions are audited in the existing `facilitator_action` table** (actor `admin`, `workshop_id` null, `subject_type`/`subject_id` set) — one audit store for the whole instance.
+- **No caching, no search engine.** Tens of listings: indexed filters + offset pagination are instant on db-f1-micro.
+
+### Network identity (Phase 11) — the swap seam
+
+- **One module owns identity: `src/workshop0/auth/`.** `oidc.py` (discovery from `WORKSHOP0_OIDC_ISSUER`, default `https://accounts.google.com`; authorization URL with PKCE S256 + state + nonce; code exchange; ID-token verification against the issuer's JWKS — RS256, `iss`, `aud` = client id, `exp` with 60 s leeway, `nonce`), `sessions.py` (opaque 256-bit cookie token, SHA-256 hash stored in `auth_session`, 30-day expiry, revocation), `deps.py`, `routes.py`. **Product code may import only `auth.deps`**: `current_user(request) -> CurrentUser | None`, `require_user` (401 `not_signed_in`; on non-GET also checks the CSRF header), `require_admin` (valid `X-Admin-Key` **or** a session whose user is an admin; returns an `AdminActor(by="admin-key" | <email>)`). `CurrentUser` = `{id, email, display_name, avatar_url, is_admin}`. Nothing outside `auth/` reads `auth_session` or OIDC claims. Moving to a central smallTech identity service later = replacing `oidc.py`/`sessions.py` behind the same `deps.py`.
+- **`security.require_admin_key` delegates to `auth.deps.require_admin`** from Phase 11, so every existing admin router (workshops, templates, board) accepts an admin session with no router edits; key behaviour is byte-for-byte unchanged and `WORKSHOP0_ADMIN_KEY` is still required at startup.
+- **Admin role** is derived per request from `WORKSHOP0_ADMIN_EMAILS` (comma-separated, case-insensitive) and `email_verified` — no stored role.
+- **Cookies:** `workshop0_session` (HttpOnly, SameSite=Lax, Path=/, Max-Age 30 d, `Secure` when the effective base URL is https) and `workshop0_oidc` (signed with `WORKSHOP0_SESSION_SECRET` via itsdangerous, 10 min, cleared at callback).
+- **CSRF (changes the old rationale):** until Phase 10 no endpoint was cookie-authenticated. From Phase 11 every cookie-authenticated mutation requires the header `X-Requested-With: workshop0` (a custom header forces a CORS preflight, and the app serves no CORS headers, so a cross-site page cannot send it) in addition to SameSite=Lax. Missing → 403 `csrf_failed`. The frontend network client always sends it.
+- **Open-redirect guard:** `next` must start with `/app/`; anything else becomes `/app/network/`.
+- **Dev/test issuer:** `WORKSHOP0_OIDC_ISSUER` may be `http://` **only** for `localhost`/`127.0.0.1` (the test issuer, `tests/support/fake_oidc.py`); any other `http://` issuer fails startup.
+- **Sign-in disabled** when `WORKSHOP0_GOOGLE_CLIENT_ID` or `WORKSHOP0_GOOGLE_CLIENT_SECRET` is empty: `/api/auth/config` says so, `start` returns 503 `signin_not_configured`, the UI shows a labelled state. `WORKSHOP0_SESSION_SECRET` is required at startup only when sign-in is enabled.
+- **Rate limiting (stateless):** `services/ratelimit.py::hit(session, bucket, limit, window_s)` over `rate_limit_hit` (data-model.md) — the DB is the only shared state, so limits hold across Cloud Run instances. Limits: OIDC start 20/min/IP; CV upload/paste 10/h/user; profile drafting additionally 600/h global (cost guard); apply 30/h/user (P12); shortlist 20/h global (P12). Client IP = `request.client.host` (uvicorn already runs with `proxy_headers=True`).
+
+### CV storage (Phase 11)
+
+`storage/blobstore.py`: `put(key, data, content_type)`, `get(key) -> bytes`, `delete(key)`, `download_response(key, filename)` (local: streamed `Response` with `Content-Disposition: attachment`; GCS: 307 to a V4 signed URL, 5 min, signed via the IAM `signBlob` API using the runtime SA's own token — no key files). Backend from `WORKSHOP0_BLOB_BACKEND` (`local` default; `gcs` in production with `WORKSHOP0_GCS_BUCKET`). Local root `data/blobs/` (gitignored with `data/`). The bucket is private: uniform bucket-level access, public access prevention enforced, no lifecycle deletion. CV text goes to OpenRouter (accepted); CV files never leave the bucket except via admin/owner download.
+
+### Email (Phase 12)
+
+Transactional outbox: `email/outbox.py::enqueue(session, *, to, template, context, dedupe_key=None)` inserts a row **in the caller's transaction** (unique `dedupe_key` → silently no second row). After commit, a BackgroundTask runs `email/sender.py::drain(limit=20)`: claims `queued` rows (`FOR UPDATE SKIP LOCKED` on PostgreSQL), renders `email/templates/<template>.{txt,html}` (subject on the first line of the `.txt`), sends via `smtp.py`, marks `sent`, or increments `attempts` and marks `failed` after 3. Without SMTP settings, rows are marked `recorded` and logged (`email.recorded`, recipient masked). Admin page load of the outbox also triggers a drain (self-healing after restarts — no scheduler).
+
+### Scheduled work (Phase 13)
+
+The only scheduled job is the weekly digest: a Cloud Scheduler job `workshop0-weekly-digest` (Mondays 09:00 `Asia/Kolkata`) POSTs `/api/cron/weekly-digest` with header `X-Cron-Key` (secret `workshop0-cron-key`). The endpoint is idempotent per ISO week (dedupe keys), so a retry or a double fire sends nothing twice. Alerts are not scheduled — they are enqueued in the transaction that makes a listing open.
+
 ## Live-update mechanism: versioned coalesced polling (decision + justification)
 
 **Decision: short polling with per-workshop version counters and an in-process snapshot cache. No SSE, no WebSockets.**
@@ -248,6 +333,7 @@ The credential table above is **unchanged**. Creation simply stops requiring the
 - **structlog → JSON on stdout.** Every line: `timestamp`, `level`, `event`, `request_id`, plus context.
 - **Request middleware:** method, token-masked path, status, `duration_ms`, `request_id` for every API request (poll endpoints log at DEBUG to keep INFO readable).
 - **Domain events at INFO:** `workshop.created`, `participant.joined`, `milestone.completed`, `help.created`, `help.answered`, `broadcast.sent`, `workshop.paused`, `undo.applied`, `ai.triage`, `ai.auto_answered`, `ai.draft_created`, `ai.failed` — each with ids and (for AI) latency, token counts, cost.
+- **Network events at INFO (Phases 10–13):** `opportunity.created`, `opportunity.updated`, `opportunity.status_changed`, `topic.created`, `topic.updated`, `auth.signin`, `auth.signin_failed` (with reason code), `auth.signout`, `profile.created`, `cv.uploaded`, `account.deleted`, `ai.profile_draft` and `ai.shortlist_rank` (latency, tokens, cost — the same `ai.*` shape as the help-desk events), `ratelimit.blocked`, `application.created`, `application.status_changed`, `email.sent`/`email.recorded`/`email.failed`. Emails masked; CV text never logged.
 - **No metrics endpoint, no ops UI** (vision non-goal). `GET /api/health` returns `{"status":"ok","db":"ok"}` for machines.
 
 ## Database configuration
@@ -264,9 +350,10 @@ The credential table above is **unchanged**. Creation simply stops requiring the
 
 - **XSS:** all facilitator/AI-authored markdown (milestones, broadcasts, answers) renders through react-markdown with **raw HTML disabled** — HTML in markdown source is not injected. Participant-authored text (names, help messages) is rendered as **plain text** (React text nodes, `whitespace-pre-wrap`), never as markdown or HTML.
 - **SQL injection:** SQLAlchemy ORM/parameterized queries only. The FTS5 `MATCH` query string is built from sanitized, quoted tokens (see agent.md).
-- **CSRF:** state-changing endpoints are authenticated by unguessable URL tokens or the `X-Admin-Key` header — not by cookies — so cross-site form posts cannot forge them. The participant cookie is only ever *read* to resolve auto-resume on `GET /api/join/{slug}`.
+- **CSRF:** workshop state-changing endpoints are authenticated by unguessable URL tokens or the `X-Admin-Key` header — not by cookies — so cross-site form posts cannot forge them. The participant cookie is only ever *read* to resolve auto-resume on `GET /api/join/{slug}`. **From Phase 11** the network session cookie authenticates mutations, which therefore also require `X-Requested-With: workshop0` (§Network identity).
+- **Network privacy (Phases 10–13):** internal partner fields, trainer rates, emails, CV files/text, admin notes and tags are admin-only (rates and CV also visible to their owner). Every public serializer is an allow-list; gates assert absence on serialized JSON and rendered HTML. Logs mask emails (`as***@example.com`) and never contain CV text.
 - **Secrets:** only in `.env` (gitignored). Logs and API responses never contain `OPENROUTER_API_KEY` or `WORKSHOP0_ADMIN_KEY`; key presence is logged as a boolean.
-- **Rate limiting:** none in v0.2 (self-hosted, unguessable tokens, trusted room). > **Assumed:** acceptable for a single-team instance; revisit if ever exposed as SaaS. From Phase 6 this extends to the keyless `POST /api/public/workshops` — see §Auth model → Accepted risk.
+- **Rate limiting:** none on the workshop surface (self-hosted, unguessable tokens, trusted room); the trainer network's sign-in, upload, drafting, apply and shortlist endpoints are rate-limited from Phase 11 (§Network identity). > **Assumed:** acceptable for a single-team instance; revisit if ever exposed as SaaS. From Phase 6 this extends to the keyless `POST /api/public/workshops` — see §Auth model → Accepted risk.
 - **Creator email (Phase 6):** stored, returned only on the admin list, masked in logs (`as***@example.com`), never rendered on a participant- or public-facing surface.
 
 ## Environment variables (complete list)
@@ -285,6 +372,18 @@ The credential table above is **unchanged**. Creation simply stops requiring the
 | `OPENROUTER_API_KEY` | no | — | AI help-desk; absent → fully air-gapped, zero errors |
 | `WORKSHOP0_AI_MODEL` | no | `anthropic/claude-sonnet-4-6` | OpenRouter model id |
 | `WORKSHOP0_AI_CONFIDENCE` | no | `0.75` | Auto-answer confidence threshold (see agent.md) |
+| `WORKSHOP0_AI_NETWORK_MODEL` | no | `anthropic/claude-haiku-4.5` | OpenRouter model for the profile drafter and shortlist ranker (P11/P12; agent.md §Network AI) |
+| `WORKSHOP0_GOOGLE_CLIENT_ID` | no (P11) | — | Google OAuth web client id; with the secret, enables sign-in |
+| `WORKSHOP0_GOOGLE_CLIENT_SECRET` | no (P11) | — | Google OAuth client secret (Cloud Run: secret `workshop0-google-client-secret`) |
+| `WORKSHOP0_OIDC_ISSUER` | no (P11) | `https://accounts.google.com` | OIDC issuer for discovery; `http://localhost:*` allowed for the test issuer only |
+| `WORKSHOP0_SESSION_SECRET` | when sign-in enabled (P11) | — | Signs the OIDC state cookie and unsubscribe tokens (Cloud Run: secret `workshop0-session-secret`, generated by `provision.sh`) |
+| `WORKSHOP0_ADMIN_EMAILS` | no (P11) | `''` | Comma-separated admin allowlist |
+| `WORKSHOP0_BLOB_BACKEND` | no (P11) | `local` | `local` (`data/blobs/`) or `gcs` |
+| `WORKSHOP0_GCS_BUCKET` | when `gcs` | — | `ai-agent-boilerplate0-workshop0-cvs` in production |
+| `WORKSHOP0_SMTP_HOST` / `_PORT` / `_STARTTLS` | no (P12) | `smtp.gmail.com` / `587` / `1` | SMTP server; tests use a local `aiosmtpd` sink with STARTTLS `0` |
+| `WORKSHOP0_SMTP_USER` / `WORKSHOP0_SMTP_PASSWORD` | no (P12) | — | Gmail address + app password; either empty ⇒ outbox records, never sends |
+| `WORKSHOP0_SMTP_FROM` | no (P12) | `Workshop0 <SMTP_USER>` | From header |
+| `WORKSHOP0_CRON_KEY` | no (P13) | — | Shared secret for `/api/cron/*`; empty ⇒ cron endpoints return 404 |
 
 ## Deploy shape
 
@@ -325,6 +424,7 @@ Secrets: Secret Manager workshop0-* ─(--set-secrets, runtime SA workshop0-run)
 | Database bootstrap | `provision.sh` creates DB `workshop0` and user `workshop0_app` via the Cloud SQL Admin API (`gcloud sql databases/users create`), password generated locally (`openssl rand -hex 24`, hex ⇒ URL-safe) and stored **only** in `workshop0-database-url`; on re-run the password is read back from Secret Manager and re-applied, never regenerated. The instance is private-IP-only, so schema privileges cannot be granted from the operator's laptop: `provision.sh` runs `deploy/cloudrun/dbinit.py` as a one-off Cloud Run Job `workshop0-dbinit` (VPC-attached) that probes whether `workshop0_app` can `CREATE TABLE` in `public` and, if not, runs `GRANT workshop0_app TO postgres; ALTER DATABASE workshop0 OWNER TO workshop0_app;` using the instance's `postgres` password supplied once via an interactive no-echo prompt → a temporary secret `workshop0-tmp-pgadmin` (stdin) that is deleted (trap) before the script exits. The `postgres` password is never stored. |
 | Logging | structlog JSON on stdout is ingested by Cloud Logging; each line also carries `severity` (mapped from `level`) so Cloud Logging colours/filters correctly. |
 | Phase-4 AI on Cloud Run | `OPENROUTER_API_KEY` from Secret Manager; absent/empty secret value ⇒ air-gapped as before. The FTS5 corpus is SQLite-only; the PostgreSQL tsvector variant (agent.md) is what Phase 4 builds in production. |
+| Trainer network on Cloud Run (Phases 11–13) | `provision.sh` gains (idempotent, `CREATED`/`EXISTS`): the CV bucket + its two IAM bindings, `workshop0-session-secret` (generated `openssl rand -hex 32`), `workshop0-google-client-secret` (from the operator's `WORKSHOP0_GOOGLE_CLIENT_SECRET` env/.env; absent ⇒ prints `SKIPPED … (set WORKSHOP0_GOOGLE_CLIENT_SECRET and re-run)`), P12 `workshop0-smtp-password` (same SKIPPED rule), P13 `workshop0-cron-key` + the Cloud Scheduler job (API `cloudscheduler` enabled). Per-secret `secretAccessor` for `workshop0-run` and `secretmanager.viewer` for `workshop0-deployer`, as for the existing secrets. `deploy-cloudrun.yml` passes `WORKSHOP0_BLOB_BACKEND=gcs`, `WORKSHOP0_GCS_BUCKET`, the GitHub variables, and maps each optional secret **only if it has an enabled version** (`gcloud secrets versions list --filter=state=ENABLED --limit=1`), so a not-yet-created Google/SMTP secret never breaks a deploy — the feature simply stays in its labelled "not configured" state. |
 
 **Workshop mode (scale control).** The deploy workflow ends by routing traffic to `LATEST` (`update-traffic --to-latest`, asserted equal to the deployed revision), so the service is not pinned to a named revision and a plain `gcloud run services update workshop0 --min-instances 1|0` creates a revision that serves 100% immediately (proven on the live service; a subsequent deploy preserves the value). There is no helper script. After a manual rollback or the rollback guard, traffic is pinned to a named revision; run `update-traffic --to-latest` (or any successful deploy) to resume. The workflow's `workflow_dispatch` input `min_instances` (`""` = leave unchanged, `0`, `1`) can set it; a normal deploy never changes min-instances (omitting the flag preserves the live value).
 
@@ -364,6 +464,10 @@ Single source of truth for every name (Phase 9). Each entry replaces the same-ki
 | Workload Identity Federation | provider `workshop0-github` in the existing pool `github`, attribute condition `assertion.repository=='smallTechOrg/workshop0'`, `workloadIdentityUser` on `workshop0-deployer` for `attribute.repository/smallTechOrg/workshop0` |
 | GitHub Actions variable | `WORKSHOP0_BASE_URL` |
 | Import bucket (transient) | `ai-agent-boilerplate0-workshop0-import-<rand>` |
+| CV bucket (Phase 11) | `ai-agent-boilerplate0-workshop0-cvs` (`us-central1`, private, uniform access, public-access prevention); `workshop0-run` has `roles/storage.objectAdmin` on it only, plus `roles/iam.serviceAccountTokenCreator` on itself (V4 signed URLs) |
+| Network secrets | `workshop0-google-client-secret` (P11, value from the operator), `workshop0-session-secret` (P11, generated), `workshop0-smtp-password` (P12, Gmail app password), `workshop0-cron-key` (P13, generated) |
+| GitHub Actions variables (network) | `WORKSHOP0_GOOGLE_CLIENT_ID`, `WORKSHOP0_ADMIN_EMAILS` (P11), `WORKSHOP0_SMTP_USER` (P12) |
+| Cloud Scheduler job (Phase 13) | `workshop0-weekly-digest` (`us-central1`) |
 
 The three permitted survivals of the previous name in the repository are: the git tag `vm-deploy-final` (it contains no legacy word), the operator's local backup directory path and one historical sentence ("Workshop0 was previously called Workshop <previous name>") in `deploy/RUNBOOK.md`, plus the `LEGACY-COMPAT` shim lines described above.
 
@@ -381,4 +485,7 @@ The three permitted survivals of the previous name in the repository are: the gi
 | Lazy lifecycle transitions on access | No scheduler process to crash or restart; correctness derives from the DB clock check |
 | Audit + undo share one table (`facilitator_action`) | One write per action serves the audit trail, the undo window, and AI-answer logging |
 | Landing page = the export root, served at `/` by `FileResponse` (Phase 6) | Public `/` without a second app, second mount or proxy; `basePath: '/app'` already makes every asset URL absolute, so the same bytes render at `/`; `/app` and `/app/` 307 to `/` so the page has one URL |
+| Listing expiry computed on read, allow-list public serializers (Phase 10) | No scheduler to fail; internal partner data structurally unreachable from public code |
+| Identity isolated in `src/workshop0/auth/`, product code sees only `auth.deps` (Phase 11) | Google today, a central smallTech identity service later, without touching product code |
+| DB-backed rate limits and email outbox (Phases 11–12) | Stateless Cloud Run instances share only the DB; nothing is lost on restart and limits hold across instances |
 | One creation service called by both the admin and public routes (Phase 6) | Admin- and public-created workshops are identical records apart from `creator_email` + `created_via`; validation cannot drift between two copies |

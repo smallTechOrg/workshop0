@@ -16,7 +16,13 @@ Ground-up rebuild. The old `src/` and `frontend/` are **removed at scaffold**; n
 | 6 | Public landing page & self-service creation | delivered |
 | 7 | Cloud Run + Cloud SQL (fresh database) | delivered |
 | 8 | Cutover: data import, `workshop0.smalltech.in`, retire the VM | delivered |
-| 9 | Rename everything to Workshop0 (code, brand, client storage, infra, repo) | specified |
+| 9 | Rename everything to Workshop0 (code, brand, client storage, infra, repo) | delivered (PR #7) |
+| 10 | Opportunity Board: topic taxonomy, admin listings, public board (C8–C10) | specified |
+| 11 | Trainer sign-in, CV-drafted profiles & admin pool (C11–C13) | specified |
+| 12 | Applications, matching & email outbox (C14–C16) | specified |
+| 13 | Alerts & digest, public directory, workshop tie-in (C17–C19) | specified |
+
+**Trainer Network ordering rationale.** Phase 10 needs nothing external (no Google client, no SMTP, no LLM key) and is valuable alone. Phases 11–13 each keep their **automated** gate free of human-only steps — sign-in is gated through a real OIDC protocol run against the local test issuer, email through a real local SMTP sink, LLM calls through the production OpenRouter key read from Secret Manager — while the steps only a human can do (Google Console client, Gmail app password) are part of that phase's "How the user tests it". So no build ever stalls on an AFK user; external blockers bite only at the human testing gate, where the human is present.
 
 ---
 
@@ -497,6 +503,236 @@ curl -fsS "$URL/api/health" | grep -q '"db":"ok"'
 2. **Logged-in-stays-logged-in:** in the browser where you were already using the old app (admin key saved, "Your workshops" populated), open the new deployment: you are still signed in to Admin Home and your workshops are listed (the keys migrated on read).
 3. **Old links survive:** open a facilitator link (`/f/<token>`) and a personal participant link (`/p/<token>`) saved before the cutover: both open with identical state. A browser that still has an old participant cookie resumes without re-joining.
 4. **Production:** `https://workshop0.smalltech.in/` serves from the new Cloud Run service `workshop0`; `/admin` with the same admin key lists the same 11 workshops (135 participants); health is ok; the repo lives at `github.com/smallTechOrg/workshop0` (the old URL redirects); a merge to `main` deploys; `gcloud run services list` and the console show no legacy-named resource. **Nothing is a stub.**
+
+---
+
+## Phase 10 — Opportunity Board *(smallest testable win of the Trainer Network; zero external blockers)*
+
+**Goal:** A smallTech admin posts a real opportunity from the admin console — public details plus an internal partner name that never leaks — publishes it, and a stranger browses it on a public, filterable, paginated board and opens its detail page; closing it or letting its deadline pass takes it off the board automatically. Everything that needs sign-in (apply, profiles, matching, email) is visibly a labelled stub.
+
+**Capabilities delivered (3):** C8 Topic taxonomy (40 seeded topics, admin add/rename/deactivate) · C9 Opportunity management for admins (create/edit/publish/unpublish/close, deadline auto-expiry, internal vs public partner name, audited) · C10 Public opportunity board (board + listing pages, type/topic filters, sort, pagination, pretty URLs). Contract: [api.md](api.md) §Phase 10; schema: [data-model.md](data-model.md) §Phase 10; UI: [capabilities.md](capabilities.md) §C8–C10.
+
+**Non-goals (explicit):** no sign-in, no applying, no trainer profiles, no email, no AI, no rate limiting, no listing deletion, no join/tracker page changes, no new dependencies (Python or npm).
+
+**Labelled stubs (rendered with the existing `StubBadge` / `StubCard` / `StubAction` primitives in `frontend/components/ui/StubBadge.tsx` — "Coming in a later phase" pill, non-interactive):** board **Join our network** CTA (→ Phase 11) · listing **Sign in to apply** (→ Phase 12) · listing **Join our network** card (→ Phase 11) · admin **Trainer network** nav on Admin Home and **Trainer pool** nav on the opportunities page (→ Phase 11) · admin **Applicants** column and **Suggested trainers** action (→ Phase 12) · admin **Outbox** nav (→ Phase 12). **Real on the tested path:** every admin editor/list/topics surface, the board, the listing page, filters, pagination, expiry, audit Activity.
+
+**Independent slices (all four fan out concurrently — disjoint exclusive paths, no build dependencies; the frontend slices build against api.md §Phase 10, the e2e slice against api.md + the test ids below):**
+
+| Slice | Owns (exclusive paths) | Delivers |
+|---|---|---|
+| **S1 backend** | `src/workshop0/db/models.py`, `alembic/versions/0005_opportunity_board.py`, `src/workshop0/services/{topics,opportunities,audit}.py`, `src/workshop0/api/{board_public,board_admin,__init__}.py`, `scripts/sqlite_to_postgres.py`, `tests/conftest.py`, `tests/unit/test_board_*.py`, `tests/integration/test_board_*.py`, `tests/integration/test_migration.py`, `tests/integration/test_sqlite_to_postgres.py`, `tests/integration/test_redirects.py`, `README.md` | Models `Topic`, `Opportunity`, `OpportunityTopic` + `FacilitatorAction.subject_type/subject_id`; migration `0005` with the 40-topic seed and a working downgrade; `record_action(..., subject_type=None, subject_id=None)`; `effective_status`; both routers registered in `create_app()`; pretty redirects `/opportunities` and `/opportunities/{id}` (before the static mount); conftest topic capture/restore (data-model.md §Test-harness consequence); `topic` as a reference table in the import script; README: new URLs (board, admin opportunities/topics) and the Phase-10 gate's no-`.env` key export |
+| **S2 frontend-board** | `frontend/app/opportunities/**`, `frontend/components/board/**`, `frontend/lib/board.ts`, `frontend/app/page.tsx` (footer link only) | Board page + listing page per C10 (URL-synced filters inside `<Suspense>`, skeletons, empty/error/not-found states, pagination, deadline urgency pill, markdown via the existing `Markdown` primitive), stubs as listed; `lib/board.ts` = typed client + types for the **public** endpoints only (its own small fetch helper; imports `ApiError` from `lib/api.ts`, does not edit it); landing footer link "Opportunities for trainers" (plain `<a href="/app/opportunities/">`) |
+| **S3 frontend-admin** | `frontend/app/admin/**` (incl. `admin/page.tsx` — header nav only), `frontend/components/admin/**`, `frontend/lib/adminBoard.ts` | `components/admin/AdminGate.tsx` (key gate reusing the `workshop0_admin_key` storage via `lib/storageCompat.ts`, same messages as Admin Home) used by the three new pages; Opportunities list (tabs + counts, search, pagination), Editor (public/internal groups, live public-card preview, state-dependent actions, inline field errors, Activity), Topics page; Admin Home header gains a real **Opportunities** link and the **Trainer network** stub; `lib/adminBoard.ts` = typed client + types for the **admin** endpoints (own fetch helper, sends `X-Admin-Key`) |
+| **S4 e2e** | `tests/e2e/**` (new `opportunity-board.spec.ts`; additions to `helpers.ts` allowed) | The journey below. **Runtime dependency on S1+S2+S3 at gate time only** |
+
+> **Assumed:** the two frontend slices each carry a ~30-line fetch helper rather than sharing one via an edit to `frontend/lib/api.ts`, so neither slice touches a shared file; `frontend/components/ui/**`, `frontend/lib/{api,format,storageCompat}.ts` and `frontend/app/globals.css` are **read-only** this phase. A later phase may consolidate (not gold-plated now).
+> **Assumed:** one backend slice (not split into schema + API) because every API test needs the new models and migration — splitting would only serialize two halves of the same small surface.
+
+**Test-id contract (S2/S3 render these exactly; S4 asserts on them):** board — `board-page`, `opportunity-card` (one per card, contains the title), `type-filter-all` / `type-filter-<type>`, `topic-filter-<slug>`, `sort-select`, `pagination-prev`, `pagination-next`, `pagination-status` (text "Page X of Y"), `board-empty`, `join-network-stub`; listing — `opportunity-detail`, `opportunity-title`, `apply-stub`, `closed-banner`, `opportunity-not-found`, `copy-link`; admin — `nav-opportunities` (Admin Home), `admin-opportunities-page`, `status-tab-<status>` (text includes the count), `admin-opportunity-row`, `new-opportunity-button`, `opp-title-input`, `opp-type-select`, `opp-summary-input`, `opp-description-input`, `opp-topic-option-<slug>`, `opp-location-select`, `opp-city-input`, `opp-deadline-input`, `opp-partner-display-input`, `opp-partner-internal-input`, `opp-internal-notes-input`, `opp-save-draft`, `opp-publish`, `opp-save`, `opp-close`, `opp-unpublish`, `opp-reopen`, `opp-status-pill`, `opp-public-link`, `opp-field-error-<field>`, `opp-activity-row`; topics — `admin-topics-page`, `topic-row` (contains the name), `topic-name-input`, `topic-category-input`, `topic-add-button`, `topic-active-toggle`, `topic-error`.
+
+**Key surfaces/files:** S1 `services/opportunities.py` (validation, effective status, serializers: `public_card`, `public_detail`, `admin_row`, `admin_full`), `api/board_public.py`, `api/board_admin.py`, `alembic/versions/0005_opportunity_board.py`; S2 `app/opportunities/page.tsx`, `app/opportunities/view/page.tsx`, `components/board/{OpportunityCard,FilterBar,Pagination,ListingSidebar}.tsx`; S3 `app/admin/opportunities/page.tsx`, `app/admin/opportunities/edit/page.tsx`, `app/admin/topics/page.tsx`, `components/admin/{AdminGate,OpportunityEditor,TopicPicker,PublicCardPreview}.tsx`; S4 `tests/e2e/opportunity-board.spec.ts`.
+
+**Integration tests S1 must write (PostgreSQL, `tests/integration/test_board_*.py`; fixture sizes are chosen so a sampled or truncated result differs observably):**
+- **Seed:** exactly 40 active topics, 5 categories × 8, unique slugs, matching the data-model table; `/api/public/topics` returns them in position order with `open_count`.
+- **Board fixture:** 30 open listings (spread over all 4 types and ≥6 topics, distinct `published_at`), plus 3 drafts, 3 closed and 3 expired (deadline moved into the past directly in the DB). Assertions: `total == 30`; `page_size=12` → pages of 12/12/6, `total_pages == 3`, the union of ids over the three pages is exactly the 30 open ids with no duplicates, for **both** sorts; page 4 → empty list; each `type` filter and a two-slug `topic` filter return exactly the precomputed id sets (ANY semantics); an unknown slug returns 0; unknown `type` → `validation_error`.
+- **Expiry boundary:** deadline `now − 1 s` → `expired` everywhere (admin `status`, excluded from the public list, detail 200 with `"status": "expired"`), `now + 60 s` → `open`; extending an expired listing's deadline makes it open again with no other change.
+- **Leak proof:** with `partner_internal_name = "ZZ-INTERNAL-PARTNER-7f3a"` and `internal_notes = "ZZ-INTERNAL-NOTE-9c1d"` set on listings in the fixture, the raw response text of every public endpoint (topics, list for every type, detail of open/expired/closed) contains neither sentinel nor the keys `partner_internal_name`, `internal_notes`, `stored_status`.
+- **Public detail:** draft → 404 `not_found`; unknown id → 404; closed → 200 with `"status": "closed"`.
+- **Admin:** every admin endpoint returns 401 `invalid_admin_key` without the key; create/patch validation for every rule in api.md with the exact `"<field>: …"` message (incl. `topic_ids` 0 and 9, inactive topic, missing city for onsite, `ends_on < starts_on`, naive deadline, publish with a past deadline); `counts` correct over the fixture; `q` matches internal partner name case-insensitively.
+- **Audit:** create, update, publish, unpublish, close, reopen each write exactly one `facilitator_action` row with `actor="admin"`, `workshop_id IS NULL`, `subject_type="opportunity"`, the right `action` and `changed_fields`; a no-op PATCH writes none; topic create/update write `topic.*` rows; `activity` returns them newest first.
+- **Topics:** slug derivation (`"C# / .NET 2"` → `c-net-2`), duplicate name in another case → 409 `topic_exists` and no row, rename collision → 409, deactivated topic hidden from public topics and rejected in new `topic_ids` but still serialized on an existing listing.
+- **Migration:** `test_migration.py` extended — after `upgrade head` the topic seed is present; `downgrade 0004` removes the three new tables and the two audit columns; `upgrade head` again re-seeds 40.
+- **Import script:** `test_sqlite_to_postgres.py` still passes with the seeded `topic` table on both sides (reference-table handling); an admin-added topic in the source is present in the target after import.
+- **Observability:** publishing a listing emits structured log events `opportunity.created` and `opportunity.status_changed` (captured in the test) with the opportunity id and no internal partner name.
+- **Redirects:** `test_redirects.py` gains `("/opportunities", "/app/opportunities/")` and `("/opportunities/12", "/app/opportunities/view/?id=12")`. No other existing Python test may be edited except `conftest.py`, `test_migration.py`, `test_sqlite_to_postgres.py` and `test_redirects.py` as described.
+
+**e2e journey (S4, `tests/e2e/opportunity-board.spec.ts`, live single-origin app; every name carries a per-run suffix because the e2e database is not reset):** sign in at `/app/admin/` → `nav-opportunities` → **New** → fill title, type `workshop`, summary, a markdown description with a list and a fenced code block, two topics (`generative-ai`, `python`), location Hybrid + city, deadline +10 days, public partner "A Bengaluru fintech", internal partner "ZZ-INTERNAL-PARTNER-<run>" and an internal note → **Save draft** → status pill Draft → in a **fresh browser context**, open `/opportunities/<id>` → not-found state → back as admin **Publish** → pill Open, Activity shows create + publish → fresh context: `GET /opportunities` (pretty, follows the 307) → the card is present with "A Bengaluru fintech" → `page.content()` contains no `ZZ-INTERNAL` → click `type-filter-role` → card absent → `type-filter-workshop` + `topic-filter-generative-ai` → card present, URL carries the filters, **reload** keeps them → open the card → markdown renders (list + highlighted code), `apply-stub` and `join-network-stub` visible with the "Coming in a later phase" pill, no `ZZ-INTERNAL` in the page → admin **Close** → fresh context: the listing page shows `closed-banner` and no apply control; the board no longer lists it → admin: publishing a second listing with a past deadline shows `opp-field-error-deadline` and creates nothing public → **Topics**: add "Elixir <run>" in "Languages" → appears as a `topic-row`; adding it again in lower case shows `topic-error` → the public board's topic filters show it (muted, 0) → **pagination**: the spec creates 13 open listings for one fresh topic via the admin API (`request` fixture with `X-Admin-Key`) in `beforeAll`, filters the board by that topic → `pagination-status` reads "Page 1 of 2", 12 cards; **Next** → 1 card, "Page 2 of 2". Also asserts at 360 px width that the board has no horizontal scroll.
+
+**Gate (exact commands, from the repo root; PostgreSQL 17 running as in README "Postgres test setup"; this phase needs **no** `.env` and no external credentials):**
+
+```bash
+createdb workshop0_test 2>/dev/null || true
+export TEST_DATABASE_URL="postgresql+psycopg://$USER@localhost:5432/workshop0_test"
+export WORKSHOP0_ADMIN_KEY="${WORKSHOP0_ADMIN_KEY:-phase10-local-gate-key-0123}"   # any value; read by the server and the e2e helpers
+uv sync
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0005'          # blank or 0004 = gate failed
+uv run pytest tests/unit tests/integration -q                                          # whole suite, PostgreSQL, zero failures, no test weakened
+(cd frontend && pnpm install && pnpm build)
+test -f frontend/out/opportunities/index.html && test -f frontend/out/opportunities/view/index.html
+test -f frontend/out/admin/opportunities/index.html && test -f frontend/out/admin/opportunities/edit/index.html && test -f frontend/out/admin/topics/index.html
+grep -q '\.flex' frontend/out/_next/static/css/*.css                                  # styled-render
+! grep -q '@source' frontend/out/_next/static/css/*.css
+pnpm install && pnpm exec playwright install chromium
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head                          # pytest leaves the schema at head; re-assert before serving
+DATABASE_URL="$TEST_DATABASE_URL" uv run python -m src &                               # canonical run path, :8001
+sleep 3
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8001/opportunities | grep -qx 307
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8001/opportunities/1 | grep -qx 307
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8001/api/admin/opportunities | grep -qx 401
+curl -fsS http://localhost:8001/api/public/topics | uv run python -c 'import json,sys; t=json.load(sys.stdin)["data"]["topics"]; s={x["slug"] for x in t}; assert len(t)>=40 and {"python","generative-ai","kubernetes","ux-design"}<=s, len(t)'
+! curl -fsS 'http://localhost:8001/api/public/opportunities?page_size=50' | grep -q 'partner_internal_name'
+pnpm exec playwright test tests/e2e --reporter=line                                    # new spec + ALL pre-existing specs
+kill %1
+```
+
+**How the user tests it:** from the repo root: `export WORKSHOP0_ADMIN_KEY=<any key you like>` (or keep your `.env`), `(cd frontend && pnpm build)`, `uv run python -m src`, then:
+1. Open **http://localhost:8001/admin**, enter the key → Admin Home now has an **Opportunities** link (and a "Trainer network" pill marked *Coming in a later phase*). Click it → the tabs show 0 everywhere.
+2. **+ New opportunity** → fill the public details (pick two topics, Hybrid + Bengaluru, a deadline next week), public partner "A Bengaluru fintech", internal partner "Acme Payments" and an internal note. Watch the **public card preview** — "Acme" is not on it. **Save draft** → status Draft.
+3. **Publish** → status Open; copy the public link shown.
+4. In a private window open **http://localhost:8001/opportunities** → your card is there with "A Bengaluru fintech", nowhere "Acme". Try the type chips, a topic chip, "Closing soon"; reload — filters stay. Open the listing → description renders; **Sign in to apply** and **Join our network** carry *Coming in a later phase* pills (stubs, not bugs).
+5. Back in admin, change the open listing's deadline to an hour ago and **Save** → refused inline under the deadline field ("set a future deadline to publish"), nothing changes publicly. Click **Close** instead → the private window's listing page now says applications have closed, and the board no longer lists it. **Reopen** (deadline still in the future) → back on the board.
+6. **Topics** (link on the opportunities page) → add "Elixir" under Languages → it appears in the public board's topic chips (muted, 0). Add "elixir" again → rejected.
+7. The editor's **Activity** list shows every action you took, with "admin-key" as the actor.
+**Labelled stubs (not bugs):** Join our network, Sign in to apply, Trainer network / Trainer pool, Applicants, Suggested trainers, Outbox. **Expiry by time** is proven by the automated tests (a listing whose deadline passes shows *Expired* in admin and leaves the board with no action); to see it yourself, publish a listing with a deadline a few minutes out and reload after it passes.
+
+---
+
+## Phase 11 — Trainer Sign-in, CV-drafted Profiles & Admin Pool
+
+**Goal:** A tech person finds the board, clicks **Join our network**, signs in with Google, drops a CV (PDF/DOCX/LinkedIn PDF) or pastes text, reviews a pre-filled profile on one screen, consents and is live; an admin signs in with Google (or the key), searches the pool, opens a trainer, downloads their CV, verifies them, tags and notes them, invites a known trainer by link, exports CSV and sees drafting cost. A trainer can delete their account.
+
+**Capabilities delivered (3):** C11 Network sign-in & accounts · C12 CV-drafted trainer profile · C13 Admin trainer pool. Design: [architecture.md](architecture.md) §Network identity / §CV storage, [agent.md](agent.md) §Profile drafter, [api.md](api.md) §Phase 11, [data-model.md](data-model.md) §Phase 11.
+
+**Stubs carried forward (labelled):** Sign in to apply, My applications, Matched for you, matching filters, Suggested trainers, Email invite, Outbox (→ 12); Saved searches, Public directory toggle (→ 13). **Made real:** board Join our network CTA, Admin Home Trainer network nav, opportunities-page Trainer pool nav.
+
+**Shared scaffold (orchestrator, before the fan-out, one commit):** add `pyjwt[crypto]`, `itsdangerous`, `python-multipart`, `pypdf`, `python-docx`, `google-cloud-storage` to `pyproject.toml` and `uv lock`; add the Phase-11 variables to `.env.example`; create the three router modules as empty shells — `src/workshop0/auth/__init__.py`, `src/workshop0/auth/routes.py`, `src/workshop0/api/network_me.py`, `src/workshop0/api/network_admin.py`, each `router = APIRouter(prefix=…)` with the prefixes in api.md §Phase 11 — and register them in `create_app()`. Slices then only **fill** their modules, so no slice imports a module another slice has not written yet, and `api/__init__.py` is edited concurrently by nobody.
+
+**Settings contract:** S1 owns `config/settings.py` and adds **every** Phase-11 field (architecture.md §Environment variables) under these attribute names: `workshop0_google_client_id`, `workshop0_google_client_secret`, `workshop0_oidc_issuer`, `workshop0_session_secret`, `workshop0_admin_emails`, `workshop0_blob_backend`, `workshop0_gcs_bucket`, `workshop0_ai_network_model`. S2/S3/S4 read them via `get_settings()` and build against these names; their tests need S1's settings at gate time (S2's local-disk tests construct `LocalDiskStore(root)` directly and do not).
+
+**Slices** (S0 runs first — it is small; then S1–S3 and S5–S8 fan out concurrently; S4 starts when S1 has landed):
+
+| Slice | Owns (exclusive paths) | Delivers | Depends on |
+|---|---|---|---|
+| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0006_trainer_network.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | All Phase-11 tables + the `ai_usage` changes exactly per data-model.md; conftest fixtures `make_user(email, admin=False)` and `signed_in_client(user)` (inserts an `auth_session` row and sets the cookie — the shortcut for non-auth tests) | — |
+| **S1 identity** | `src/workshop0/auth/**`, `src/workshop0/security.py`, `src/workshop0/services/ratelimit.py`, `src/workshop0/config/settings.py`, `src/workshop0/api/__init__.py`, `tests/support/**`, `tests/integration/auth/**`, `tests/unit/test_ratelimit.py` | OIDC client, sessions, `deps.py` (exact interface in architecture.md), `/api/auth/*` (fills `auth/routes.py`), admin via session in `require_admin_key`, CSRF check, open-redirect guard, invite acceptance at callback (marks the invite accepted and the profile-to-be verified via `network_invite` rows only — profile writes belong to S4), startup rules, the settings contract above; adds the `/invite/{token}` + `/network` redirects to `api/__init__.py` (router registration is already done by the scaffold); `tests/support/fake_oidc.py` (`uv run python tests/support/fake_oidc.py --port 8099`: discovery, an authorize page with an email field that auto-approves, token, JWKS; can be told to emit `email_verified=false`) | S0 |
+| **S2 cv-ingest** | `src/workshop0/storage/**`, `src/workshop0/services/cv_text.py`, `tests/unit/test_cv_text.py`, `tests/integration/storage/**`, `tests/fixtures/cv/**` | `BlobStore` (local + GCS), `extract_text(data, kind) -> str` (pypdf/python-docx; raises `CvUnreadable` when <200 chars), the committed CV fixtures (incl. an image-only PDF); GCS backend tested against a real bucket only when `WORKSHOP0_GCS_BUCKET` is set (guarded) | — |
+| **S3 drafter** | `src/workshop0/ai/**`, `tests/integration/ai_network/test_profile_draft.py` | `openrouter.py`, `profile_draft.py`, prompts — per agent.md; `draft_profile` is pure and is tested on the S2 fixtures (reads files only) | — (build); S2's fixtures at gate time |
+| **S4 network-api** | `src/workshop0/api/{network_me,network_admin}.py`, `src/workshop0/services/{profiles,invites}.py`, `tests/integration/network/**` | Every `/api/me/*` and `/api/admin/network/*` endpoint in api.md §Phase 11, completeness, CSV, deletion (DB + blob), audit rows, rate limits wired | S0, S1 (deps + ratelimit); S2/S3 interfaces fixed above |
+| **S5 frontend-network** | `frontend/app/{signin,network}/**`, `frontend/components/network/**`, `frontend/lib/network.ts`, `frontend/components/board/**` (CTA only) | Sign-in, account menu, onboarding (3 tabs + LinkedIn how-to + polling skeleton), review screen with "From your CV — please check" chips, My profile with completeness meter, delete flow, invite landing, stubs; board CTA real | — |
+| **S6 frontend-admin-pool** | `frontend/app/admin/**`, `frontend/components/admin/**`, `frontend/lib/adminNetwork.ts` | Pool table + filters + CSV + invites + AI spend card, trainer detail (CV download, verify, tags, notes, activity), Google button on `AdminGate` and Admin Home's gate, nav stubs made real | — |
+| **S7 e2e** | `tests/e2e/**` | `network-onboarding.spec.ts`, `admin-pool.spec.ts` (journeys below) | runtime: all |
+| **S8 infra-docs** | `deploy/cloudrun/provision.sh`, `.github/workflows/{deploy-cloudrun,ci}.yml`, `deploy/RUNBOOK.md`, `README.md` | Bucket + IAM + secrets per architecture.md (SKIPPED rule), conditional secret mapping, GitHub variables documented, CI starts the fake issuer for e2e; README: sign-in setup, the Google Console steps below, new env vars | — |
+
+**Gate (exact commands; repo root; PostgreSQL as before; operator `gcloud`-authenticated — the OpenRouter key is read from Secret Manager, never echoed; no Google or SMTP credentials needed):**
+
+```bash
+export TEST_DATABASE_URL="postgresql+psycopg://$USER@localhost:5432/workshop0_test"
+export WORKSHOP0_ADMIN_KEY="${WORKSHOP0_ADMIN_KEY:-phase11-local-gate-key-0123}"
+export OPENROUTER_API_KEY="$(gcloud secrets versions access latest --secret workshop0-openrouter-api-key --project ai-agent-boilerplate0)"
+test -n "$OPENROUTER_API_KEY"                                                          # BLOCKED (not skipped) without it
+export WORKSHOP0_GOOGLE_CLIENT_ID=test-client WORKSHOP0_GOOGLE_CLIENT_SECRET=test-secret
+export WORKSHOP0_OIDC_ISSUER=http://localhost:8099 WORKSHOP0_SESSION_SECRET="$(openssl rand -hex 32)"
+export WORKSHOP0_ADMIN_EMAILS=admin@example.test WORKSHOP0_BLOB_BACKEND=local
+uv sync
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0006'
+uv run python tests/support/fake_oidc.py --port 8099 &                                 # real OIDC protocol, local issuer
+sleep 2
+uv run pytest tests/unit tests/integration -q                                          # incl. auth/, network/, storage/, ai_network/ (REAL OpenRouter)
+(cd frontend && pnpm install && pnpm build)
+for p in signin network network/join network/me admin/network admin/network/trainer; do test -f "frontend/out/$p/index.html"; done
+grep -q '\.flex' frontend/out/_next/static/css/*.css && ! grep -q '@source' frontend/out/_next/static/css/*.css
+pnpm install && pnpm exec playwright install chromium
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head
+DATABASE_URL="$TEST_DATABASE_URL" uv run python -m src &
+sleep 3
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8001/invite/abc | grep -qx 307
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/me/cv/text | grep -qx 401
+pnpm exec playwright test tests/e2e --reporter=line
+kill %2 %1
+bash -n deploy/cloudrun/provision.sh
+```
+
+**Gate conditions beyond the commands (tests S1/S2/S3/S4 must contain):** OIDC — state mismatch, nonce mismatch, wrong `aud`, expired token, bad signature (token signed by a second key), `email_verified=false` each refused with the documented redirect code and no session row; first sign-in creates one user, second reuses it; allowlisted email → admin endpoints succeed without the key, de-listed → 403 `not_admin` on the next request; existing admin tests still pass with the key only; every `/api/me` mutation without `X-Requested-With` → 403 `csrf_failed`; `next=https://evil.example` → lands on `/app/network/`; rate limit: the 11th CV upload in an hour → 429 with `Retry-After`, across two app instances sharing the DB. Profiles — the three drafter fixtures through the real endpoint (upload → poll → draft) with agent.md's assertions; image-only PDF → 422 `cv_unreadable`; keyless run → `draft_status="skipped"` and profile creation still works; consent missing → `validation_error`; completeness = the ten-check formula on 5 hand-built profiles; deletion removes user, profile, CV row, blob file and sessions and writes `account.delete` with a masked email only. Pool — a 60-profile fixture: `q`, `topic` (ANY), `verified`, `tag` filters return precomputed sets across 3 pages; CSV row count = filtered total; CV download (local) returns the original bytes with `Content-Disposition` and writes `cv.download`. Privacy — rates, email and CV fields are absent from every non-admin payload except the owner's own `GET /api/me/profile` (asserted on serialized JSON).
+
+**e2e (S7):** *network-onboarding* — board → **Join our network** → sign-in page → **Continue with Google** → the local issuer's page → enter `trainer-<run>@example.test` → back on onboarding → upload `tests/fixtures/cv/genai_trainer.pdf` → "Reading your CV…" → review screen shows ≥1 "From your CV — please check" chip and the curated topics (real OpenRouter) → tick consent → **Create my profile** → My profile shows the completeness meter and nudges → sign out → sign in again → same profile → **Delete my account** → confirmation → signing in again lands on onboarding (fresh). *admin-pool* — sign in as `admin@example.test` via the issuer → Admin Home without the key → **Trainer network** → the trainer from the first spec is listed → open → **Download CV** (download event, `.pdf`) → **Verify** → badge → add tag + note → **Export CSV** → create an invite for `invitee-<run>@example.test` → open the copied `/invite/<token>` in a fresh context, sign in as that email → onboarding shows **Verified** → a different email on another invite → mismatch message. Every stub listed above shows its pill.
+
+**How the user tests it:**
+1. **One-time Google setup (manual, ~5 minutes, GCP Console, project `ai-agent-boilerplate0`):** APIs & Services → **OAuth consent screen** → User type **External** → app name **Workshop0**, support email = your smallTech email, authorized domain `smalltech.in`, scopes `openid`, `email`, `profile` → add yourself as a test user (or **Publish app** to allow anyone; these scopes need no Google verification) → **Credentials** → **Create credentials → OAuth client ID** → Application type **Web application**, name `workshop0-web` → **Authorized JavaScript origins** `http://localhost:8001`, `https://workshop0.smalltech.in` → **Authorized redirect URIs** `http://localhost:8001/api/auth/google/callback`, `https://workshop0.smalltech.in/api/auth/google/callback` → Create → copy the client ID and secret.
+2. **Local:** in `.env` set `WORKSHOP0_GOOGLE_CLIENT_ID`, `WORKSHOP0_GOOGLE_CLIENT_SECRET`, `WORKSHOP0_SESSION_SECRET=$(openssl rand -hex 32)`, `WORKSHOP0_ADMIN_EMAILS=<your email>`, and `OPENROUTER_API_KEY` (`gcloud secrets versions access latest --secret workshop0-openrouter-api-key --project ai-agent-boilerplate0`). `(cd frontend && pnpm build)`, `uv run python -m src`.
+3. Private window → **http://localhost:8001/opportunities** → **Join our network** → **Continue with Google** with a non-admin Google account → upload your own CV (or a LinkedIn "Save to PDF") → within a few seconds the review screen is pre-filled, drafted fields marked "From your CV — please check"; fix anything, tick consent → **Create my profile** → see completeness and the nudges.
+4. Normal window → **http://localhost:8001/admin** → **Continue with Google** with your admin email (no key) → **Trainer network** → find the trainer → open → download the CV, **Verify**, add a tag and a note; check the **Network AI spend** card shows the drafting cost; **Export CSV**. Create an invite for another address you own → open the link in a third browser → sign in with that address → it starts **Verified**.
+5. As the trainer, **Delete my account** → it disappears from the pool.
+6. **Production** (after the merge deploys): `export WORKSHOP0_GOOGLE_CLIENT_SECRET=…; bash deploy/cloudrun/provision.sh` (creates the bucket and secrets), `gh variable set WORKSHOP0_GOOGLE_CLIENT_ID --body …`, `gh variable set WORKSHOP0_ADMIN_EMAILS --body …`, `gh workflow run deploy-cloudrun.yml --ref main`, then repeat steps 3–4 on **https://workshop0.smalltech.in** (CV download goes through a signed GCS URL).
+**Labelled stubs (not bugs):** Sign in to apply, My applications, Matched for you, Saved searches, Public directory profile, matching filters, Suggested trainers, Email invite, Outbox.
+
+---
+
+## Phase 12 — Applications, Matching & Email Outbox
+
+**Goal:** A signed-in trainer applies to a listing in one click and tracks the status; an admin gets a suggested shortlist for a listing, invites trainers to apply, moves applicants through the pipeline in bulk with status emails; every email goes through an outbox that sends over Gmail SMTP when configured and is recorded (and shown to admins, clearly labelled) when not.
+
+**Capabilities delivered (3):** C14 Apply & applicant pipeline · C15 Matching (rule filters, suggested shortlist, invite to apply, matched for you) · C16 Email outbox & notifications. Design: agent.md §Shortlist ranker, architecture.md §Email, api.md §Phase 12, data-model.md §Phase 12.
+
+**Stubs carried forward:** Saved searches & alerts, weekly digest, public directory toggle, workshop tie-in (→ 13). **Made real:** Sign in to apply, My applications, Matched for you, Applicants column, Suggested trainers, matching filters, Email invite, Outbox.
+
+**Shared scaffold (orchestrator):** `aiosmtpd` added to the dev group + `uv lock`; Phase-12 vars in `.env.example`; empty router shell `src/workshop0/api/outbox_admin.py` (`prefix="/api/admin/outbox"`, `require_admin_key`) registered in `create_app()`; `config/settings.py` gains the Phase-12 SMTP fields (`workshop0_smtp_host`, `_port`, `_starttls`, `_user`, `_password`, `_from`) — so S3 does not edit `api/__init__.py` or settings concurrently with anyone.
+
+| Slice | Owns (exclusive paths) | Delivers | Depends on |
+|---|---|---|---|
+| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0007_applications_matching_email.py`, `src/workshop0/email/outbox.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-12 tables/columns; `enqueue(...)` (insert-only, dedupe) so S1/S2 can call it before S3 exists | — |
+| **S1 applications** | `src/workshop0/services/applications.py`, `src/workshop0/api/network_me.py`, `tests/integration/applications/**` | Apply/withdraw/my-applications, pipeline list/bulk status/CSV (the admin routes are added to `network_admin.py` by **S2** — S1 provides `services/applications.py` functions S2's routes call: `list_pipeline`, `bulk_set_status`, `pipeline_csv`) | S0; S3's `schedule_drain` and S2's `matches_for` at gate time (signatures fixed here) |
+| **S2 matching** | `src/workshop0/services/matching.py`, `src/workshop0/ai/shortlist_rank.py`, `src/workshop0/ai/prompts/shortlist_rank_*.md`, `src/workshop0/api/network_admin.py`, `src/workshop0/api/board_admin.py`, `src/workshop0/services/opportunities.py`, `tests/integration/matching/**`, `tests/integration/ai_network/test_shortlist_rank.py` | Rule filters, rule score, ranker, shortlist/invite endpoints, matched-for-you function (route lives in S1's `network_me.py`: S1 calls `matching.matches_for(profile)`), budget fields in the opportunity editor API, pipeline admin routes over S1's service functions | S0; S1's three service signatures (above) at test time |
+| **S3 email** | `src/workshop0/email/{sender,smtp}.py`, `src/workshop0/email/templates/**`, `src/workshop0/api/outbox_admin.py`, `src/workshop0/services/invites.py`, `src/workshop0/services/profiles.py`, `tests/integration/email/**` | Sender + drain (post-commit BackgroundTask hook exposed as `email.sender.schedule_drain(background_tasks)` for S1/S2 routes) + SMTP + the 5 templates, outbox admin routes, welcome/invite enqueues | S0 |
+| **S4 frontend-network** | `frontend/app/network/**`, `frontend/app/opportunities/**`, `frontend/components/{network,board}/**`, `frontend/lib/{network,board}.ts` | Apply panel, My applications timeline, Matched for you | — |
+| **S5 frontend-admin** | `frontend/app/admin/**`, `frontend/components/admin/**`, `frontend/lib/{adminBoard,adminNetwork}.ts` | Pipeline page, Suggested trainers panel, matching filters, budget fields, invite-to-apply, Outbox page with the "not configured" label | — |
+| **S6 e2e** | `tests/e2e/**` | `apply-pipeline.spec.ts`, `matching.spec.ts`, `outbox.spec.ts` | runtime: all |
+| **S7 infra-docs** | `deploy/cloudrun/provision.sh`, `.github/workflows/**`, `deploy/RUNBOOK.md`, `README.md` | `workshop0-smtp-password` (SKIPPED rule), `WORKSHOP0_SMTP_USER` variable, conditional mapping; README email setup incl. Gmail app-password steps | — |
+
+**Gate (repo root; as Phase 11, plus a real local SMTP sink):**
+
+```bash
+export TEST_DATABASE_URL="postgresql+psycopg://$USER@localhost:5432/workshop0_test"
+export WORKSHOP0_ADMIN_KEY="${WORKSHOP0_ADMIN_KEY:-phase12-local-gate-key-0123}"
+export OPENROUTER_API_KEY="$(gcloud secrets versions access latest --secret workshop0-openrouter-api-key --project ai-agent-boilerplate0)"; test -n "$OPENROUTER_API_KEY"
+export WORKSHOP0_GOOGLE_CLIENT_ID=test-client WORKSHOP0_GOOGLE_CLIENT_SECRET=test-secret WORKSHOP0_OIDC_ISSUER=http://localhost:8099
+export WORKSHOP0_SESSION_SECRET="$(openssl rand -hex 32)" WORKSHOP0_ADMIN_EMAILS=admin@example.test WORKSHOP0_BLOB_BACKEND=local
+export WORKSHOP0_SMTP_HOST=localhost WORKSHOP0_SMTP_PORT=8025 WORKSHOP0_SMTP_STARTTLS=0 WORKSHOP0_SMTP_USER=bot@example.test WORKSHOP0_SMTP_PASSWORD=x
+uv sync
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head && DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current | grep -q '^0007'
+uv run python tests/support/fake_oidc.py --port 8099 &
+uv run python -m aiosmtpd -n -l localhost:8025 &
+sleep 2
+uv run pytest tests/unit tests/integration -q                                          # incl. real-OpenRouter shortlist ranking
+(cd frontend && pnpm install && pnpm build)
+for p in network/applications network/matches admin/opportunities/pipeline admin/outbox; do test -f "frontend/out/$p/index.html"; done
+grep -q '\.flex' frontend/out/_next/static/css/*.css && ! grep -q '@source' frontend/out/_next/static/css/*.css
+pnpm install && pnpm exec playwright install chromium
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head
+DATABASE_URL="$TEST_DATABASE_URL" uv run python -m src &
+sleep 3 && pnpm exec playwright test tests/e2e --reporter=line
+kill %3 %2 %1
+bash -n deploy/cloudrun/provision.sh
+```
+
+**Gate conditions beyond the commands:** one application per (listing, trainer); `opportunity_closed` for expired/closed; a bulk move of 12 applicants → one audit row + exactly 12 outbox rows, re-run → still 12 (dedupe); emails are delivered to the aiosmtpd sink and marked `sent`; with `WORKSHOP0_SMTP_USER` unset every enqueue ends `recorded` and no request fails; a failing SMTP (port closed) → `failed` after 3 attempts, Retry re-queues; agent.md ranker assertions on the 60-profile fixture (eligible set of exactly 17; obvious best in top 3); keyless → "Ranked by rules"; matched-for-you ranks a 3-listing fixture in the precomputed order; every email link is absolute.
+
+**How the user tests it:** with the Phase-11 setup: as a trainer open a listing → **Apply** with a note → My applications shows *Applied*. As admin open the listing's **Applicants** → select it → **Move to Shortlisted** (email on) → the trainer's page shows *Shortlisted* → open **Outbox**: without SMTP configured the banner reads "Email sending isn't configured — messages are recorded here, not sent" and the status email is listed as *recorded*. On a listing, **Suggested trainers** → up to 10 trainers with reasons and the run cost → **Invite to apply** → the trainer sees an *Invited* badge in **Matched for you**. **Real email (manual):** create a Gmail app password (Google Account → Security → 2-Step Verification on → App passwords → "Workshop0"), set `WORKSHOP0_SMTP_USER=<gmail address>` and `WORKSHOP0_SMTP_PASSWORD=<app password>` in `.env`, restart, move an applicant again → the email arrives in the trainer's inbox and the outbox row is *sent*. Production: `export WORKSHOP0_SMTP_PASSWORD=…; bash deploy/cloudrun/provision.sh`, `gh variable set WORKSHOP0_SMTP_USER --body …`, redeploy. **Labelled stubs:** Saved searches & alerts, weekly digest, public directory, workshop tie-in.
+
+---
+
+## Phase 13 — Alerts & Digest, Public Directory, Workshop Tie-in *(final requirements phase — every network capability real)*
+
+**Goal:** Trainers save searches and get alert emails and a weekly digest (with one-click unsubscribe); trainers who opt in appear in a public directory; admins link network trainers to Workshop0 workshops as facilitators, and participants see a **Join our network** invitation. No labelled stub remains anywhere in the network.
+
+**Capabilities delivered (3):** C17 Saved searches, alerts & weekly digest · C18 Public trainer directory & visibility · C19 Workshop tie-in.
+
+**Shared scaffold (orchestrator):** empty router shells `src/workshop0/api/network_public.py` (unsubscribe + cron) and `src/workshop0/api/directory_public.py` (`prefix="/api/public/trainers"`) registered in `create_app()`; `config/settings.py` gains `workshop0_cron_key`.
+
+| Slice | Owns (exclusive paths) | Delivers | Depends on |
+|---|---|---|---|
+| **S0 schema** | `src/workshop0/db/models.py`, `alembic/versions/0008_alerts_directory_tiein.py`, `tests/conftest.py`, `tests/integration/test_migration.py` | Phase-13 tables/columns | — |
+| **S1 alerts-digest** | `src/workshop0/services/alerts.py`, `src/workshop0/email/templates/{network_alert,network_digest}.*`, `src/workshop0/api/network_public.py`, `src/workshop0/services/opportunities.py`, `tests/integration/alerts/**` | Saved-search matching, alert enqueue on transition to open, digest endpoint (cron key), signed unsubscribe | S0 |
+| **S2 directory** | `src/workshop0/services/directory.py`, `src/workshop0/api/directory_public.py`, `tests/integration/directory/**` | Public directory + profile (allow-list serializer, ≥60 % completeness, private → 404) | S0 |
+| **S3 tie-in + me** | `src/workshop0/services/{tiein,profiles}.py`, `src/workshop0/api/{network_me,admin}.py`, `tests/integration/tiein/**` | Facilitator links, `/api/me/workshops`, `/api/me/searches` (calls S1's `alerts.validate_criteria`), `/api/me/email-prefs`, `visibility` on profile PATCH | S0; S1's `validate_criteria(dict) -> dict` signature at gate time |
+| **S4 frontend-network** | `frontend/app/network/**`, `frontend/components/network/**`, `frontend/lib/network.ts`, `frontend/app/opportunities/**`, `frontend/components/board/**` | Saved searches (from the board's current filters: "Save this search"), email prefs, unsubscribed page, directory + public profile pages, visibility toggle, My Workshop0 workshops | — |
+| **S5 frontend-workshop** | `frontend/app/admin/page.tsx`, `frontend/components/facilitator/WorkshopCard.tsx`, `frontend/components/admin/**`, `frontend/app/{join,p}/page.tsx`, `frontend/components/participant/**` | Facilitators picker on admin workshop cards, Join our network card on join page and on the completed tracker | — |
+| **S6 e2e** | `tests/e2e/**` | `alerts-digest.spec.ts`, `directory.spec.ts`, `tiein.spec.ts`; plus an assertion that no `stub-badge` exists on any network page | runtime: all |
+| **S7 infra-docs** | `deploy/cloudrun/provision.sh`, `.github/workflows/**`, `deploy/RUNBOOK.md`, `README.md` | `workshop0-cron-key`, Cloud Scheduler job (`--schedule "0 9 * * 1" --time-zone Asia/Kolkata`, HTTP POST to `https://workshop0.smalltech.in/api/cron/weekly-digest` with the key header), RUNBOOK "network operations" section | — |
+
+**Gate (repo root; Phase-12 environment plus `export WORKSHOP0_CRON_KEY=gate-cron-key`; no OpenRouter call is required this phase but the key stays set for the regression suite):** the Phase-12 command block with `grep -q '^0008'`, page checks `for p in network/directory network/trainer network/searches network/unsubscribed; do test -f "frontend/out/$p/index.html"; done`, and additionally, with the server up: `curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/cron/weekly-digest | grep -qx 401` and `curl -fsS -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest | grep -q '"enqueued"'`, then `bash -n deploy/cloudrun/provision.sh`. **Conditions:** a listing matching 3 of 5 saved searches → exactly 3 alerts, re-publish → 0 more; digest twice in one ISO week → one email per user (fixture: 40 users, 12 opted out, precomputed recipients); unsubscribe link flips exactly one preference; directory payloads contain only allow-listed keys (serialized-JSON assertion with sentinel email/rate/note values); a private or <60 % profile 404s publicly; linking a trainer to a workshop writes an audit row and shows on `/api/me/workshops`; participant join/tracker journeys (existing e2e) still pass and require no sign-in; zero `stub-badge` elements on network pages.
+
+**How the user tests it:** as a trainer, on the board pick filters → **Save this search** → as admin publish a matching listing → the alert email arrives (or is *recorded* in the Outbox) → click **Unsubscribe** in it → preferences show alerts off. Trigger the digest locally: `curl -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest`. Turn on **Public directory profile** → visit `/app/network/directory/` in a private window → your card is there, without rates or email. As admin, on a workshop card **Facilitators** → add the trainer as co-facilitator → the trainer's **My Workshop0 workshops** shows the dashboard link. Open a workshop join link → the **Join our network** card is visible. Production: `bash deploy/cloudrun/provision.sh` (cron key + scheduler), redeploy, `gcloud scheduler jobs run workshop0-weekly-digest --location us-central1`. **Nothing is a stub.**
 
 ---
 
