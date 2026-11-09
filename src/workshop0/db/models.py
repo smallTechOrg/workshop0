@@ -548,6 +548,9 @@ class NetworkInvite(Base):
     accepted_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("app_user.id", ondelete="SET NULL"), nullable=True
     )
+    # Phase 11d (0009_invite_revoke): set once by an admin Revoke; never on an accepted invite.
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(254), nullable=True)
 
 
 class TrainerTag(Base):

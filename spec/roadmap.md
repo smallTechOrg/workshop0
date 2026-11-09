@@ -1083,7 +1083,7 @@ trap - EXIT
 **Fixes:** (1) signed-in user with a profile opening an un-applied invite gets the **Use my invite** path, not a redirect (CODE bug — the join page redirects on `has_profile` before looking at the invite); (2) `invite_used` instead of silent ignore (`auth/routes.py::_check_invite`); (3) admin **Revoke** + `invite_revoked`; (4a) direct accept `POST /api/me/invite/accept` and corrected card copy; (4b) "sent" → "created"; (4c) one pending invite per email (re-use + refresh) and `superseded` status.
 
 > **Assumed:** direct accept without a second Google round-trip is safe: the session already proves an IdP-verified email (`email_verified` was required at sign-in), and the endpoint applies exactly the callback's checks to that email.
-> **Assumed:** `superseded` is derived (no column), so no data migration is needed for it; only `revoked_at`/`revoked_by` need migration `0008`.
+> **Assumed:** `superseded` is derived (no column), so no data migration is needed for it; only `revoked_at`/`revoked_by` need migration `0009` (renumbered after Phase 11c took `0008`).
 > **Assumed:** revoking does not unverify anyone and accepted invites cannot be revoked (verification is managed by the existing Verify/Unverify buttons).
 > **Assumed:** re-creating for an email with a pending invite renews the **same** token (the link the admin may already have shared keeps working) rather than rotating it.
 

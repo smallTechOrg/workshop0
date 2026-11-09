@@ -205,7 +205,7 @@ export interface TrainerDetail {
   activity: TrainerActivity[];
 }
 
-export type InviteStatus = "pending" | "accepted" | "expired";
+export type InviteStatus = "pending" | "accepted" | "expired" | "revoked" | "superseded";
 
 export interface NetworkInvite {
   id: number;
@@ -218,6 +218,15 @@ export interface NetworkInvite {
   created_at: string;
   expires_at: string;
   accepted_at: string | null;
+  /** Phase 11d — set when an admin revoked the invite. */
+  revoked_at: string | null;
+  revoked_by: string | null;
+}
+
+/** `reused` — the email already had a pending invite; its link was renewed. */
+export interface CreateInviteResult {
+  invite: NetworkInvite;
+  reused: boolean;
 }
 
 export interface InvitePage {
@@ -314,10 +323,19 @@ export function listInvites(adminKey: string, page = 1, page_size = 25): Promise
 export async function createInvite(
   adminKey: string,
   body: { email: string; name: string | null },
-): Promise<NetworkInvite> {
-  const d = await networkRequest<{ invite: NetworkInvite }>(adminKey, `${BASE}/invites`, {
+): Promise<CreateInviteResult> {
+  const d = await networkRequest<{ invite: NetworkInvite; reused?: boolean }>(
+    adminKey,
+    `${BASE}/invites`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+  return { invite: d.invite, reused: d.reused === true };
+}
+
+/** Revoke a pending/expired/superseded invite (idempotent). 409 `invite_not_revocable` if accepted. */
+export async function adminRevokeInvite(adminKey: string, id: number): Promise<NetworkInvite> {
+  const d = await networkRequest<{ invite: NetworkInvite }>(adminKey, `${BASE}/invites/${id}/revoke`, {
     method: "POST",
-    body: JSON.stringify(body),
   });
   return d.invite;
 }

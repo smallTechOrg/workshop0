@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { ApiError } from "@/lib/api";
 import { formatDate, timeAgo, useNowTick } from "@/lib/format";
 import {
+  adminRevokeInvite,
   createInvite,
   isAuthError,
   listInvites,
@@ -25,7 +26,28 @@ const STATUS: Record<InviteStatus, { tone: BadgeTone; label: string }> = {
   pending: { tone: "warning", label: "Pending" },
   accepted: { tone: "success", label: "Accepted" },
   expired: { tone: "neutral", label: "Expired" },
+  revoked: { tone: "neutral", label: "Revoked" },
+  superseded: { tone: "neutral", label: "Superseded" },
 };
+
+const ALREADY_JOINED = "This email has already joined through an invite.";
+
+function rowDetail(inv: NetworkInvite, now: number): string {
+  switch (inv.status) {
+    case "accepted":
+      return inv.accepted_at ? `accepted ${timeAgo(inv.accepted_at, now)}` : "accepted";
+    case "expired":
+      return `expired ${formatDate(inv.expires_at)}`;
+    case "revoked":
+      return inv.revoked_at
+        ? `revoked ${timeAgo(inv.revoked_at, now)}${inv.revoked_by ? ` by ${inv.revoked_by}` : ""}`
+        : "revoked";
+    case "superseded":
+      return "Already joined via another invite";
+    default:
+      return `created ${timeAgo(inv.created_at, now)} · expires ${formatDate(inv.expires_at)}`;
+  }
+}
 
 function InviteLink({ url }: { url: string }) {
   return (
@@ -58,6 +80,11 @@ export function InvitesPanel() {
   const [formError, setFormError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<NetworkInvite | null>(null);
+  const [reused, setReused] = useState(false);
+
+  const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [revokingId, setRevokingId] = useState<number | null>(null);
+  const [rowError, setRowError] = useState<{ id: number; message: string } | null>(null);
 
   const [invites, setInvites] = useState<NetworkInvite[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -92,11 +119,12 @@ export function InvitesPanel() {
     setCreating(true);
     setFormError(null);
     try {
-      const invite = await createInvite(adminKey, {
+      const res = await createInvite(adminKey, {
         email: cleanEmail,
         name: name.trim() || null,
       });
-      setCreated(invite);
+      setCreated(res.invite);
+      setReused(res.reused);
       setEmail("");
       setName("");
       void loadList();
@@ -105,9 +133,38 @@ export function InvitesPanel() {
         onUnauthorized();
         return;
       }
-      setFormError(err instanceof ApiError ? err.message : "Couldn't create the invite.");
+      setCreated(null);
+      if (err instanceof ApiError && err.code === "invite_already_accepted") {
+        setFormError(ALREADY_JOINED);
+      } else {
+        setFormError(err instanceof ApiError ? err.message : "Couldn't create the invite.");
+      }
     } finally {
       setCreating(false);
+    }
+  };
+
+  const revoke = async (inv: NetworkInvite) => {
+    setRevokingId(inv.id);
+    setRowError(null);
+    try {
+      const updated = await adminRevokeInvite(adminKey, inv.id);
+      setInvites((cur) => (cur ? cur.map((x) => (x.id === updated.id ? updated : x)) : cur));
+      if (created && created.id === updated.id) setCreated(null);
+      setConfirmId(null);
+      void loadList();
+    } catch (err) {
+      if (isAuthError(err)) {
+        onUnauthorized();
+        return;
+      }
+      setRowError({
+        id: inv.id,
+        message: err instanceof ApiError ? err.message : "Couldn't revoke the invite.",
+      });
+      void loadList();
+    } finally {
+      setRevokingId(null);
     }
   };
 
@@ -176,6 +233,11 @@ export function InvitesPanel() {
             className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3"
             data-testid="invite-created"
           >
+            {reused && (
+              <p className="mb-1.5 text-xs text-emerald-900" data-testid="invite-reused" role="status">
+                An invite for this email already existed — its link is renewed for 14 days.
+              </p>
+            )}
             <p className="mb-1.5 text-xs font-medium text-emerald-800">
               Invite for {created.email} — copy this link and send it yourself:
             </p>
@@ -216,25 +278,68 @@ export function InvitesPanel() {
                         </p>
                         <p className="text-xs text-stone-400">
                           {inv.name ? `${inv.name} · ` : ""}
-                          {inv.status === "accepted" && inv.accepted_at
-                            ? `accepted ${timeAgo(inv.accepted_at, now)}`
-                            : inv.status === "expired"
-                              ? `expired ${formatDate(inv.expires_at)}`
-                              : `sent ${timeAgo(inv.created_at, now)} · expires ${formatDate(inv.expires_at)}`}
+                          {rowDetail(inv, now)}
                         </p>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <Badge tone={st.tone}>{st.label}</Badge>
                         {inv.status === "pending" && (
-                          <CopyButton
-                            text={inv.url}
-                            iconOnly
-                            title="Copy invite link"
-                            aria-label={`Copy invite link for ${inv.email}`}
-                          />
+                          <>
+                            <CopyButton
+                              text={inv.url}
+                              iconOnly
+                              title="Copy invite link"
+                              aria-label={`Copy invite link for ${inv.email}`}
+                            />
+                            {confirmId !== inv.id && (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                data-testid="invite-revoke"
+                                aria-label={`Revoke invite for ${inv.email}`}
+                                onClick={() => {
+                                  setRowError(null);
+                                  setConfirmId(inv.id);
+                                }}
+                              >
+                                Revoke
+                              </Button>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>
+                    {inv.status === "pending" && confirmId === inv.id && (
+                      <div
+                        className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50/60 px-2 py-1.5 text-xs text-red-800"
+                        role="alertdialog"
+                        aria-label="Confirm revoke"
+                      >
+                        <span>Revoke this invite? The link will stop working.</span>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          data-testid="invite-revoke-confirm"
+                          loading={revokingId === inv.id}
+                          onClick={() => void revoke(inv)}
+                        >
+                          Revoke
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={revokingId === inv.id}
+                          onClick={() => setConfirmId(null)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
+                    {rowError && rowError.id === inv.id && (
+                      <p className="mt-1 text-xs text-red-700" role="alert">
+                        {rowError.message}
+                      </p>
+                    )}
                   </li>
                 );
               })}

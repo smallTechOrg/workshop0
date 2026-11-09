@@ -6,8 +6,8 @@ Flow (spec/architecture.md §Network identity):
    redirect); stores state / nonce / PKCE verifier / next / invite in the signed, HttpOnly,
    10-minute `workshop0_oidc` cookie; 302 to the IdP's authorization endpoint.
 2. `GET /api/auth/google/callback?code&state` — verifies the state cookie, exchanges the code
-   (client secret + PKCE), verifies the ID token (oidc.py), checks the invite (network_invite
-   rows only — profile writes belong to S7), upserts the `app_user`, creates a session, sets
+   (client secret + PKCE), verifies the ID token (oidc.py), checks the invite with the shared
+   `services/invites.check_invite` (Phase 11d ordering), upserts the `app_user`, creates a session, sets
    `workshop0_session`, 303 → `next`. Any failure → 303 `/app/signin/?error=<code>` and
    nothing is written (no user, no session, no invite change).
 
@@ -28,15 +28,14 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
-from src.workshop0.api._common import api_error, as_utc, ok, request_base_url, utcnow
+from src.workshop0.api._common import api_error, ok, request_base_url, utcnow
 from src.workshop0.auth import oidc, sessions
 from src.workshop0.auth.deps import check_csrf, is_admin_email
 from src.workshop0.auth.startup import signin_enabled
 from src.workshop0.config.settings import Settings, get_settings
 from src.workshop0.db.models import AppUser, NetworkInvite, TrainerProfile
 from src.workshop0.db.session import get_session
-from src.workshop0.services import ratelimit
-from src.workshop0.services.audit import record_action
+from src.workshop0.services import invites, ratelimit
 from src.workshop0.services.workshops import mask_email
 
 log = structlog.get_logger("workshop0")
@@ -110,69 +109,6 @@ def _error_redirect(
     response = RedirectResponse(url=f"{SIGNIN_PAGE}?{urlencode(params)}", status_code=303)
     _clear_oidc_cookie(response, _is_https(request))
     return response
-
-
-class _InviteRefused(Exception):
-    def __init__(self, code: str, extra: dict | None = None):
-        super().__init__(code)
-        self.code = code
-        self.extra = extra or {}
-
-
-def _check_invite(
-    session: Session, token: str | None, email: str, user_id: int | None
-) -> NetworkInvite | None:
-    """The invite this sign-in accepts, or None (api.md §Phase 11 → Invite acceptance).
-
-    Runs BEFORE any user/session write:
-    1. unknown token → None (a normal sign-in, no error);
-    2. already accepted → a no-op match for the same user; for anyone else the single-use
-       link no longer applies → None (normal sign-in, grants nothing);
-    3. expired (not yet accepted) → `invite_expired` (no `invite` param on the redirect);
-    4. different email (case-insensitive) → `invite_email_mismatch` with the token and the
-       masked invite address, so the sign-in page can say which account to use."""
-    if token is None:
-        return None
-    invite = session.scalar(select(NetworkInvite).where(NetworkInvite.token == token))
-    if invite is None:
-        return None
-    if invite.accepted_at is not None:
-        if user_id is not None and invite.accepted_user_id == user_id:
-            return invite
-        return None
-    if as_utc(invite.expires_at) <= utcnow():
-        raise _InviteRefused("invite_expired")
-    if invite.email.strip().lower() != email:
-        raise _InviteRefused(
-            "invite_email_mismatch",
-            {"invite": token, "invite_email": mask_email(invite.email.strip().lower())},
-        )
-    return invite
-
-
-def _accept_invite(session: Session, invite: NetworkInvite, user: AppUser) -> bool:
-    """Stamp the invite and verify an EXISTING profile (the one profile write allowed outside
-    `/api/me`: `verified*` only). Returns whether a profile was verified now."""
-    now = utcnow()
-    if invite.accepted_at is None:
-        invite.accepted_at = now
-        invite.accepted_user_id = user.id
-    profile = session.scalar(select(TrainerProfile).where(TrainerProfile.user_id == user.id))
-    if profile is None or profile.verified:
-        return False
-    profile.verified = True
-    profile.verified_at = now
-    profile.verified_by = invite.created_by
-    record_action(
-        session,
-        None,
-        "user",
-        "trainer.verify",
-        {"via": "invite", "invite_id": invite.id},
-        subject_type="trainer",
-        subject_id=profile.id,
-    )
-    return True
 
 
 def _display_name(claims: oidc.IdTokenClaims) -> str:
@@ -381,15 +317,21 @@ def google_callback(
 
     existing = _find_user(session, claims)
     try:
-        invite = _check_invite(session, invite_token, claims.email, existing.id if existing else None)
-    except _InviteRefused as exc:
+        match = invites.check_invite(
+            session, invite_token, claims.email, existing.id if existing else None
+        )
+    except invites.InviteRefused as exc:
         log.warning("auth.signin_failed", stage="invite", code=exc.code, reason=exc.code)
-        return _error_redirect(request, exc.code, next_path=next_path, extra=exc.extra)
+        extra = (
+            {"invite": invite_token, **exc.extra} if exc.code == "invite_email_mismatch" else None
+        )
+        return _error_redirect(request, exc.code, next_path=next_path, extra=extra)
 
     user = _upsert_user(session, existing, claims)
+    invite = match.invite if match is not None else None
     profile_verified = False
-    if invite is not None:
-        profile_verified = _accept_invite(session, invite, user)
+    if match is not None:
+        profile_verified = invites.accept_invite(session, match, user)
         log.info(
             "auth.invite_accepted",
             invite_id=invite.id,

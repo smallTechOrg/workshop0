@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session
 from src.workshop0.api._common import ok
 from src.workshop0.auth.deps import CurrentUser, require_user
 from src.workshop0.db.session import create_db_session, get_session
-from src.workshop0.services import profiles
+from src.workshop0.auth.routes import clean_invite_token
+from src.workshop0.services import invites, profiles
 from src.workshop0.services.profiles import ProfileCreate, ProfilePatch
 from src.workshop0.services.ratelimit import enforce, hit
 
@@ -29,6 +30,7 @@ SESSION_COOKIE = "workshop0_session"
 CV_LIMIT, CV_WINDOW_S = 10, 3600  # CV upload/paste: 10/h/user
 DRAFT_LIMIT, DRAFT_WINDOW_S = 600, 3600  # profile drafting: 600/h global (cost guard)
 DRAFT_BUCKET = "draft:global"
+INVITE_ACCEPT_LIMIT, INVITE_ACCEPT_WINDOW_S = 20, 3600  # direct invite accept: 20/h/user
 
 
 def _cv_bucket(user_id: int) -> str:
@@ -167,3 +169,17 @@ def delete_account(
         profiles.delete_blob(get_blobstore(), blob_key)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return ok({"deleted": True})
+
+
+@router.post("/invite/accept")
+def accept_invite(
+    body: dict[str, Any] = Body(default_factory=dict),
+    user: CurrentUser = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Phase 11d: apply an invite to the signed-in user without a second Google round-trip
+    (api.md §Phase 11d). Same checks as the callback, with the session user's email."""
+    enforce(session, f"invite_accept:user:{user.id}", INVITE_ACCEPT_LIMIT, INVITE_ACCEPT_WINDOW_S)
+    raw = body.get("token") if isinstance(body, dict) else None
+    token = clean_invite_token(raw) if isinstance(raw, str) else None
+    return ok(invites.accept_for_user(session, token, user))

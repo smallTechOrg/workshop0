@@ -1,4 +1,5 @@
-"""Invite acceptance at the callback (spec/api.md §Phase 11 → Invite acceptance).
+"""Invite acceptance at the callback (spec/api.md §Phase 11 → Invite acceptance; Phase 11d
+ordering: unknown → revoked → used → superseded → expired → mismatch → match).
 
 Accepting = signing in with the SAME email. Mismatch/expired are checked before any user or
 session write; a failure creates no user, no session and changes no invite. An existing
@@ -23,7 +24,9 @@ from src.workshop0.db.models import (
 from src.workshop0.db.session import create_db_session
 
 
-def make_invite(email: str, *, expires_in: timedelta = timedelta(days=14)) -> str:
+def make_invite(
+    email: str, *, expires_in: timedelta = timedelta(days=14), revoked: bool = False
+) -> str:
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
     with create_db_session() as session:
@@ -35,6 +38,8 @@ def make_invite(email: str, *, expires_in: timedelta = timedelta(days=14)) -> st
                 created_by="admin@example.test",
                 created_at=now,
                 expires_at=now + expires_in,
+                revoked_at=now if revoked else None,
+                revoked_by="admin key" if revoked else None,
             )
         )
     return token
@@ -178,17 +183,17 @@ def test_reusing_an_accepted_invite_as_the_same_user_is_a_no_op_success(client, 
     assert me(second_browser)["invite_accepted"] is True
 
 
-def test_invite_accepted_by_a_deleted_account_grants_nothing_to_a_new_one(client, make_client):
+def test_invite_accepted_by_a_deleted_account_is_refused_as_used(client, make_client):
+    # Phase 11d: a null accepted_user_id (account deleted) is "used by someone else".
     token = make_invite("reuse@example.test")
     assert sign_in(client, "reuse@example.test", invite=token).response.status_code == 303
     with create_db_session() as session:
         session.query(AppUser).delete()  # account deletion: accepted_user_id → NULL
 
     fresh = make_client()
-    result = sign_in(fresh, "reuse@example.test", invite=token)
-    assert result.response.status_code == 303
-    assert result.location == "/app/network/"
-    assert me(fresh)["invite_accepted"] is False
+    result = sign_in(fresh, "reuse@example.test", next="/app/network/join/", invite=token)
+    assert query_of(result.location) == {"error": "invite_used", "next": "/app/network/join/"}
+    assert count(AppUser) == 0 and count(AuthSession) == 0
     assert invite_row(token).accepted_user_id is None
 
 
@@ -203,3 +208,77 @@ def test_malformed_invite_parameter_is_ignored(client):
     assert result.response.status_code == 303
     assert result.location == "/app/network/"
     assert count(AuthSession) == 1
+
+
+# --------------------------------------------------------------------------- Phase 11d
+
+
+def test_revoked_invite_is_refused_and_nothing_is_written(client):
+    token = make_invite("revoked@example.test", revoked=True)
+    result = sign_in(client, "revoked@example.test", next="/app/network/join/", invite=token)
+    assert result.response.status_code == 303
+    assert query_of(result.location) == {"error": "invite_revoked", "next": "/app/network/join/"}
+    assert count(AppUser) == 0 and count(AuthSession) == 0
+    assert invite_row(token).accepted_at is None
+    assert me(client) is None
+
+
+def test_revoked_beats_expired(client):
+    token = make_invite("both@example.test", expires_in=timedelta(seconds=-1), revoked=True)
+    result = sign_in(client, "both@example.test", invite=token)
+    assert query_of(result.location)["error"] == "invite_revoked"
+
+
+def test_invite_used_by_another_user_is_refused_before_email_mismatch(client, make_client):
+    token = make_invite("first@example.test")
+    assert sign_in(client, "first@example.test", invite=token).response.status_code == 303
+    first_id = invite_row(token).accepted_user_id
+    users_before = count(AppUser)
+
+    for email in ("second@example.test", "first-other@example.test"):
+        other = make_client()
+        result = sign_in(other, email, next="/app/network/join/", invite=token)
+        assert query_of(result.location) == {"error": "invite_used", "next": "/app/network/join/"}
+        assert me(other) is None
+    assert count(AppUser) == users_before
+    assert count(AuthSession) == 1
+    assert invite_row(token).accepted_user_id == first_id
+
+
+def test_used_invite_is_refused_for_an_existing_account_too(client, make_user, make_client):
+    token = make_invite("owner@example.test")
+    assert sign_in(client, "owner@example.test", invite=token).response.status_code == 303
+    other = make_user("existing-b@example.test")
+    add_profile(other.id)
+    browser = make_client()
+    result = sign_in(browser, "existing-b@example.test", invite=token)
+    assert query_of(result.location)["error"] == "invite_used"
+    assert profile_of(other.id).verified is False
+    assert count(AuthSession) == 1
+
+
+def test_superseded_invite_opened_by_the_siblings_acceptor_is_a_no_op_success(client, make_client):
+    first = make_invite("twice@example.test")
+    second = make_invite("twice@example.test")
+    assert sign_in(client, "twice@example.test", invite=first).response.status_code == 303
+
+    browser = make_client()
+    result = sign_in(browser, "twice@example.test", next="/app/network/join/", invite=second)
+    assert result.response.status_code == 303
+    assert result.location == "/app/network/join/"
+    row = invite_row(second)
+    assert row.accepted_at is None and row.accepted_user_id is None  # not stamped
+    assert me(browser)["invite_accepted"] is True
+
+
+def test_superseded_invite_opened_by_a_different_email_is_a_mismatch(client, make_client):
+    first = make_invite("sib@example.test")
+    second = make_invite("sib@example.test")
+    assert sign_in(client, "sib@example.test", invite=first).response.status_code == 303
+
+    browser = make_client()
+    result = sign_in(browser, "stranger@example.test", invite=second)
+    assert query_of(result.location)["error"] == "invite_email_mismatch"
+    assert query_of(result.location)["invite"] == second
+    assert me(browser) is None
+    assert invite_row(second).accepted_at is None

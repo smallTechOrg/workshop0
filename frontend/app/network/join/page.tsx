@@ -5,7 +5,10 @@
  * pretty `/invite/<token>` link).
  *
  *   signed out          → sign-in card (`signInUrl("/app/network/join/", invite)`)
- *   has a profile       → My profile  `/app/network/me/`
+ *   has a profile       → My profile  `/app/network/me/` — unless an `invite`
+ *                         is in the URL and not yet applied (Phase 11d): then
+ *                         the invite card (**Use my invite**) is shown instead
+ *   signed in + invite  → invite card → `POST /api/me/invite/accept`
  *   step 1 (CV intake)  → three tabs → "Reading your CV…" (polls ≤60 s)
  *   step 2 (review)     → the shared ProfileForm, pre-filled where possible,
  *                         consent → **Create my profile** → My profile
@@ -17,7 +20,13 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError } from "@/lib/api";
-import { useCurrentUser, type CurrentUser } from "@/lib/networkAuth";
+import {
+  acceptInvite,
+  NetworkApiError,
+  useCurrentUser,
+  type CurrentUser,
+} from "@/lib/networkAuth";
+import { signinErrorMessage } from "@/components/network/auth/signinErrors";
 import {
   createProfile,
   emptyProfileInput,
@@ -86,6 +95,106 @@ function VerifiedBanner() {
   );
 }
 
+type InviteCardState =
+  | { kind: "idle" }
+  | { kind: "applying" }
+  | { kind: "error"; code: string; inviteEmail: string | null };
+
+/**
+ * capabilities.md §C11 (Phase 11d): a signed-in user opening an invite that
+ * isn't applied to them yet. Applies it directly — no second Google sign-in.
+ */
+function InviteCard({
+  invite,
+  email,
+  onAccepted,
+}: {
+  invite: string;
+  email: string;
+  onAccepted: () => Promise<void>;
+}) {
+  const [state, setState] = useState<InviteCardState>({ kind: "idle" });
+
+  async function use() {
+    setState({ kind: "applying" });
+    try {
+      await acceptInvite(invite);
+      await onAccepted();
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : "internal_error";
+      const masked =
+        err instanceof NetworkApiError && typeof err.details?.invite_email === "string"
+          ? err.details.invite_email
+          : null;
+      setState({ kind: "error", code, inviteEmail: masked });
+    }
+  }
+
+  const error = state.kind === "error" ? state : null;
+  // Mismatch is actionable via a different account; used/withdrawn/expired/unknown are final.
+  const retryable =
+    error !== null &&
+    ["network_error", "internal_error", "rate_limited", "csrf_failed"].includes(error.code);
+
+  let errorText: { title: string; hint: string | null } | null = null;
+  if (error) {
+    if (error.code === "invite_email_mismatch") {
+      errorText = {
+        title: `This invite was sent to ${error.inviteEmail ?? "a different email address"} — you're signed in as ${email}.`,
+        hint: null,
+      };
+    } else if (
+      ["invite_used", "invite_revoked", "invite_expired", "invite_not_found", "rate_limited"].includes(
+        error.code,
+      )
+    ) {
+      errorText = signinErrorMessage(error.code);
+    } else {
+      errorText = {
+        title: "We couldn't apply your invite.",
+        hint: "Something went wrong — please try again.",
+      };
+    }
+  }
+
+  return (
+    <Card data-testid="invite-card" className="space-y-3 p-4">
+      <p className="text-sm text-stone-700">
+        You have a smallTech invite. Use it with <span className="font-medium">{email}</span>?
+      </p>
+      {error && errorText && (
+        <div
+          role="alert"
+          data-testid="invite-card-error"
+          data-code={error.code}
+          className="rounded-md border border-amber-200 bg-amber-50/70 p-3 text-sm text-amber-900"
+        >
+          <p className="font-medium">{errorText.title}</p>
+          {errorText.hint && <p className="mt-1">{errorText.hint}</p>}
+        </div>
+      )}
+      {(!error || retryable) && (
+        <Button
+          data-testid="invite-use"
+          onClick={() => void use()}
+          disabled={state.kind === "applying"}
+          aria-busy={state.kind === "applying"}
+        >
+          {state.kind === "applying" ? "Applying your invite…" : "Use my invite"}
+        </Button>
+      )}
+      {error?.code === "invite_email_mismatch" && (
+        <GoogleButton
+          next={JOIN_PATH}
+          invite={invite}
+          label="Sign in with a different Google account"
+          className="sm:w-auto"
+        />
+      )}
+    </Card>
+  );
+}
+
 function StepHeader({ step, title, body }: { step: 1 | 2; title: string; body: string }) {
   return (
     <div>
@@ -106,15 +215,27 @@ function JoinContent() {
   const invite = params.get("invite") ?? undefined;
   const { user, loading, error, refresh } = useCurrentUser();
   const [step, setStep] = useState<Step>({ kind: "checking" });
+  // Set when the invite was applied on this page — keeps a profile owner here
+  // to see the Verified banner + "Go to My profile" instead of auto-redirecting.
+  const [justAccepted, setJustAccepted] = useState(false);
 
   useEffect(() => {
     document.title = "Join the trainer network — Workshop0";
   }, []);
 
-  // Already a member → My profile (basePath "/app" is prepended by the router).
+  // Already a member → My profile (basePath "/app" is prepended by the router),
+  // except when an invite in the URL still has to be applied (Phase 11d).
+  const accepted = inviteAccepted(user);
+  const showInviteCard = Boolean(user && invite && !accepted);
+  const redirectToProfile = Boolean(user?.has_profile && !showInviteCard && !justAccepted);
   useEffect(() => {
-    if (user?.has_profile) router.replace("/network/me/");
-  }, [user?.has_profile, router]);
+    if (redirectToProfile) router.replace("/network/me/");
+  }, [redirectToProfile, router]);
+
+  const onInviteAccepted = useCallback(async () => {
+    setJustAccepted(true);
+    await refresh();
+  }, [refresh]);
 
   // Signed in without a profile: resume a CV that's already in (reload-safe).
   const userId = user?.id;
@@ -228,22 +349,34 @@ function JoinContent() {
     );
   }
 
-  if (user.has_profile) return <PageSkeleton label="Opening your profile" />;
+  const inviteCard =
+    showInviteCard && invite ? (
+      <InviteCard invite={invite} email={user.email} onAccepted={onInviteAccepted} />
+    ) : null;
 
-  const verified = inviteAccepted(user);
+  if (user.has_profile) {
+    if (redirectToProfile) return <PageSkeleton label="Opening your profile" />;
+    return (
+      <div className="space-y-6">
+        {accepted && (
+          <>
+            <VerifiedBanner />
+            <Button data-testid="invite-go-profile" onClick={() => router.replace("/network/me/")}>
+              Go to My profile
+            </Button>
+          </>
+        )}
+        {inviteCard}
+      </div>
+    );
+  }
+
+  const verified = accepted;
 
   return (
     <div className="space-y-6">
       {verified && <VerifiedBanner />}
-      {!verified && invite && (
-        <Card data-testid="invite-not-applied" className="space-y-3 p-4">
-          <p className="text-sm text-stone-700">
-            You opened an invite link, but it hasn&apos;t been applied to this account. If the
-            invite was sent to a different email, sign in with that Google account.
-          </p>
-          <GoogleButton next={JOIN_PATH} invite={invite} label="Use my invite" className="sm:w-auto" />
-        </Card>
-      )}
+      {inviteCard}
 
       {step.kind === "checking" && <PageSkeleton label="Loading onboarding" />}
 

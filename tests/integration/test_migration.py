@@ -222,7 +222,7 @@ def test_0005_seeds_topics_and_downgrade_to_0004_removes_the_board(monkeypatch, 
         assert set(inspect(engine).get_table_names()) == EXPECTED_TABLES
         _assert_seed(_topic_seed(engine))  # re-seeded exactly once, not duplicated
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0008"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0009"
     finally:
         engine.dispose()
 
@@ -275,7 +275,7 @@ def test_0006_creates_the_network_schema_and_0007_is_head_and_creates_the_networ
     url = scratch_database()
     _use(monkeypatch, url)
     config = _alembic_config()
-    assert ScriptDirectory.from_config(config).get_current_head() == "0008"
+    assert ScriptDirectory.from_config(config).get_current_head() == "0009"
     command.upgrade(config, "0006")
 
     engine = create_engine(url)
@@ -409,7 +409,7 @@ def test_0006_downgrade_to_0005_and_back_round_trips(monkeypatch, scratch_databa
         _assert_seed(_topic_seed(engine))  # Phase-10 data untouched
 
         command.upgrade(config, "head")
-        assert _version(engine) == "0008"
+        assert _version(engine) == "0009"
         inspector = inspect(engine)
         assert set(inspector.get_table_names()) == EXPECTED_TABLES
         assert _columns(inspector, "ai_usage")["workshop_id"]["nullable"]
@@ -476,7 +476,7 @@ def test_0007_schema_and_widened_purpose(monkeypatch, scratch_database):
     command.upgrade(config, "head")
     engine = create_engine(url)
     try:
-        assert _version(engine) == "0008"
+        assert _version(engine) == "0009"
         inspector = inspect(engine)
         pcols = _columns(inspector, "partner")
         assert set(pcols) == {
@@ -599,7 +599,7 @@ def test_0007_downgrade_restores_mirror_compensation_and_round_trips(monkeypatch
         assert purposes == ["profile_draft"]  # >16-char purposes removed
 
         command.upgrade(config, "head")
-        assert _version(engine) == "0008"
+        assert _version(engine) == "0009"
         with engine.connect() as connection:
             assert connection.execute(text("SELECT count(*) FROM partner")).scalar() == 2
     finally:
@@ -647,9 +647,8 @@ def test_0008_upgrade_migrates_single_city_to_locations(monkeypatch, scratch_dat
     engine = create_engine(url)
     try:
         _seed_pre_0008(engine)
-        command.upgrade(config, "head")
+        command.upgrade(config, "0008")
         assert _version(engine) == "0008"
-        assert ScriptDirectory.from_config(config).get_current_head() == "0008"
         col = _columns(inspect(engine), "opportunity")["locations_json"]
         assert not col["nullable"]
         got = _locations(engine)
@@ -677,7 +676,7 @@ def test_0008_downgrade_restores_first_city_and_round_trips(monkeypatch, scratch
     engine = create_engine(url)
     try:
         _seed_pre_0008(engine)
-        command.upgrade(config, "head")
+        command.upgrade(config, "0008")
         many = json.dumps(
             [{"city": c, "country": None} for c in ("Bengaluru", "Pune", "Hyderabad")], ensure_ascii=False
         )
@@ -699,11 +698,51 @@ def test_0008_downgrade_restores_first_city_and_round_trips(monkeypatch, scratch
             "zurich": "Zürich",
         }
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "0008")
         assert _version(engine) == "0008"
         got = _locations(engine)
         assert got["pune"] == ([{"city": "Bengaluru", "country": None}], "Bengaluru")
         assert got["zurich"] == ([{"city": "Zürich", "country": None}], "Zürich")
         assert got["remote"] == ([], None)
+    finally:
+        engine.dispose()
+
+
+# --------------------------------------------------------------------------- Phase 11d — 0009
+
+
+def test_0009_adds_invite_revoke_columns_and_round_trips(monkeypatch, scratch_database):
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    assert ScriptDirectory.from_config(config).get_current_head() == "0009"
+    command.upgrade(config, "head")
+    engine = create_engine(url)
+    try:
+        assert _version(engine) == "0009"
+        cols = _columns(inspect(engine), "network_invite")
+        assert {"revoked_at", "revoked_by"} <= set(cols)
+        assert cols["revoked_at"]["nullable"] and cols["revoked_by"]["nullable"]
+        with engine.begin() as connection:  # an existing invite survives the round trip
+            connection.execute(
+                text(
+                    "INSERT INTO network_invite (token, email, created_by, created_at, expires_at)"
+                    " VALUES ('tok-0009', 'a@example.test', 'admin key', now(), now())"
+                )
+            )
+
+        command.downgrade(config, "0008")
+        assert _version(engine) == "0008"
+        cols = _columns(inspect(engine), "network_invite")
+        assert not {"revoked_at", "revoked_by"} & set(cols)
+
+        command.upgrade(config, "head")
+        assert _version(engine) == "0009"
+        assert {"revoked_at", "revoked_by"} <= set(_columns(inspect(engine), "network_invite"))
+        with engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT email, revoked_at, revoked_by FROM network_invite WHERE token = 'tok-0009'")
+            ).one()
+        assert tuple(row) == ("a@example.test", None, None)
     finally:
         engine.dispose()
