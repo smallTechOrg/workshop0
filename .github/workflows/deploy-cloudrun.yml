@@ -5,8 +5,24 @@ name: Deploy (Cloud Run)
 #   deploy -> build + push image, run the workshop0-migrate job, deploy a
 #             no-traffic candidate revision, health-check it, route traffic to LATEST,
 #             health-check again; on any failure restore the previous revision.
-# No GCP keys are stored anywhere; the only secrets are the optional
-# OPENROUTER_API_KEY used by the guarded real-key tests.
+# No GCP keys are stored anywhere; the only GitHub secrets are the optional
+# OPENROUTER_API_KEY / ANTHROPIC_API_KEY / ANTHROPIC_WORKSPACE_ID used by the
+# guarded real-key tests (absent => those tests skip; the local gate forbids that).
+#
+# Runtime secrets (Secret Manager, created only by deploy/cloudrun/provision.sh):
+#   always:   workshop0-database-url, workshop0-openrouter-api-key, workshop0-admin-key
+#   optional: workshop0-session-secret, workshop0-google-client-secret, and the
+#             Anthropic PAIR workshop0-anthropic-api-key + workshop0-anthropic-workspace-id.
+#             Each optional secret is mapped only if it has an ENABLED version; the
+#             Anthropic pair is mapped only when BOTH do. A missing optional secret
+#             never breaks a deploy: the feature stays in its labelled
+#             "not configured" state.
+#
+# Repository variables (all optional):
+#   WORKSHOP0_GOOGLE_CLIENT_ID  Google OAuth web client id (sign-in needs it + the secret)
+#   WORKSHOP0_ADMIN_EMAILS      comma-separated admin allowlist
+#   WORKSHOP0_OIDC_ISSUER       default https://accounts.google.com
+#   WORKSHOP0_GCS_BUCKET        default ai-agent-boilerplate0-workshop0-cvs
 #
 # Pushes to main deploy automatically; any other branch can be deployed by hand
 # with workflow_dispatch (gh workflow run deploy-cloudrun.yml --ref <branch>).
@@ -63,8 +79,16 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/workshop0_test
       WORKSHOP0_ADMIN_KEY: ci-admin-key-0123456789
-      # Real-key tests are guarded: they skip when this secret is absent.
+      # Real-key tests are guarded: they skip when these secrets are absent.
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_WORKSPACE_ID: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
+      # Phase-11 gate env (test values only; the session secret is generated per run).
+      WORKSHOP0_GOOGLE_CLIENT_ID: test-client
+      WORKSHOP0_GOOGLE_CLIENT_SECRET: test-secret
+      WORKSHOP0_OIDC_ISSUER: http://localhost:8099
+      WORKSHOP0_ADMIN_EMAILS: admin@example.test
+      WORKSHOP0_BLOB_BACKEND: local
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -72,6 +96,26 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --frozen
+      - name: Generate a per-run session secret
+        run: |
+          set -euo pipefail
+          SECRET="$(openssl rand -hex 32)"
+          echo "::add-mask::${SECRET}"
+          echo "WORKSHOP0_SESSION_SECRET=${SECRET}" >> "$GITHUB_ENV"
+          if [ -z "${ANTHROPIC_API_KEY:-}" ] || [ -z "${ANTHROPIC_WORKSPACE_ID:-}" ]; then
+            echo "::warning::ANTHROPIC_API_KEY and/or ANTHROPIC_WORKSPACE_ID secret not set: real-key network AI tests will skip."
+          fi
+      - name: Start the local OIDC test issuer (:8099)
+        run: |
+          set -euo pipefail
+          nohup uv run python tests/support/fake_oidc.py --port 8099 > fake_oidc.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8099/.well-known/openid-configuration >/dev/null 2>&1 && { echo "issuer up"; exit 0; }
+            sleep 1
+          done
+          echo "fake OIDC issuer did not start" >&2
+          cat fake_oidc.log >&2 || true
+          exit 1
       - name: Unit + integration tests
         run: uv run pytest tests/unit tests/integration -q
 
@@ -85,6 +129,10 @@ jobs:
       MIN_INSTANCES_INPUT: ${{ inputs.min_instances }}
       DRILL_ROLLBACK: ${{ inputs.drill_rollback }}
       BASE_URL_VAR: ${{ vars.WORKSHOP0_BASE_URL }}
+      GOOGLE_CLIENT_ID_VAR: ${{ vars.WORKSHOP0_GOOGLE_CLIENT_ID }}
+      ADMIN_EMAILS_VAR: ${{ vars.WORKSHOP0_ADMIN_EMAILS }}
+      OIDC_ISSUER: ${{ vars.WORKSHOP0_OIDC_ISSUER || 'https://accounts.google.com' }}
+      GCS_BUCKET: ${{ vars.WORKSHOP0_GCS_BUCKET || 'ai-agent-boilerplate0-workshop0-cvs' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -147,6 +195,55 @@ jobs:
           echo "Previous revision: ${PREV:-<none>}"
           echo "PREV=${PREV}" >> "$GITHUB_ENV"
 
+      - name: Resolve optional runtime secrets (mapped only with an enabled version)
+        run: |
+          set -euo pipefail
+          # has_enabled <secret>: true iff the secret exists and has >=1 ENABLED version.
+          # A missing secret (or no enabled version) is "absent", never an error.
+          has_enabled() {
+            local v
+            v="$(gcloud secrets versions list "$1" --project "$PROJECT_ID" \
+                  --filter='state=ENABLED' --limit=1 --format='value(name)' 2>/dev/null || true)"
+            [ -n "$v" ]
+          }
+          SECRETS="DATABASE_URL=workshop0-database-url:latest,OPENROUTER_API_KEY=workshop0-openrouter-api-key:latest,WORKSHOP0_ADMIN_KEY=workshop0-admin-key:latest"
+
+          SESSION=false
+          if has_enabled workshop0-session-secret; then
+            SESSION=true
+            SECRETS="${SECRETS},WORKSHOP0_SESSION_SECRET=workshop0-session-secret:latest"
+            echo "workshop0-session-secret: mapped"
+          else
+            echo "::warning::workshop0-session-secret has no enabled version: not mapped (run provision.sh)."
+          fi
+
+          if has_enabled workshop0-google-client-secret; then
+            if [ "$SESSION" = "true" ]; then
+              SECRETS="${SECRETS},WORKSHOP0_GOOGLE_CLIENT_SECRET=workshop0-google-client-secret:latest"
+              echo "workshop0-google-client-secret: mapped"
+            else
+              # Sign-in enabled without a session secret fails startup; keep sign-in off instead.
+              echo "::warning::workshop0-google-client-secret exists but workshop0-session-secret does not: Google client secret NOT mapped, sign-in stays 'not configured'."
+            fi
+          else
+            echo "workshop0-google-client-secret: absent (sign-in stays 'not configured')"
+          fi
+
+          # The Anthropic key is not workspace-scoped: it is useless (HTTP 400) without
+          # the workspace id, so the two are mapped as a pair or not at all.
+          AK=false; AW=false
+          if has_enabled workshop0-anthropic-api-key; then AK=true; fi
+          if has_enabled workshop0-anthropic-workspace-id; then AW=true; fi
+          if [ "$AK" = "true" ] && [ "$AW" = "true" ]; then
+            SECRETS="${SECRETS},ANTHROPIC_API_KEY=workshop0-anthropic-api-key:latest,ANTHROPIC_WORKSPACE_ID=workshop0-anthropic-workspace-id:latest"
+            echo "Anthropic pair: mapped"
+          else
+            echo "::warning::Anthropic pair not mapped (api-key enabled=${AK}, workspace-id enabled=${AW}): network AI drafting stays 'skipped'."
+          fi
+
+          # Only secret NAMES/refs go to GITHUB_ENV, never values.
+          echo "RUN_SECRETS=${SECRETS}" >> "$GITHUB_ENV"
+
       - name: Create or update the migrate job
         run: |
           set -euo pipefail
@@ -176,9 +273,21 @@ jobs:
           fi
           echo "NEW_REVISION=${SERVICE}-${SUFFIX}" >> "$GITHUB_ENV"
 
+          # '|' is the --set-env-vars delimiter: admin emails contain '@' and ','.
+          for v in "${BASE_URL_VAR:-}" "${GOOGLE_CLIENT_ID_VAR:-}" "${ADMIN_EMAILS_VAR:-}" "$OIDC_ISSUER" "$GCS_BUCKET"; do
+            case "$v" in *"|"*) echo "a repository variable contains '|', which is the env delimiter" >&2; exit 1;; esac
+          done
           ENVVARS="WORKSHOP0_MIGRATE_ON_BOOT=0"
           if [ -n "${BASE_URL_VAR:-}" ]; then
-            ENVVARS="${ENVVARS}@WORKSHOP0_BASE_URL=${BASE_URL_VAR}"
+            ENVVARS="${ENVVARS}|WORKSHOP0_BASE_URL=${BASE_URL_VAR}"
+          fi
+          ENVVARS="${ENVVARS}|WORKSHOP0_BLOB_BACKEND=gcs|WORKSHOP0_GCS_BUCKET=${GCS_BUCKET}"
+          ENVVARS="${ENVVARS}|WORKSHOP0_OIDC_ISSUER=${OIDC_ISSUER}"
+          if [ -n "${GOOGLE_CLIENT_ID_VAR:-}" ]; then
+            ENVVARS="${ENVVARS}|WORKSHOP0_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID_VAR}"
+          fi
+          if [ -n "${ADMIN_EMAILS_VAR:-}" ]; then
+            ENVVARS="${ENVVARS}|WORKSHOP0_ADMIN_EMAILS=${ADMIN_EMAILS_VAR}"
           fi
 
           ARGS=(
@@ -190,8 +299,8 @@ jobs:
             --max-instances 3
             --cpu-boost --no-cpu-throttling
             --network=default --subnet=default --vpc-egress=private-ranges-only
-            --set-env-vars "^@^${ENVVARS}"
-            --set-secrets "DATABASE_URL=workshop0-database-url:latest,OPENROUTER_API_KEY=workshop0-openrouter-api-key:latest,WORKSHOP0_ADMIN_KEY=workshop0-admin-key:latest"
+            --set-env-vars "^|^${ENVVARS}"
+            --set-secrets "$RUN_SECRETS"
             --revision-suffix "$SUFFIX"
           )
           # A normal deploy never changes min-instances (omitting preserves the live value).
