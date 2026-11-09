@@ -8,6 +8,8 @@
  */
 
 import { ApiError } from "@/lib/api";
+import type { CompensationUnit, Currency } from "@/lib/compensation";
+import type { PartnerRef } from "@/lib/adminPartners";
 
 // ---------------------------------------------------------------------------
 // Fetch helper
@@ -124,9 +126,17 @@ export interface AdminOpportunityRow {
   starts_on: string | null;
   ends_on: string | null;
   duration_text: string | null;
+  compensation_min: number | null;
+  compensation_max: number | null;
+  compensation_currency: Currency | null;
+  compensation_unit: CompensationUnit | null;
+  /** The optional note shown after the amount. */
   compensation_text: string | null;
   deadline: string;
   partner_display_name: string | null;
+  partner_id: number | null;
+  partner: PartnerRef | null;
+  /** Derived from `partner.internal_name` (read-only). */
   partner_internal_name: string | null;
   status: OpportunityStatus;
   stored_status: StoredStatus;
@@ -194,10 +204,14 @@ export interface OpportunityBody {
   starts_on: string | null;
   ends_on: string | null;
   duration_text: string | null;
+  compensation_min: number | null;
+  compensation_max: number | null;
+  compensation_currency: Currency | null;
+  compensation_unit: CompensationUnit | null;
   compensation_text: string | null;
   deadline: string | null;
   partner_display_name: string | null;
-  partner_internal_name: string | null;
+  partner_id: number | null;
   internal_notes: string | null;
   status: StoredStatus;
 }

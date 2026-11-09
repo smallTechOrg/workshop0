@@ -1,5 +1,6 @@
 import { cn } from "@/lib/format";
 import { typeLabel, type LocationMode, type OpportunityType } from "@/lib/adminBoard";
+import { formatCompensation, type CompensationFields } from "@/lib/compensation";
 import { Badge } from "@/components/ui/Badge";
 
 /**
@@ -15,7 +16,7 @@ export interface PublicCardPreviewData {
   topics: { slug: string; name: string }[];
   location_mode: LocationMode;
   city: string;
-  compensation_text: string;
+  compensation: CompensationFields;
   /** ISO timestamp, or null while the deadline field is empty/invalid. */
   deadline: string | null;
 }
@@ -35,6 +36,7 @@ export function PublicCardPreview({
   data: PublicCardPreviewData;
   now?: number;
 }) {
+  const comp = formatCompensation(data.compensation);
   const shown = data.topics.slice(0, 4);
   const extra = data.topics.length - shown.length;
   const deadlineMs = data.deadline ? Date.parse(data.deadline) : NaN;
@@ -86,10 +88,10 @@ export function PublicCardPreview({
           <dt className="sr-only">Location</dt>
           <dd>📍 {locationText(data.location_mode, data.city)}</dd>
         </div>
-        {data.compensation_text.trim() && (
-          <div className="flex gap-1.5">
+        {comp && (
+          <div className="flex gap-1.5" data-testid="opp-preview-compensation">
             <dt className="sr-only">Compensation</dt>
-            <dd>💼 {data.compensation_text.trim()}</dd>
+            <dd>💼 {comp}</dd>
           </div>
         )}
         <div className="flex gap-1.5">

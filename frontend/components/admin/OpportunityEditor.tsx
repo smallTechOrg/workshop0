@@ -2,6 +2,9 @@
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "@/lib/api";
+import { adminListPartners, type PartnerRef } from "@/lib/adminPartners";
+import type { DraftResponse, DraftedField } from "@/lib/adminDraft";
+import { COMPENSATION_UNITS, CURRENCIES, type CompensationUnit, type Currency } from "@/lib/compensation";
 import { cn, useNowTick } from "@/lib/format";
 import {
   LOCATION_MODES,
@@ -25,6 +28,9 @@ import { StubCard } from "@/components/ui/StubBadge";
 import { useToast } from "@/components/ui/Toast";
 import { useAdmin } from "@/components/admin/AdminGate";
 import { ActivityList } from "@/components/admin/ActivityList";
+import { PasteToFill } from "@/components/admin/drafting/PasteToFill";
+import { DraftedChip } from "@/components/admin/drafting/DraftedChip";
+import { PartnerSelect } from "@/components/admin/partners/PartnerSelect";
 import { LockIcon } from "@/components/admin/LockIcon";
 import { OpportunityStatusPill } from "@/components/admin/OpportunityStatusPill";
 import { PublicCardPreview } from "@/components/admin/PublicCardPreview";
@@ -45,11 +51,15 @@ interface FormState {
   starts_on: string;
   ends_on: string;
   duration_text: string;
+  compensation_min: string;
+  compensation_max: string;
+  compensation_currency: "" | Currency;
+  compensation_unit: "" | CompensationUnit;
   compensation_text: string;
   /** `<input type="datetime-local">` value, in the admin's local time zone. */
   deadline_local: string;
   partner_display_name: string;
-  partner_internal_name: string;
+  partner: PartnerRef | null;
   internal_notes: string;
 }
 
@@ -66,10 +76,14 @@ const BODY_KEYS: BodyKey[] = [
   "starts_on",
   "ends_on",
   "duration_text",
+  "compensation_min",
+  "compensation_max",
+  "compensation_currency",
+  "compensation_unit",
   "compensation_text",
   "deadline",
   "partner_display_name",
-  "partner_internal_name",
+  "partner_id",
   "internal_notes",
 ];
 
@@ -115,10 +129,14 @@ function emptyForm(): FormState {
     starts_on: "",
     ends_on: "",
     duration_text: "",
+    compensation_min: "",
+    compensation_max: "",
+    compensation_currency: "",
+    compensation_unit: "",
     compensation_text: "",
     deadline_local: defaultDeadline(),
     partner_display_name: "",
-    partner_internal_name: "",
+    partner: null,
     internal_notes: "",
   };
 }
@@ -135,12 +153,49 @@ function formFrom(o: AdminOpportunity): FormState {
     starts_on: o.starts_on ?? "",
     ends_on: o.ends_on ?? "",
     duration_text: o.duration_text ?? "",
+    compensation_min: o.compensation_min != null ? String(o.compensation_min) : "",
+    compensation_max: o.compensation_max != null ? String(o.compensation_max) : "",
+    compensation_currency: o.compensation_currency ?? "",
+    compensation_unit: o.compensation_unit ?? "",
     compensation_text: o.compensation_text ?? "",
     deadline_local: isoToLocalInput(o.deadline),
     partner_display_name: o.partner_display_name ?? "",
-    partner_internal_name: o.partner_internal_name ?? "",
+    partner: o.partner ?? null,
     internal_notes: o.internal_notes ?? "",
   };
+}
+
+/** "" / junk → null; otherwise the integer amount. */
+function amount(s: string): number | null {
+  const t = s.trim();
+  if (t === "" || !/^\d+$/.test(t)) return null;
+  return Number(t);
+}
+
+/** Inline compensation errors (keyed by API field), mirroring api.md's rules. */
+function compensationErrors(f: FormState): Record<string, string> {
+  const out: Record<string, string> = {};
+  const check = (key: "compensation_min" | "compensation_max") => {
+    const t = f[key].trim();
+    if (t === "") return;
+    const n = amount(t);
+    if (n === null || n > 100000000) out[key] = "Enter a whole amount between 0 and 100,000,000";
+  };
+  check("compensation_min");
+  check("compensation_max");
+  const mn = amount(f.compensation_min);
+  const mx = amount(f.compensation_max);
+  const hasAmount = f.compensation_min.trim() !== "" || f.compensation_max.trim() !== "";
+  if (mn !== null && mx !== null && mx < mn && !out.compensation_max) {
+    out.compensation_max = "Maximum must be at least the minimum";
+  }
+  if (hasAmount) {
+    if (!f.compensation_currency) out.compensation_currency = "Choose a currency for the amount";
+    if (!f.compensation_unit) out.compensation_unit = "Choose a unit (per hour, day, …)";
+  } else if (f.compensation_currency || f.compensation_unit) {
+    out.compensation_min = "Enter an amount, or clear the currency and unit";
+  }
+  return out;
 }
 
 const opt = (s: string): string | null => (s.trim() === "" ? null : s.trim());
@@ -159,10 +214,14 @@ function toBody(f: FormState): Omit<OpportunityBody, "status"> {
     starts_on: opt(f.starts_on),
     ends_on: opt(f.ends_on),
     duration_text: opt(f.duration_text),
+    compensation_min: amount(f.compensation_min),
+    compensation_max: amount(f.compensation_max),
+    compensation_currency: f.compensation_currency || null,
+    compensation_unit: f.compensation_unit || null,
     compensation_text: opt(f.compensation_text),
     deadline: localInputToIso(f.deadline_local),
     partner_display_name: opt(f.partner_display_name),
-    partner_internal_name: opt(f.partner_internal_name),
+    partner_id: f.partner?.id ?? null,
     internal_notes: opt(f.internal_notes),
   };
 }
@@ -197,10 +256,14 @@ const FORM_KEY: Record<BodyKey, keyof FormState> = {
   starts_on: "starts_on",
   ends_on: "ends_on",
   duration_text: "duration_text",
+  compensation_min: "compensation_min",
+  compensation_max: "compensation_max",
+  compensation_currency: "compensation_currency",
+  compensation_unit: "compensation_unit",
   compensation_text: "compensation_text",
   deadline: "deadline_local",
   partner_display_name: "partner_display_name",
-  partner_internal_name: "partner_internal_name",
+  partner_id: "partner",
   internal_notes: "internal_notes",
 };
 
@@ -215,10 +278,14 @@ const FIELD_LABEL: Record<BodyKey, string> = {
   starts_on: "Starts on",
   ends_on: "Ends on",
   duration_text: "Duration",
-  compensation_text: "Compensation",
+  compensation_min: "Compensation minimum",
+  compensation_max: "Compensation maximum",
+  compensation_currency: "Compensation currency",
+  compensation_unit: "Compensation unit",
+  compensation_text: "Compensation note",
   deadline: "Application deadline",
   partner_display_name: "Public partner name",
-  partner_internal_name: "Internal partner name",
+  partner_id: "Partner",
   internal_notes: "Internal notes",
 };
 
@@ -262,6 +329,29 @@ type RefusedValues = Partial<Record<BodyKey, unknown>>;
 /** API field names with unsent edits — read by `Field` to mark itself "Unsaved". */
 const UnsavedFieldsContext = createContext<ReadonlySet<string>>(new Set());
 
+/** Which drafted-chip a form field belongs to. */
+const DRAFT_FIELD_OF: Partial<Record<keyof FormState, DraftedField>> = {
+  title: "title",
+  type: "type",
+  summary: "summary",
+  description_md: "description_md",
+  topic_ids: "topics",
+  location_mode: "location",
+  city: "location",
+  starts_on: "dates",
+  ends_on: "dates",
+  duration_text: "duration_text",
+  deadline_local: "deadline",
+  compensation_min: "compensation",
+  compensation_max: "compensation",
+  compensation_currency: "compensation",
+  compensation_unit: "compensation",
+  compensation_text: "compensation",
+  partner: "partner",
+  partner_display_name: "partner_display_name",
+  internal_notes: "internal_notes",
+};
+
 type Action = "save_draft" | "publish" | "save" | "close" | "unpublish" | "reopen";
 
 const TARGET: Record<Action, StoredStatus | null> = {
@@ -300,6 +390,7 @@ function Field({
   hint,
   required,
   aside,
+  chip,
   children,
 }: {
   id: string;
@@ -310,6 +401,7 @@ function Field({
   hint?: React.ReactNode;
   required?: boolean;
   aside?: React.ReactNode;
+  chip?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const unsaved = useContext(UnsavedFieldsContext).has(errorField);
@@ -323,6 +415,7 @@ function Field({
               *
             </span>
           )}
+          {chip}
           {unsaved && (
             <span
               data-testid={`opp-unsaved-${errorField}`}
@@ -376,6 +469,12 @@ export function OpportunityEditor({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<React.ReactNode>(null);
   const [busy, setBusy] = useState<Action | null>(null);
+  const [drafted, setDrafted] = useState<ReadonlySet<DraftedField>>(new Set());
+  const [draftApplied, setDraftApplied] = useState(false);
+  const [suggestedNew, setSuggestedNew] = useState<{
+    internal_name: string;
+    display_name: string | null;
+  } | null>(null);
   const [descTab, setDescTab] = useState<"write" | "preview">("write");
 
   // Latest form/initial, read by the re-seed effect without re-running it.
@@ -433,7 +532,16 @@ export function OpportunityEditor({
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [key]: value }));
-    const apiKey = key === "deadline_local" ? "deadline" : key;
+    const chip = DRAFT_FIELD_OF[key];
+    if (chip) {
+      setDrafted((d) => {
+        if (!d.has(chip)) return d;
+        const next = new Set(d);
+        next.delete(chip);
+        return next;
+      });
+    }
+    const apiKey = key === "deadline_local" ? "deadline" : key === "partner" ? "partner_id" : key;
     // Editing a refused field to a new value makes it a fresh edit again.
     delete refusedRef.current[apiKey as BodyKey];
     if (fieldErrors[apiKey]) {
@@ -443,6 +551,103 @@ export function OpportunityEditor({
         return next;
       });
     }
+  };
+
+  const [compShow, setCompShow] = useState(false);
+  const compErrs = compShow ? compensationErrors(form) : {};
+
+  /** Prefill from a DraftResponse. Never touches status — the draft only fills the form. */
+  const applyDraft = (r: DraftResponse) => {
+    const d = r.draft;
+    const has = (f: DraftedField) => r.drafted_fields.includes(f);
+    const slugToId = new Map(topics.map((t) => [t.slug, t.id]));
+    const patch: Partial<FormState> = {};
+    if (has("title") && d.title != null) patch.title = d.title;
+    if (has("type") && d.type) patch.type = d.type;
+    if (has("summary") && d.summary != null) patch.summary = d.summary;
+    if (has("description_md") && d.description_md != null) patch.description_md = d.description_md;
+    if (has("topics")) {
+      const ids = d.topic_slugs.map((sl) => slugToId.get(sl)).filter((x): x is number => x !== undefined);
+      if (ids.length > 0) patch.topic_ids = ids.slice(0, 8);
+    }
+    if (has("location") && d.location_mode) {
+      patch.location_mode = d.location_mode;
+      patch.city = d.location_mode === "remote" ? "" : (d.city ?? "");
+    }
+    if (has("dates")) {
+      if (d.starts_on) patch.starts_on = d.starts_on;
+      if (d.ends_on) patch.ends_on = d.ends_on;
+    }
+    if (has("duration_text") && d.duration_text != null) patch.duration_text = d.duration_text;
+    if (has("deadline") && d.deadline_on && /^\d{4}-\d{2}-\d{2}$/.test(d.deadline_on)) {
+      patch.deadline_local = `${d.deadline_on}T23:59`;
+    }
+    if (has("compensation")) {
+      patch.compensation_min = d.compensation_min != null ? String(d.compensation_min) : "";
+      patch.compensation_max = d.compensation_max != null ? String(d.compensation_max) : "";
+      patch.compensation_currency = d.compensation_currency ?? "";
+      patch.compensation_unit = d.compensation_unit ?? "";
+      if (d.compensation_text != null) patch.compensation_text = d.compensation_text;
+    }
+    if (has("partner_display_name") && d.partner_display_name != null) {
+      patch.partner_display_name = d.partner_display_name;
+    }
+    if (has("internal_notes") && d.internal_notes != null) patch.internal_notes = d.internal_notes;
+    setForm((f) => ({ ...f, ...patch }));
+    setCompShow(false);
+    setFieldErrors({});
+    setDrafted(new Set(r.drafted_fields));
+    setDraftApplied(true);
+
+    if (has("partner")) {
+      setSuggestedNew(d.partner_id == null ? d.suggested_partner : null);
+      if (d.partner_id != null) {
+        const pid = d.partner_id;
+        adminListPartners(adminKey)
+          .then(({ partners }) => {
+            const p = partners.find((x) => x.id === pid);
+            if (p) setForm((f) => ({ ...f, partner: { id: p.id, internal_name: p.internal_name, display_name: p.display_name, active: p.active } }));
+          })
+          .catch(() => {
+            /* the chip stays; the admin can pick the partner by hand */
+          });
+      }
+    }
+  };
+
+  /** Typed input that a draft would overwrite (new listings only start empty). */
+  const hasUserInput =
+    form.title.trim() !== "" ||
+    form.summary.trim() !== "" ||
+    form.description_md.trim() !== "" ||
+    form.topic_ids.length > 0 ||
+    form.internal_notes.trim() !== "" ||
+    form.partner !== null ||
+    form.compensation_min !== "" ||
+    form.compensation_max !== "" ||
+    form.duration_text.trim() !== "";
+
+  const onPartnerChange = (p: PartnerRef | null) => {
+    setForm((f) => ({
+      ...f,
+      partner: p,
+      partner_display_name:
+        p && f.partner_display_name.trim() === "" && p.display_name ? p.display_name : f.partner_display_name,
+    }));
+    setSuggestedNew(null);
+    setDrafted((d) => {
+      if (!d.has("partner")) return d;
+      const next = new Set(d);
+      next.delete("partner");
+      return next;
+    });
+    delete refusedRef.current.partner_id;
+    setFieldErrors((e) => {
+      if (!e.partner_id) return e;
+      const next = { ...e };
+      delete next.partner_id;
+      return next;
+    });
   };
 
   const topicById = useMemo(() => new Map(topics.map((t) => [t.id, t])), [topics]);
@@ -458,6 +663,17 @@ export function OpportunityEditor({
     setFieldErrors({});
     setFormError(null);
     const target = TARGET[action];
+
+    const statusOnlyAction = action === "close" || action === "unpublish";
+    if (!statusOnlyAction) {
+      const ce = compensationErrors(form);
+      if (Object.keys(ce).length > 0) {
+        setCompShow(true);
+        setFieldErrors(ce);
+        document.getElementById("opp-compensation-min")?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+        return;
+      }
+    }
 
     // Close / Unpublish take a listing OFF the board: they send ONLY the status
     // change, never pending edits (a refused past deadline must not ride along
@@ -574,7 +790,8 @@ export function OpportunityEditor({
     return [b("reopen", "Reopen", "opp-reopen", "primary"), b("save", "Save", "opp-save", "secondary")];
   })();
 
-  const err = fieldErrors;
+  const err = { ...compErrs, ...fieldErrors };
+  const chip = (f: DraftedField) => <DraftedChip field={f} show={drafted.has(f)} />;
 
   return (
     <UnsavedFieldsContext.Provider value={unsavedFields}>
@@ -588,6 +805,22 @@ export function OpportunityEditor({
     >
       {/* ------------------------------------------------ left column */}
       <div className="min-w-0 space-y-6">
+        <PasteToFill
+          opportunityId={opportunity?.id ?? null}
+          hasUserInput={hasUserInput}
+          onDraft={applyDraft}
+          defaultCollapsed={!isNew}
+        />
+        {draftApplied && (
+          <p
+            role="status"
+            data-testid="draft-applied"
+            className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+          >
+            Draft applied — check each field marked “Drafted”. Nothing is published; the listing stays a draft until you
+            publish it.
+          </p>
+        )}
         {/* Public details */}
         <Card className="p-5 sm:p-6">
           <div className="mb-5">
@@ -595,7 +828,7 @@ export function OpportunityEditor({
             <p className="text-sm text-stone-500">Shown on the public board and the listing page.</p>
           </div>
           <div className="space-y-5">
-            <Field id="opp-title" label="Title" required error={err.title} errorField="title">
+            <Field id="opp-title" label="Title" required error={err.title} errorField="title" chip={chip("title")}>
               <input
                 id="opp-title"
                 data-testid="opp-title-input"
@@ -608,7 +841,7 @@ export function OpportunityEditor({
               />
             </Field>
 
-            <Field id="opp-type" label="Type" required error={err.type} errorField="type">
+            <Field id="opp-type" label="Type" required error={err.type} errorField="type" chip={chip("type")}>
               <select
                 id="opp-type"
                 data-testid="opp-type-select"
@@ -630,7 +863,7 @@ export function OpportunityEditor({
               label="Summary"
               required
               error={err.summary}
-              errorField="summary"
+              errorField="summary" chip={chip("summary")}
               aside={
                 <span
                   className={cn(
@@ -659,7 +892,7 @@ export function OpportunityEditor({
               id="opp-description-md"
               label="Description"
               error={err.description_md}
-              errorField="description_md"
+              errorField="description_md" chip={chip("description_md")}
               hint="Markdown — lists, links and fenced code blocks are supported."
               aside={
                 <div role="tablist" aria-label="Description mode" className="flex gap-1 text-xs">
@@ -708,7 +941,7 @@ export function OpportunityEditor({
               label="Topics"
               required
               error={err.topic_ids}
-              errorField="topic_ids"
+              errorField="topic_ids" chip={chip("topics")}
               hint="Pick 1 to 8 — trainers filter the board by these."
             >
               <div id="opp-topic-ids">
@@ -722,7 +955,7 @@ export function OpportunityEditor({
             </Field>
 
             <div className="grid gap-5 sm:grid-cols-2">
-              <Field id="opp-location-mode" label="Location" required error={err.location_mode} errorField="location_mode">
+              <Field id="opp-location-mode" label="Location" required error={err.location_mode} errorField="location_mode" chip={chip("location")}>
                 <select
                   id="opp-location-mode"
                   data-testid="opp-location-select"
@@ -754,7 +987,7 @@ export function OpportunityEditor({
             </div>
 
             <div className="grid gap-5 sm:grid-cols-2">
-              <Field id="opp-starts-on" label="Starts on" error={err.starts_on} errorField="starts_on">
+              <Field id="opp-starts-on" label="Starts on" error={err.starts_on} errorField="starts_on" chip={chip("dates")}>
                 <input
                   id="opp-starts-on"
                   data-testid="opp-starts-on-input"
@@ -775,7 +1008,7 @@ export function OpportunityEditor({
                   className={inputCls(Boolean(err.ends_on))}
                 />
               </Field>
-              <Field id="opp-duration-text" label="Duration" error={err.duration_text} errorField="duration_text">
+              <Field id="opp-duration-text" label="Duration" error={err.duration_text} errorField="duration_text" chip={chip("duration_text")}>
                 <input
                   id="opp-duration-text"
                   data-testid="opp-duration-input"
@@ -786,12 +1019,93 @@ export function OpportunityEditor({
                   className={inputCls(Boolean(err.duration_text))}
                 />
               </Field>
+            </div>
+
+            <fieldset
+              data-testid="opp-compensation"
+              className="space-y-3"
+              onBlur={() => setCompShow(true)}
+            >
+              <legend className="mb-1 text-sm font-medium text-stone-700">
+                Compensation
+                {chip("compensation")}
+              </legend>
+              <div className="grid gap-3 sm:grid-cols-4">
+                <Field id="opp-compensation-min" label="Min" error={err.compensation_min} errorField="compensation_min">
+                  <input
+                    id="opp-compensation-min"
+                    data-testid="compensation-min"
+                    inputMode="numeric"
+                    value={form.compensation_min}
+                    onChange={(e) => set("compensation_min", e.target.value)}
+                    placeholder="8000"
+                    aria-invalid={Boolean(err.compensation_min)}
+                    className={inputCls(Boolean(err.compensation_min))}
+                  />
+                </Field>
+                <Field id="opp-compensation-max" label="Max" error={err.compensation_max} errorField="compensation_max">
+                  <input
+                    id="opp-compensation-max"
+                    data-testid="compensation-max"
+                    inputMode="numeric"
+                    value={form.compensation_max}
+                    onChange={(e) => set("compensation_max", e.target.value)}
+                    placeholder="12000"
+                    aria-invalid={Boolean(err.compensation_max)}
+                    className={inputCls(Boolean(err.compensation_max))}
+                  />
+                </Field>
+                <Field
+                  id="opp-compensation-currency"
+                  label="Currency"
+                  error={err.compensation_currency}
+                  errorField="compensation_currency"
+                >
+                  <select
+                    id="opp-compensation-currency"
+                    data-testid="compensation-currency"
+                    value={form.compensation_currency}
+                    onChange={(e) => set("compensation_currency", e.target.value as "" | Currency)}
+                    aria-invalid={Boolean(err.compensation_currency)}
+                    className={inputCls(Boolean(err.compensation_currency))}
+                  >
+                    <option value="">—</option>
+                    {CURRENCIES.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.symbol} {c.value}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field
+                  id="opp-compensation-unit"
+                  label="Unit"
+                  error={err.compensation_unit}
+                  errorField="compensation_unit"
+                >
+                  <select
+                    id="opp-compensation-unit"
+                    data-testid="compensation-unit"
+                    value={form.compensation_unit}
+                    onChange={(e) => set("compensation_unit", e.target.value as "" | CompensationUnit)}
+                    aria-invalid={Boolean(err.compensation_unit)}
+                    className={inputCls(Boolean(err.compensation_unit))}
+                  >
+                    <option value="">—</option>
+                    {COMPENSATION_UNITS.map((u) => (
+                      <option key={u.value} value={u.value}>
+                        {u.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
               <Field
                 id="opp-compensation-text"
-                label="Compensation"
+                label="Note (optional)"
                 error={err.compensation_text}
                 errorField="compensation_text"
-                hint="Public text, e.g. “Paid — day rate”."
+                hint="Shown after the amount, e.g. “plus travel”. On its own it reads as “Pro bono”."
               >
                 <input
                   id="opp-compensation-text"
@@ -799,18 +1113,18 @@ export function OpportunityEditor({
                   value={form.compensation_text}
                   maxLength={120}
                   onChange={(e) => set("compensation_text", e.target.value)}
-                  placeholder="Paid — day rate"
+                  placeholder="plus travel"
                   className={inputCls(Boolean(err.compensation_text))}
                 />
               </Field>
-            </div>
+            </fieldset>
 
             <Field
               id="opp-deadline"
               label="Application deadline"
               required
               error={err.deadline}
-              errorField="deadline"
+              errorField="deadline" chip={chip("deadline")}
               hint={
                 deadlineIso
                   ? `Your local time · ${deadlineIso.replace("T", " ").replace(/:\d{2}Z$/, "")} UTC`
@@ -832,7 +1146,7 @@ export function OpportunityEditor({
               id="opp-partner-display-name"
               label="Public partner name"
               error={err.partner_display_name}
-              errorField="partner_display_name"
+              errorField="partner_display_name" chip={chip("partner_display_name")}
               hint="What trainers see. Leave blank to show “smallTech partner network”."
             >
               <input
@@ -865,27 +1179,21 @@ export function OpportunityEditor({
             </div>
           </div>
           <div className="space-y-5">
-            <Field
-              id="opp-partner-internal-name"
-              label="Internal partner name"
-              error={err.partner_internal_name}
-              errorField="partner_internal_name"
-            >
-              <input
-                id="opp-partner-internal-name"
-                data-testid="opp-partner-internal-input"
-                value={form.partner_internal_name}
-                maxLength={160}
-                onChange={(e) => set("partner_internal_name", e.target.value)}
-                placeholder="Acme Payments Pvt Ltd"
-                className={inputCls(Boolean(err.partner_internal_name))}
+            <div data-testid="editor-partner-select" id="opp-partner-id">
+              <span className="mb-1 block text-sm font-medium text-stone-700">Partner</span>
+              <PartnerSelect
+                value={form.partner}
+                onChange={onPartnerChange}
+                suggestedNew={suggestedNew}
+                drafted={drafted.has("partner")}
+                error={err.partner_id}
               />
-            </Field>
+            </div>
             <Field
               id="opp-internal-notes"
               label="Internal notes"
               error={err.internal_notes}
-              errorField="internal_notes"
+              errorField="internal_notes" chip={chip("internal_notes")}
             >
               <textarea
                 id="opp-internal-notes"
@@ -999,7 +1307,13 @@ export function OpportunityEditor({
               topics: previewTopics,
               location_mode: form.location_mode,
               city: form.city,
-              compensation_text: form.compensation_text,
+              compensation: {
+                compensation_min: amount(form.compensation_min),
+                compensation_max: amount(form.compensation_max),
+                compensation_currency: form.compensation_currency || null,
+                compensation_unit: form.compensation_unit || null,
+                compensation_text: form.compensation_text.trim() || null,
+              },
               deadline: deadlineIso,
             }}
           />
