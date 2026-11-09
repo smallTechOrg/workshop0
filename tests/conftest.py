@@ -12,8 +12,11 @@ TEST_ADMIN_KEY is a fixture value owned by this suite (set via env for each test
 never the operator's real WORKSHOP0_ADMIN_KEY from .env.
 """
 
+import hashlib
 import os
+import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -381,3 +384,122 @@ def board(create_opportunity, client, admin_headers):
         "by_type": by_type,
         "by_topic": by_topic,
     }
+
+
+# --------------------------------------------------------------------------- Phase 11 network
+
+SESSION_COOKIE = "workshop0_session"  # spec/architecture.md §Network identity → Cookies
+NETWORK_HEADERS = {"X-Requested-With": "workshop0"}  # CSRF header for cookie-auth mutations
+SESSION_LIFETIME = timedelta(days=30)
+
+
+@dataclass(frozen=True)
+class NetworkUser:
+    """What `make_user` returns (a plain value — no live ORM session attached)."""
+
+    id: int
+    email: str
+    display_name: str
+    is_admin: bool
+
+
+@pytest.fixture
+def make_user(monkeypatch):
+    """Factory `make_user(email, admin=False) -> NetworkUser`: inserts a verified,
+    OIDC-linked `app_user` row. `admin=True` adds the email to WORKSHOP0_ADMIN_EMAILS
+    for this test (admin-ness is derived from the setting, never stored)."""
+
+    def _make(email: str, admin: bool = False) -> NetworkUser:
+        from src.workshop0.db.models import AppUser
+        from src.workshop0.db.session import create_db_session
+
+        email = email.strip().lower()
+        display_name = email.split("@", 1)[0]
+        with create_db_session() as session:
+            user = AppUser(
+                email=email,
+                email_verified=True,
+                display_name=display_name,
+                oidc_issuer="https://accounts.google.com",
+                oidc_subject=f"sub-{uuid.uuid4().hex}",
+                last_login_at=datetime.now(timezone.utc),
+            )
+            session.add(user)
+            session.flush()
+            user_id = user.id
+        if admin:
+            import src.workshop0.config.settings as settings_module
+
+            current = [e for e in os.environ.get("WORKSHOP0_ADMIN_EMAILS", "").split(",") if e.strip()]
+            if email not in current:
+                current.append(email)
+            monkeypatch.setenv("WORKSHOP0_ADMIN_EMAILS", ",".join(current))
+            settings_module._settings = None
+        return NetworkUser(id=user_id, email=email, display_name=display_name, is_admin=admin)
+
+    return _make
+
+
+def create_session_token(user_id: int, *, expires_at: datetime | None = None) -> str:
+    """Insert an `auth_session` row (SHA-256 hex of the raw token stored, never the token)
+    and return the raw cookie value."""
+    from src.workshop0.db.models import AuthSession
+    from src.workshop0.db.session import create_db_session
+
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    with create_db_session() as session:
+        session.add(
+            AuthSession(
+                token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                user_id=user_id,
+                created_at=now,
+                expires_at=expires_at or now + SESSION_LIFETIME,
+                last_seen_at=now,
+                user_agent="pytest",
+            )
+        )
+    return token
+
+
+@pytest.fixture
+def signed_in_client(app):
+    """Factory `signed_in_client(user, *, csrf=True) -> TestClient`: a fresh cookie jar
+    over the test app with a real `auth_session` row and the `workshop0_session` cookie —
+    the sign-in shortcut for non-auth tests. `csrf=True` also sends
+    `X-Requested-With: workshop0` on every request; pass `csrf=False` to test the CSRF guard."""
+
+    def _make(user, *, csrf: bool = True) -> TestClient:
+        user_id = user.id if hasattr(user, "id") else int(user["id"])
+        client_ = TestClient(app)
+        client_.cookies.set(SESSION_COOKIE, create_session_token(user_id))
+        if csrf:
+            client_.headers.update(NETWORK_HEADERS)
+        return client_
+
+    return _make
+
+
+@pytest.fixture
+def network_ai_disabled(monkeypatch):
+    """Factory `network_ai_disabled(which="key"|"workspace")`: blanks ANTHROPIC_API_KEY
+    or ANTHROPIC_WORKSPACE_ID for this test and drops the cached Anthropic client. The ONLY
+    sanctioned keyless switch — `.env` holds real keys."""
+
+    def _disable(which: str = "key") -> None:
+        fields = {"key": "anthropic_api_key", "workspace": "anthropic_workspace_id"}
+        if which not in fields:
+            raise ValueError(f"which must be 'key' or 'workspace', got {which!r}")
+        field = fields[which]
+        from src.workshop0.ai import anthropic_client
+        from src.workshop0.config.settings import get_settings
+
+        # env wins over .env if settings are rebuilt mid-test; setattr covers the live instance
+        monkeypatch.setenv(field.upper(), "")
+        monkeypatch.setattr(get_settings(), field, "")
+        anthropic_client.reset_client()
+
+    yield _disable
+    from src.workshop0.ai import anthropic_client
+
+    anthropic_client.reset_client()

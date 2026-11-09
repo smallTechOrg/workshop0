@@ -27,9 +27,31 @@ EXPECTED_TABLES = {
     "topic",
     "opportunity",
     "opportunity_topic",
+    # Phase 11 — 0006_trainer_network
+    "app_user",
+    "auth_session",
+    "rate_limit_hit",
+    "trainer_profile",
+    "trainer_topic",
+    "cv_document",
+    "network_invite",
+    "trainer_tag",
+    "admin_note",
     "alembic_version",
 }
 BOARD_TABLES = {"topic", "opportunity", "opportunity_topic"}
+NETWORK_TABLES = {
+    "app_user",
+    "auth_session",
+    "rate_limit_hit",
+    "trainer_profile",
+    "trainer_topic",
+    "cv_document",
+    "network_invite",
+    "trainer_tag",
+    "admin_note",
+}
+AI_USAGE_NETWORK_COLUMNS = {"cv_document_id", "opportunity_id"}
 AUDIT_SUBJECT_COLUMNS = {"subject_type", "subject_id"}
 SEED_CATEGORIES = {"Languages", "Web & Mobile", "AI & Data", "Cloud & DevOps", "Engineering Practice"}
 
@@ -187,7 +209,7 @@ def test_0005_seeds_topics_and_downgrade_to_0004_removes_the_board(monkeypatch, 
 
         command.downgrade(config, "0004")
         inspector = inspect(engine)
-        assert set(inspector.get_table_names()) == EXPECTED_TABLES - BOARD_TABLES
+        assert set(inspector.get_table_names()) == EXPECTED_TABLES - BOARD_TABLES - NETWORK_TABLES
         assert not AUDIT_SUBJECT_COLUMNS & {c["name"] for c in inspector.get_columns("facilitator_action")}
         with engine.connect() as connection:
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0004"
@@ -196,7 +218,7 @@ def test_0005_seeds_topics_and_downgrade_to_0004_removes_the_board(monkeypatch, 
         assert set(inspect(engine).get_table_names()) == EXPECTED_TABLES
         _assert_seed(_topic_seed(engine))  # re-seeded exactly once, not duplicated
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0005"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0006"
     finally:
         engine.dispose()
 
@@ -225,5 +247,196 @@ def test_0005_upgrade_keeps_pre_existing_audit_rows_with_null_subject(monkeypatc
                 "SELECT actor, subject_type, subject_id FROM facilitator_action"
             )).one()
         assert tuple(row) == ("facilitator", None, None)
+    finally:
+        engine.dispose()
+
+
+# --------------------------------------------------------------------------- Phase 11 — 0006
+
+
+def _version(engine) -> str:
+    with engine.connect() as connection:
+        return connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+
+
+def _columns(inspector, table: str) -> dict[str, dict]:
+    return {c["name"]: c for c in inspector.get_columns(table)}
+
+
+def _fks(inspector, table: str) -> dict[str, dict]:
+    return {fk["constrained_columns"][0]: fk for fk in inspector.get_foreign_keys(table)}
+
+
+def test_0006_is_head_and_creates_the_network_schema(monkeypatch, scratch_database):
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    assert ScriptDirectory.from_config(config).get_current_head() == "0006"
+    command.upgrade(config, "head")
+
+    engine = create_engine(url)
+    try:
+        assert _version(engine) == "0006"  # what `alembic current` prints
+        inspector = inspect(engine)
+        assert NETWORK_TABLES <= set(inspector.get_table_names())
+
+        # app_user: unique email + unique (issuer, subject); no role column
+        user_cols = _columns(inspector, "app_user")
+        assert "role" not in user_cols and "is_admin" not in user_cols
+        assert user_cols["oidc_issuer"]["nullable"] and user_cols["oidc_subject"]["nullable"]
+        user_uniques = {tuple(u["column_names"]) for u in inspector.get_unique_constraints("app_user")}
+        assert ("email",) in user_uniques and ("oidc_issuer", "oidc_subject") in user_uniques
+
+        # auth_session: hashed token unique, user FK cascades, indexed
+        assert ("token_hash",) in {
+            tuple(u["column_names"]) for u in inspector.get_unique_constraints("auth_session")
+        }
+        assert _columns(inspector, "auth_session")["token_hash"]["type"].length == 64
+        assert _fks(inspector, "auth_session")["user_id"]["options"]["ondelete"] == "CASCADE"
+        assert ["user_id"] in [i["column_names"] for i in inspector.get_indexes("auth_session")]
+
+        # rate_limit_hit composite PK
+        assert inspector.get_pk_constraint("rate_limit_hit")["constrained_columns"] == [
+            "bucket", "window_start"
+        ]
+
+        # 1:1 profile / CV per user
+        for table in ("trainer_profile", "cv_document"):
+            assert ("user_id",) in {tuple(u["column_names"]) for u in inspector.get_unique_constraints(table)}
+            assert _fks(inspector, table)["user_id"]["options"]["ondelete"] == "CASCADE"
+        profile_cols = _columns(inspector, "trainer_profile")
+        assert not profile_cols["consent_at"]["nullable"]
+        assert not profile_cols["consent_version"]["nullable"]
+
+        assert inspector.get_pk_constraint("trainer_topic")["constrained_columns"] == ["profile_id", "topic_id"]
+        assert inspector.get_pk_constraint("trainer_tag")["constrained_columns"] == ["profile_id", "tag"]
+        assert ("token",) in {
+            tuple(u["column_names"]) for u in inspector.get_unique_constraints("network_invite")
+        }
+        assert _fks(inspector, "network_invite")["accepted_user_id"]["options"]["ondelete"] == "SET NULL"
+        assert _fks(inspector, "admin_note")["profile_id"]["options"]["ondelete"] == "CASCADE"
+
+        # ai_usage changes
+        ai_cols = _columns(inspector, "ai_usage")
+        assert ai_cols["workshop_id"]["nullable"]
+        assert AI_USAGE_NETWORK_COLUMNS <= set(ai_cols)
+        ai_fks = _fks(inspector, "ai_usage")
+        assert ai_fks["cv_document_id"]["referred_table"] == "cv_document"
+        assert ai_fks["opportunity_id"]["referred_table"] == "opportunity"
+        assert ai_fks["cv_document_id"]["options"]["ondelete"] == "SET NULL"
+        assert ai_fks["opportunity_id"]["options"]["ondelete"] == "SET NULL"
+    finally:
+        engine.dispose()
+
+
+def _seed_network(connection) -> None:
+    """One user + session + profile + CV + a network ai_usage row (workshop_id NULL)."""
+    connection.execute(text(
+        "INSERT INTO app_user (email, email_verified, display_name, created_at)"
+        " VALUES ('t@example.test', true, 't', now())"
+    ))
+    connection.execute(text(
+        "INSERT INTO auth_session (token_hash, user_id, created_at, expires_at, last_seen_at)"
+        " SELECT repeat('a', 64), id, now(), now() + interval '30 days', now() FROM app_user"
+    ))
+    connection.execute(text(
+        "INSERT INTO trainer_profile (user_id, headline, consent_at, consent_version, created_at,"
+        " updated_at) SELECT id, 'GenAI trainer', now(), '2026-11', now(), now() FROM app_user"
+    ))
+    connection.execute(text(
+        "INSERT INTO cv_document (user_id, source, sha256, created_at)"
+        " SELECT id, 'text', repeat('b', 64), now() FROM app_user"
+    ))
+    connection.execute(text(
+        "INSERT INTO ai_usage (workshop_id, cv_document_id, purpose, model, prompt_tokens,"
+        " completion_tokens, cost_usd, latency_ms, created_at)"
+        " SELECT NULL, id, 'profile_draft', 'claude-sonnet-5-5', 100, 50, 0.001, 10, now()"
+        " FROM cv_document"
+    ))
+
+
+def test_0006_defaults_and_cascades_hold_on_real_rows(monkeypatch, scratch_database):
+    url = scratch_database()
+    _use(monkeypatch, url)
+    command.upgrade(_alembic_config(), "head")
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            _seed_network(connection)
+        with engine.connect() as connection:
+            profile = connection.execute(text(
+                "SELECT bio_md, remote_ok, pro_bono, past_work_json, availability_json,"
+                " blackout_json, visibility, verified, autofilled_fields_json FROM trainer_profile"
+            )).one()
+            assert tuple(profile) == ("", True, False, "[]", "{}", "[]", "private", False, "[]")
+            assert connection.execute(text("SELECT draft_status FROM cv_document")).scalar() == "pending"
+        with engine.begin() as connection:
+            # deleting the CV keeps the spend row (SET NULL); deleting the user cascades the rest
+            connection.execute(text("DELETE FROM cv_document"))
+            assert connection.execute(text("SELECT cv_document_id FROM ai_usage")).scalar() is None
+            connection.execute(text("DELETE FROM app_user"))
+        with engine.connect() as connection:
+            for table in ("auth_session", "trainer_profile"):
+                assert connection.execute(text(f"SELECT count(*) FROM {table}")).scalar() == 0
+            assert connection.execute(text("SELECT count(*) FROM ai_usage")).scalar() == 1
+    finally:
+        engine.dispose()
+
+
+def test_0006_downgrade_to_0005_and_back_round_trips(monkeypatch, scratch_database):
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    command.upgrade(config, "head")
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            _seed_network(connection)
+
+        command.downgrade(config, "0005")
+        inspector = inspect(engine)
+        assert _version(engine) == "0005"
+        assert set(inspector.get_table_names()) == EXPECTED_TABLES - NETWORK_TABLES
+        ai_cols = _columns(inspector, "ai_usage")
+        assert not AI_USAGE_NETWORK_COLUMNS & set(ai_cols)
+        assert not ai_cols["workshop_id"]["nullable"]
+        with engine.connect() as connection:  # network rows cannot survive NOT NULL
+            assert connection.execute(text("SELECT count(*) FROM ai_usage")).scalar() == 0
+        _assert_seed(_topic_seed(engine))  # Phase-10 data untouched
+
+        command.upgrade(config, "head")
+        assert _version(engine) == "0006"
+        inspector = inspect(engine)
+        assert set(inspector.get_table_names()) == EXPECTED_TABLES
+        assert _columns(inspector, "ai_usage")["workshop_id"]["nullable"]
+    finally:
+        engine.dispose()
+
+
+def test_0006_upgrade_keeps_existing_help_desk_ai_usage_rows(monkeypatch, scratch_database):
+    url = scratch_database()
+    _use(monkeypatch, url)
+    config = _alembic_config()
+    command.upgrade(config, "0005")
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO workshop (name, description_md, admin_token, join_slug, status, grace_hours,"
+                " paused, state_version, content_version, ai_enabled, join_form_json, stuck_minutes,"
+                " created_at, updated_at) VALUES ('W', '', 'tok', 'slug', 'live', 24, false, 0, 0, true,"
+                " '[]', 10, now(), now())"
+            ))
+            connection.execute(text(
+                "INSERT INTO ai_usage (workshop_id, purpose, model, prompt_tokens, completion_tokens,"
+                " cost_usd, latency_ms, created_at) SELECT id, 'triage_answer', 'm', 1, 1, 0.5, 1, now()"
+                " FROM workshop"
+            ))
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            row = connection.execute(text(
+                "SELECT purpose, cost_usd, cv_document_id, opportunity_id FROM ai_usage"
+            )).one()
+        assert (row[0], float(row[1]), row[2], row[3]) == ("triage_answer", 0.5, None, None)
     finally:
         engine.dispose()
