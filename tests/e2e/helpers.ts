@@ -200,3 +200,30 @@ export async function signInAdmin(page: Page): Promise<void> {
 export function adminWorkshopCard(page: Page, name: string): Locator {
   return page.getByTestId('workshop-card').filter({ hasText: name }).first();
 }
+
+/**
+ * Wait until React has attached its props to the element (hydration done) —
+ * a click/keystroke delivered before hydration on a static export is lost.
+ * Phase 10 addition (opportunity-board.spec.ts); existing helpers unchanged.
+ */
+export async function waitForHydration(locator: Locator): Promise<void> {
+  await locator.first().waitFor({ state: 'visible' });
+  await expect
+    .poll(
+      () =>
+        locator
+          .first()
+          .evaluate((el) => Object.keys(el).some((k) => k.startsWith('__reactProps'))),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+}
+
+/** Fill an input after hydration and retry until the controlled value sticks. */
+export async function fillStable(locator: Locator, value: string): Promise<void> {
+  await waitForHydration(locator);
+  await expect(async () => {
+    await locator.fill(value);
+    await expect(locator).toHaveValue(value, { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+}

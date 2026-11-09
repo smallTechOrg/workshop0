@@ -5,10 +5,11 @@ is ever needed. Portable types only (Integer/String/Text/Boolean/DateTime/Numeri
 JSON stored as Text) — PostgreSQL-ready via DATABASE_URL.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -20,6 +21,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.sql.expression import true as sa_true
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -194,6 +196,9 @@ class FacilitatorAction(Base):
     __tablename__ = "facilitator_action"
     __table_args__ = (
         Index("ix_facilitator_action_workshop_created", "workshop_id", "created_at"),
+        Index(
+            "ix_facilitator_action_subject_created", "subject_type", "subject_id", "created_at"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -205,6 +210,11 @@ class FacilitatorAction(Base):
     detail_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     undo_data_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Phase 10 (migration 0005): admin-console rows carry the subject they act on
+    # (`opportunity` | `topic`; later phases add more). No FK — the audit row
+    # outlives its subject. Null for every workshop-scoped row.
+    subject_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    subject_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, index=True
     )
@@ -268,3 +278,78 @@ class AiUsage(Base):
     cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), nullable=False, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+# --------------------------------------------------------------------------- Phase 10
+# Opportunity Board (migration 0005_opportunity_board) — spec/data-model.md §Phase 10.
+
+
+class Topic(Base):
+    """Curated, admin-maintained taxonomy. `slug` is immutable (public filter URLs)."""
+
+    __tablename__ = "topic"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(48), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    category: Mapped[str] = mapped_column(String(48), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+
+class Opportunity(Base):
+    """One admin-curated listing. `status` is the STORED status (draft|open|closed);
+    the effective status (adds `expired`) is computed on read — see
+    services/opportunities.py::effective_status. `partner_internal_name` and
+    `internal_notes` are admin-only and never serialized publicly."""
+
+    __tablename__ = "opportunity"
+    __table_args__ = (
+        Index("ix_opportunity_status_deadline", "status", "deadline"),
+        Index("ix_opportunity_published_at", "published_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    type: Mapped[str] = mapped_column(String(24), nullable=False)
+    summary: Mapped[str] = mapped_column(String(280), nullable=False)
+    description_md: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    location_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="remote", server_default="remote"
+    )
+    city: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    starts_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    ends_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    duration_text: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    compensation_text: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    partner_display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    partner_internal_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    internal_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="draft", server_default="draft"
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+
+class OpportunityTopic(Base):
+    __tablename__ = "opportunity_topic"
+    __table_args__ = (Index("ix_opportunity_topic_topic_id", "topic_id"),)
+
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunity.id", ondelete="CASCADE"), primary_key=True
+    )
+    topic_id: Mapped[int] = mapped_column(
+        ForeignKey("topic.id", ondelete="RESTRICT"), primary_key=True
+    )

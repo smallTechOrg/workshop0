@@ -2,6 +2,7 @@
 
 import { getWithLegacy } from "@/lib/storageCompat";
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import {
   ApiError,
   adminListWorkshops,
@@ -12,7 +13,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { StubBadge, StubCard } from "@/components/ui/StubBadge";
+import { StubAction, StubBadge, StubCard } from "@/components/ui/StubBadge";
 import { useToast } from "@/components/ui/Toast";
 import { WorkshopCard } from "@/components/facilitator/WorkshopCard";
 import { CreateWorkshopModal } from "@/components/facilitator/CreateWorkshopModal";
@@ -225,6 +226,14 @@ export default function AdminHomePage() {
           <h1 className="text-xl font-semibold text-stone-900">Workshop0</h1>
         </div>
         <nav aria-label="Admin actions" className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/admin/opportunities/"
+            data-testid="nav-opportunities"
+            className="inline-flex items-center rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-sm font-medium text-stone-800 shadow-sm transition-colors hover:bg-stone-50"
+          >
+            Opportunities
+          </Link>
+          <StubAction label="Trainer network" />
           <span
             aria-disabled="true"
             className="inline-flex items-center gap-2 rounded-lg border border-dashed border-stone-300 bg-stone-50 px-3 py-1.5 text-sm font-medium text-stone-400 select-none"

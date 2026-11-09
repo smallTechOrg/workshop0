@@ -53,6 +53,12 @@ Open **http://localhost:8001/** — the public landing page. From there, **Creat
 | `/j/<slug>` | Join link — share with the room |
 | `/p/<token>` | Participant personal link |
 | `/f/<token>` | Facilitator dashboard link — the only credential for a workshop; save it |
+| `/opportunities` → `/app/opportunities/` | Public **Opportunity Board** — open listings from the smallTech partner network, filterable by type and topic (filters live in the URL), 12 per page. No sign-in |
+| `/opportunities/<id>` → `/app/opportunities/view/?id=<id>` | One listing's public page (closed/expired listings show a "closed" banner; drafts are not found) |
+| `/app/admin/opportunities/` | Admin: post, edit, publish, unpublish, close and reopen listings (same `WORKSHOP0_ADMIN_KEY` gate as Admin Home). Internal partner name and notes are admin-only — never on a public page or API |
+| `/app/admin/topics/` | Admin: the topic taxonomy (40 seeded topics in 5 categories; add, rename, deactivate) |
+
+Listings expire on their own at their apply-by deadline (computed on read — no scheduler). Signing in, applying and trainer profiles are later phases; the board shows them as labelled "Coming in a later phase" stubs.
 
 There are no accounts and no login: a link is the credential. A workshop created from the public flow has the **full** facilitator toolset — it differs from an admin-created one only by its stored creator email and origin flag.
 
@@ -73,6 +79,15 @@ uv run pytest tests/unit tests/integration -q
 ```
 
 If your PostgreSQL listens on another port or needs a password, adjust the URL accordingly (`postgresql+psycopg://user:pass@host:port/workshop0_test`).
+
+The Opportunity Board tests and gate need **no `.env`** and no external credentials. Without a `.env`, export an admin key first — any value works; the server and the e2e helpers both read it:
+
+```bash
+# from the repo root
+export WORKSHOP0_ADMIN_KEY="${WORKSHOP0_ADMIN_KEY:-phase10-local-gate-key-0123}"
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head
+DATABASE_URL="$TEST_DATABASE_URL" uv run alembic current     # must print 0005 (head)
+```
 
 ```bash
 # e2e — from the repo root; build the UI first, then run the server in one terminal ...
@@ -131,4 +146,4 @@ gcloud run services update workshop0 --region us-central1 --project ai-agent-boi
 
 ## Status
 
-The product (public landing page, keyless workshop creation, live dashboard, help desk, admin console) is built; production runs on Cloud Run + Cloud SQL (PostgreSQL) (Phase 7), and Phase 8 moves the data and `workshop0.smalltech.in` over from the old VM. The spec in `spec/` is the source of truth.
+The product (public landing page, keyless workshop creation, live dashboard, help desk, admin console, and — Phase 10 — the public Opportunity Board with its admin listing and topic tools) is built; production runs on Cloud Run + Cloud SQL (PostgreSQL) (Phase 7), and Phase 8 moves the data and `workshop0.smalltech.in` over from the old VM. The spec in `spec/` is the source of truth.

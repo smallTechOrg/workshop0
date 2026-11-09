@@ -13,6 +13,9 @@ from src.workshop0.api import LANDING_HTML
         # The landing page has exactly one URL — the export root alias folds into `/`.
         ("/app", "/"),
         ("/app/", "/"),
+        # Phase 10 — Opportunity Board pretty links.
+        ("/opportunities", "/app/opportunities/"),
+        ("/opportunities/12", "/app/opportunities/view/?id=12"),
     ],
 )
 def test_pretty_redirects_are_307_to_exact_targets(client, path, target):
@@ -49,3 +52,10 @@ def test_root_returns_503_when_the_export_is_missing(client, monkeypatch, tmp_pa
     assert response.status_code == 503
     assert "frontend not built" in response.text
     assert "location" not in response.headers
+
+
+def test_opportunity_redirect_quotes_a_non_numeric_segment(client):
+    """A non-numeric id is passed through URL-quoted; the page renders its not-found state."""
+    response = client.get("/opportunities/a b&c", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/app/opportunities/view/?id=a%20b%26c"

@@ -73,13 +73,23 @@ def create_app() -> FastAPI:
             },
         )
 
-    from src.workshop0.api import admin, facilitator, health, participant, public
+    from src.workshop0.api import (
+        admin,
+        board_admin,
+        board_public,
+        facilitator,
+        health,
+        participant,
+        public,
+    )
 
     app.include_router(health.router)
     app.include_router(admin.router)
     app.include_router(public.router)
     app.include_router(facilitator.router)
     app.include_router(participant.router)
+    app.include_router(board_public.router)
+    app.include_router(board_admin.router)
 
     @app.get("/", include_in_schema=False)
     def _landing():
@@ -123,6 +133,17 @@ def create_app() -> FastAPI:
     @app.get("/f/{admin_token}", include_in_schema=False)
     def _facilitator_redirect(admin_token: str):
         return RedirectResponse(url=f"/app/f/?t={quote(admin_token, safe='')}", status_code=307)
+
+    # Phase 10 — Opportunity Board pretty links (before the static mount).
+    @app.get("/opportunities", include_in_schema=False)
+    def _opportunities_redirect():
+        return RedirectResponse(url="/app/opportunities/", status_code=307)
+
+    @app.get("/opportunities/{opportunity_id}", include_in_schema=False)
+    def _opportunity_redirect(opportunity_id: str):
+        return RedirectResponse(
+            url=f"/app/opportunities/view/?id={quote(opportunity_id, safe='')}", status_code=307
+        )
 
     frontend_mounted = FRONTEND_OUT_DIR.is_dir()
     if frontend_mounted:

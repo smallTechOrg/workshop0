@@ -9,7 +9,10 @@ What it does (see spec/roadmap.md, Phase 8 / S1):
   * opens the source READ-ONLY (`file:PATH?mode=ro`); never writes to it
   * aborts unless source and target `alembic_version` are equal
   * aborts if any app table in the target has rows, unless --replace
-    (`TRUNCATE ... RESTART IDENTITY CASCADE`, inside the same transaction)
+    (`TRUNCATE ... RESTART IDENTITY CASCADE`, inside the same transaction).
+    Reference tables (`topic`: migration-seeded, then admin-edited) are excluded from
+    that check and are ALWAYS truncated and re-copied from the source — same alembic
+    revision means the same seed, plus the source admin's edits
   * copies every app table in FK order (Base.metadata.sorted_tables), in batches,
     in ONE transaction: naive SQLite datetimes are read as UTC, 0/1 become booleans
   * resets every `id` sequence to max(id)
@@ -29,7 +32,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
@@ -38,12 +41,25 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:  # `python scripts/x.py` puts scripts/ on the path, not the repo
     sys.path.insert(0, str(REPO_ROOT))
 
-from sqlalchemy import Boolean, DateTime, Integer, Numeric, Table, create_engine, text  # noqa: E402
+from sqlalchemy import (  # noqa: E402
+    Boolean,
+    Date,
+    DateTime,
+    Integer,
+    Numeric,
+    Table,
+    create_engine,
+    text,
+)
 from sqlalchemy.engine import Connection, make_url  # noqa: E402
 
 from src.workshop0.db.models import Base  # noqa: E402
 
 EXIT_OK, EXIT_FAILED, EXIT_REFUSED = 0, 1, 2
+
+# Migration-seeded reference data: a freshly migrated target already holds these rows,
+# so they never count as "target already has data" and are always replaced by the source's.
+REFERENCE_TABLES = ("topic",)
 
 
 class ImportRefused(Exception):
@@ -88,6 +104,16 @@ def parse_datetime(value: Any) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def parse_date(value: Any) -> date:
+    """SQLite DATE ('YYYY-MM-DD', possibly with a time part) -> date."""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    s = str(value).strip()
+    if len(s) > 10 and s[10] in " T":
+        return parse_datetime(s).date()
+    return date.fromisoformat(s)
+
+
 def parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -113,6 +139,8 @@ def convert(column, value: Any) -> Any:
             return parse_bool(value)
         if isinstance(ctype, DateTime):
             return parse_datetime(value)
+        if isinstance(ctype, Date):
+            return parse_date(value)
         if isinstance(ctype, Integer):
             return int(value)
         if isinstance(ctype, Numeric):
@@ -317,7 +345,7 @@ def run_import(
             trans = conn.begin()
             try:
                 existing = {t.name: count_target(conn, t.name) for t in tables}
-                if any(existing.values()):
+                if any(n for name, n in existing.items() if name not in REFERENCE_TABLES):
                     if not replace:
                         raise ImportRefused(
                             "target already has data ("
@@ -328,6 +356,11 @@ def run_import(
                     for name, n in existing.items():
                         log(f"[import]   {name}: {n}")
                     names = ", ".join(f'"{t.name}"' for t in tables)
+                    conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+                else:
+                    # Only reference rows (the seed) are present: replace them with the
+                    # source's. Every dependent table is empty here (checked above).
+                    names = ", ".join(f'"{t}"' for t in REFERENCE_TABLES)
                     conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
 
                 for table in tables:
