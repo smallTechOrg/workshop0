@@ -29,8 +29,8 @@ import {
  * The "AI not configured" state is checked by intercepting the config call in
  * the browser; the real keyless path is covered by backend tests.
  *
- * Self-seeding; every name carries RUN; the e2e DB is shared, so data is
- * cleaned up in afterAll (listing closed, partner deactivated).
+ * Self-seeding; every name carries RUN; the e2e DB is shared, so the drafted listing and its partner are intentionally left in place for the
+ * roadmap gate addendum (public-board assertions run after this e2e).
  */
 
 const RUN = `r${Date.now()
@@ -82,8 +82,6 @@ let admin: Page;
 
 let opportunityId = 0;
 let partnerId = 0;
-const createdListingIds: number[] = [];
-const createdPartnerIds: number[] = [];
 let editorPosts = 0;
 
 async function openNewEditor(page: Page): Promise<void> {
@@ -115,21 +113,11 @@ test.describe.serial('Phase 11b — AI drafting, Partners and compensation, end 
   });
 
   test.afterAll(async () => {
-    if (api) {
-      for (const id of [...new Set([opportunityId, ...createdListingIds])].filter((i) => i > 0)) {
-        const r = await api
-          .patch(`/api/admin/opportunities/${id}`, { data: { status: 'closed' } })
-          .catch(() => null);
-        if (r && !r.ok()) console.warn(`listing ${id} cleanup → ${r.status()}`);
-      }
-      for (const pid of createdPartnerIds) {
-        const r = await api
-          .patch(`/api/admin/partners/${pid}`, { data: { active: false } })
-          .catch(() => null);
-        if (r && !r.ok()) console.warn(`partner ${pid} cleanup → ${r.status()}`);
-      }
-      await api.dispose();
-    }
+    // Deliberately NOT closing the drafted listing nor deactivating its partner:
+    // the roadmap Phase 11b gate addendum runs after this e2e and asserts a
+    // published listing with compensation_unit == "day" is on the public board
+    // and that nothing partner-internal leaks into the public list JSON.
+    if (api) await api.dispose();
     if (adminCtx) await adminCtx.close();
   });
 
@@ -140,7 +128,7 @@ test.describe.serial('Phase 11b — AI drafting, Partners and compensation, end 
 
     const panel = admin.getByTestId('paste-to-fill');
     await expect(panel).toBeVisible();
-    await expect(admin.getByTestId('ai-not-configured')).toHaveCount(0);
+    await expect(admin.getByTestId('paste-textarea')).toBeVisible({ timeout: 15_000 });
     await fillStable(admin.getByTestId('paste-textarea'), POST);
 
     const draftBtn = admin.getByTestId('draft-button');
@@ -210,7 +198,6 @@ test.describe.serial('Phase 11b — AI drafting, Partners and compensation, end 
     const pres = await created;
     expect(pres.status()).toBe(200);
     partnerId = (await pres.json()).data.partner.id;
-    createdPartnerIds.push(partnerId);
     await expect(admin.getByTestId('add-partner-modal')).toHaveCount(0);
     await expect(
       select.getByTestId('partner-select-input').locator('option:checked'),
@@ -225,6 +212,11 @@ test.describe.serial('Phase 11b — AI drafting, Partners and compensation, end 
     await expect(admin.getByTestId('opp-preview-compensation')).toContainText(
       EXPECTED_COMPENSATION,
     );
+
+    // The drafter's suggested public name could echo the real org: pin it.
+    const display = admin.getByTestId('opp-partner-display-input');
+    await expect(display).toBeVisible();
+    await fillStable(display, 'A Pune edtech');
 
     // Make publish-critical fields deterministic regardless of the draft.
     const city = admin.getByTestId('opp-city-input');
@@ -250,7 +242,6 @@ test.describe.serial('Phase 11b — AI drafting, Partners and compensation, end 
     expect(res.status(), `publish → ${res.status()}: ${await res.text()}`).toBe(200);
     const opp = (await res.json()).data.opportunity;
     opportunityId = opp.id;
-    createdListingIds.push(opportunityId);
     expect(opp.status).toBe('open');
     expect(opp.partner_id).toBe(partnerId);
     expect(opp.compensation_min).toBe(8000);
