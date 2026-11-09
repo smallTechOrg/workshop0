@@ -82,12 +82,14 @@ def create_app() -> FastAPI:
     from src.workshop0.api import (
         admin,
         board_admin,
+        board_ai_admin,
         board_public,
         facilitator,
         health,
         network_admin,
         network_me,
         participant,
+        partners_admin,
         public,
     )
     from src.workshop0.auth import routes as auth_routes
@@ -99,6 +101,8 @@ def create_app() -> FastAPI:
     app.include_router(participant.router)
     app.include_router(board_public.router)
     app.include_router(board_admin.router)
+    app.include_router(partners_admin.router)
+    app.include_router(board_ai_admin.router)
     # Phase 11 — network identity, trainer self-service, admin trainer pool.
     app.include_router(auth_routes.router)  # /api/auth
     app.include_router(network_me.router)  # /api/me
