@@ -173,7 +173,7 @@ def test_list_orders_by_name_key_includes_inactive_and_counts_listings(
     client.patch(f"{URL}/{beta['id']}", json={"active": False}, headers=admin_headers)
     assert client.get(URL, headers=admin_headers).json()["data"]["partners"][0]["id"] == alpha["id"]
     for status in ("draft", "draft", "closed"):
-        _attach(create_opportunity(status=status)["id"], alpha["id"], "Alpha Corp")
+        _attach(create_opportunity(status=status, partner_internal_name=None)["id"], alpha["id"], "Alpha Corp")
     partners = client.get(URL, headers=admin_headers).json()["data"]["partners"]
     assert [p["internal_name"] for p in partners] == ["Alpha Corp", "beta Corp"]
     assert [p["opportunity_count"] for p in partners] == [3, 0]
@@ -268,9 +268,9 @@ def test_rename_rewrites_mirror_on_the_partners_listings_only(
 ):
     acme = _create(client, admin_headers, "Acme Payments Pvt Ltd")
     globex = _create(client, admin_headers, "Globex")
-    a1 = create_opportunity()
-    a2 = create_opportunity(status="closed")
-    other = create_opportunity()
+    a1 = create_opportunity(partner_internal_name=None)
+    a2 = create_opportunity(status="closed", partner_internal_name=None)
+    other = create_opportunity(partner_internal_name=None)
     _attach(a1["id"], acme["id"], "Acme Payments Pvt Ltd")
     _attach(a2["id"], acme["id"], "Acme Payments Pvt Ltd")
     _attach(other["id"], globex["id"], "Globex")
@@ -293,7 +293,7 @@ def test_display_name_change_does_not_touch_listing_public_name(
     client, admin_headers, create_opportunity
 ):
     partner = _create(client, admin_headers, "Acme")
-    opp = create_opportunity(partner_display_name="Public Name")
+    opp = create_opportunity(partner_display_name="Public Name", partner_internal_name=None)
     _attach(opp["id"], partner["id"], "Acme")
     client.patch(f"{URL}/{partner['id']}", json={"display_name": "Different"}, headers=admin_headers)
     assert _rows(
