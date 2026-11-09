@@ -46,6 +46,12 @@ def create_app() -> FastAPI:
     configure_logging(settings.resolved_log_level)
     log = structlog.get_logger("workshop0")
 
+    # Phase 11 — identity settings rules (issuer scheme, session secret) fail fast here,
+    # before any route is built.
+    from src.workshop0.auth import startup as auth_startup
+
+    auth_startup.validate_settings(settings)
+
     app = FastAPI(title="Workshop0", version=__version__, docs_url=None, redoc_url=None)
     app.add_middleware(RequestLoggingMiddleware)
 
@@ -79,9 +85,12 @@ def create_app() -> FastAPI:
         board_public,
         facilitator,
         health,
+        network_admin,
+        network_me,
         participant,
         public,
     )
+    from src.workshop0.auth import routes as auth_routes
 
     app.include_router(health.router)
     app.include_router(admin.router)
@@ -90,6 +99,10 @@ def create_app() -> FastAPI:
     app.include_router(participant.router)
     app.include_router(board_public.router)
     app.include_router(board_admin.router)
+    # Phase 11 — network identity, trainer self-service, admin trainer pool.
+    app.include_router(auth_routes.router)  # /api/auth
+    app.include_router(network_me.router)  # /api/me
+    app.include_router(network_admin.router)  # /api/admin/network (require_admin_key)
 
     @app.get("/", include_in_schema=False)
     def _landing():
@@ -145,16 +158,35 @@ def create_app() -> FastAPI:
             url=f"/app/opportunities/view/?id={quote(opportunity_id, safe='')}", status_code=307
         )
 
+    # Phase 11 — invite + pretty network links (before the static mount).
+    @app.get("/invite/{token}", include_in_schema=False)
+    def _invite_redirect(token: str):
+        return RedirectResponse(
+            url=f"/app/network/join/?invite={quote(token, safe='')}", status_code=307
+        )
+
+    @app.get("/network", include_in_schema=False)
+    def _network_redirect():
+        return RedirectResponse(url="/app/network/", status_code=307)
+
     frontend_mounted = FRONTEND_OUT_DIR.is_dir()
     if frontend_mounted:
         app.mount("/app", StaticFiles(directory=FRONTEND_OUT_DIR, html=True), name="app")
 
+    anthropic_key_present = bool(settings.anthropic_api_key.strip())
+    anthropic_workspace_present = bool(settings.anthropic_workspace_id.strip())
     log.info(
         "app.startup",
         version=__version__,
         admin_key_present=bool(settings.resolved_admin_key),
         openrouter_key_present=bool(settings.openrouter_api_key),
+        anthropic_key_present=anthropic_key_present,
+        anthropic_workspace_present=anthropic_workspace_present,
         db_dialect=settings.database_url.split(":", 1)[0],
         frontend_mounted=frontend_mounted,
     )
+    if anthropic_key_present and not anthropic_workspace_present:
+        # Key without workspace id: every request would 400, so network AI is treated as
+        # unavailable (agent.md §Provider). Logged once per app build.
+        log.warning("ai.network_misconfigured", reason="workspace_id_missing")
     return app
