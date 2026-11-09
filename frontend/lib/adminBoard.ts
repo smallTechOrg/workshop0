@@ -1,6 +1,7 @@
 /**
  * Typed client for the Phase-10 ADMIN board endpoints — spec/api.md
- * §Phase 10 "Admin surface". Every call sends `X-Admin-Key`.
+ * §Phase 10 "Admin surface". Every call sends `X-Admin-Key`, the session
+ * cookie and `X-Requested-With: workshop0` (CSRF for Google-signed-in admins).
  *
  * This slice carries its own small fetch helper (roadmap Phase 10 "Assumed")
  * so it never edits the shared `lib/api.ts`; it reuses `ApiError` from there.
@@ -21,11 +22,13 @@ async function adminRequest<T>(
   try {
     res = await fetch(path, {
       cache: "no-store",
-      credentials: "same-origin",
+      credentials: "include",
       ...init,
       headers: {
         Accept: "application/json",
         "X-Admin-Key": adminKey,
+        // Session-authenticated (Google-admin) mutations need the CSRF header.
+        "X-Requested-With": "workshop0",
         ...(init.body ? { "Content-Type": "application/json" } : {}),
         ...(init.headers ?? {}),
       },

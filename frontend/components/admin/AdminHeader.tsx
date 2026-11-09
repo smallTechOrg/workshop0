@@ -47,7 +47,9 @@ export function AdminHeader({ current }: { current: Section }) {
         >
           Topics
         </Link>
-        <StubAction label="Trainer pool" />
+        <Link href="/admin/network/" data-testid="nav-trainer-pool" className={linkCls(false)}>
+          Trainer pool
+        </Link>
         <StubAction label="Outbox" />
         <Button variant="ghost" size="sm" onClick={signOut}>
           Sign out
