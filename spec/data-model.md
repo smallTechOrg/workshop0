@@ -281,7 +281,7 @@ Bump `workshop.state_version` (same transaction) on: participant join, completio
 
 # Trainer Network & Opportunity Board (Phases 10–13)
 
-Capabilities C8–C19 ([capabilities.md](capabilities.md)). Unlike the core v0.2 schema (created up front by `0001`), these tables are **added phase by phase** — each phase (or sub-step) has exactly one migration, owned by exactly one slice (see [roadmap.md](roadmap.md)): `0005` (Phase 10), `0006` (Phase 11), `0007` (Phase 11b), `0008` (Phase 12), `0009` (Phase 13). Each `down_revision` is the previous one; every migration uses `batch_alter_table` for ALTERs and has a working `downgrade()`. Scale target: hundreds of trainers, tens of listings, ~500 signups/day bursts — every list endpoint is paginated, no table needs more indexing than listed.
+Capabilities C8–C19 ([capabilities.md](capabilities.md)). Unlike the core v0.2 schema (created up front by `0001`), these tables are **added phase by phase** — each phase (or sub-step) has exactly one migration, owned by exactly one slice (see [roadmap.md](roadmap.md)): `0005` (Phase 10), `0006` (Phase 11), `0007` (Phase 11b), `0008` (Phase 11c), `0009` (Phase 12), `0010` (Phase 13). Each `down_revision` is the previous one; every migration uses `batch_alter_table` for ALTERs and has a working `downgrade()`. Scale target: hundreds of trainers, tens of listings, ~500 signups/day bursts — every list endpoint is paginated, no table needs more indexing than listed.
 
 ## Phase 10 — migration `0005_opportunity_board` (`down_revision = "0004"`)
 
@@ -319,7 +319,7 @@ Exactly 40 rows, 5 categories, 8 each. `downgrade()` drops the table (seed inclu
 | summary | String(280) | not null | Card blurb, plain text |
 | description_md | Text | not null, default `''` | ≤20000; markdown, raw HTML disabled when rendered |
 | location_mode | String(16) | not null, default `'remote'` | `remote` \| `onsite` \| `hybrid` |
-| city | String(80) | nullable | Required when `onsite`/`hybrid`; forced `null` when `remote` |
+| city | String(80) | nullable | Required when `onsite`/`hybrid`; forced `null` when `remote`. From Phase 11c a legacy **mirror** of the first entry of `locations_json` (§Phase 11c) |
 | starts_on / ends_on | Date | nullable | Engagement dates; `ends_on ≥ starts_on` when both set |
 | duration_text | String(80) | nullable | Free text, e.g. "2 days", "6 weeks · 4 h/week" |
 | compensation_text | String(120) | nullable | **Public** free text, e.g. "Paid — day rate", "Pro bono". From Phase 11b this is the optional **note** beside the structured compensation fields (§Phase 11b) |
@@ -508,7 +508,45 @@ All ALTERs use `batch_alter_table`.
 
 > **Assumed:** existing free-text names are matched case- and whitespace-insensitively only, with no fuzzy merging ("Acme" and "Acme Pvt Ltd" stay two partners). Admins can rename one of them or deactivate it later.
 
-## Phase 12 — migration `0008_applications_matching_email` (`down_revision = "0007"`)
+## Phase 11c — migration `0008_multi_location` (`down_revision = "0007"`)
+
+Owned by M1 ([roadmap.md](roadmap.md) §Phase 11c). Purely additive: the previous revision keeps working during the one-deploy overlap (architecture.md §Production topology → Migrations), because `city` stays and is kept current as a mirror.
+
+### opportunity — addition
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| locations_json | Text | not null, default `'[]'`, server_default `'[]'` | **Public data, private column name.** A JSON array of `{"city": str, "country": str \| null}` objects, in the admin's order. The column name `locations_json` is never serialized; payloads expose the parsed list as `locations` (api.md §Phase 11c) |
+
+**Invariants (enforced by `services/opportunities.py`, not by the DB):**
+- 0–10 entries. `city` is trimmed with internal whitespace collapsed to single spaces, 1–80 chars. `country` is trimmed and collapsed the same way, ≤80 chars, and blank becomes `null`. Case is kept as entered.
+- **No duplicates.** The dedupe key is `(city.casefold(), (country or "").casefold())`, so `"Pune"` and `" PUNE "` are one location, while `{"Pune", null}` and `{"Pune", "India"}` are two. The first occurrence wins, and order is otherwise preserved.
+- `location_mode = 'remote'` → `[]`. `onsite` / `hybrid` → at least 1 entry.
+- **`city` becomes a mirror.** Every write sets `city = locations[0].city`, or `null` when the list is empty. New code reads only `locations_json` (through the read rule below). The mirror keeps a rollback to revision `0007` showing the right first city.
+
+**Read rule (one function, `services/locations.py::parse_stored(locations_json, city, location_mode) -> list[dict]`):** parse `locations_json`. If it is a non-empty list, return it. If it is `[]` (or unparseable), `city` is non-blank and the mode is not `remote`, return `[{"city": collapsed city, "country": null}]`. This covers a row written by the `0007` revision during the deploy overlap. Otherwise return `[]`.
+
+There is no index, because no API filters on location (api.md §Phase 11c → Filters). JSON-in-`Text` matches the existing `*_json` columns (`past_work_json`, `availability_json`) and behaves the same on SQLite and PostgreSQL.
+
+### Data migration inside `0008` (normative; plain Python in the migration, portable to SQLite and PostgreSQL, no app imports)
+
+**`upgrade()`:**
+1. `batch_alter_table("opportunity")`: add `locations_json` Text, not null, `server_default='[]'`.
+2. For every row where `location_mode != 'remote'` and `city` is non-blank after trimming: set `locations_json = json.dumps([{"city": " ".join(city.split()), "country": None}], ensure_ascii=False)`.
+3. Leave every other row at `'[]'`. That includes remote rows, which have `city = null` by the Phase-10 rule.
+
+**`downgrade()`:**
+1. For every row whose parsed `locations_json` is non-empty: set `city = locations[0]["city"][:80]`. Rows with an empty list keep their `city`, which is already the mirror.
+2. `batch_alter_table("opportunity")`: drop `locations_json`.
+
+The second and later cities are lost on downgrade. That is accepted and documented in the migration docstring.
+
+> **Assumed (storage):** a JSON `Text` column on `opportunity` is used, not an `opportunity_location` child table. Locations are always read and written with their listing, the list is capped at 10, nothing filters on them, and a child table would add a join to every list query plus delete-and-reinsert writes for no benefit. If a location filter is ever needed, a child table (or a PostgreSQL JSONB index) is the upgrade path.
+> **Assumed (remote):** a remote listing carries no cities, as in Phase 10, where `city` was forced null. A "remote, for candidates in X" constraint belongs in the description.
+> **Assumed (dedupe key includes the country):** `{"Pune", null}` and `{"Pune", "India"}` are kept as two entries, so same-named cities in different countries are possible. The editor shows both chips, so the admin can see and remove one.
+> **Assumed (numbering):** Phase 11c takes `0008`. The not-yet-built Phase 12 and 13 migrations are renumbered `0009` and `0010`, with no change to their content.
+
+## Phase 12 — migration `0009_applications_matching_email` (`down_revision = "0008"`)
 
 - **opportunity** gains admin-only matching fields: `budget_min`/`budget_max` Integer null, `budget_currency` String(3) null (`INR`\|`USD`), `budget_unit` String(8) null (`hour`\|`day`\|`course`\|`month`, the same enum as `compensation_unit`/`rate_unit`), `min_level` String(16) null (`intermediate`\|`advanced`\|`expert`). Never in public payloads. When the budget is unset, matching uses the public `compensation_max`/`_currency`/`_unit` as the budget (agent.md §Shortlist ranker).
 - **application**: id PK · opportunity_id FK CASCADE · profile_id FK trainer_profile CASCADE · status String(16) ∈ `applied` \| `shortlisted` \| `selected` \| `not_selected` \| `withdrawn` · note Text null (≤1000, plain text) · source String(16) `self` \| `invited` · status_changed_at · created_at · updated_at. **Unique(opportunity_id, profile_id)**; ix(opportunity_id, status), ix(profile_id).
@@ -516,7 +554,7 @@ All ALTERs use `batch_alter_table`.
 - **match_suggestion** (one row per ranked trainer per shortlist run): id PK · opportunity_id FK CASCADE · profile_id FK CASCADE · run_id String(22) · rank Integer · rule_score Numeric(6,3) · reason String(300) null (null when ranked by rules only) · ranked_by String(8) `ai` \| `rules` · created_at. ix(opportunity_id, run_id, rank). Only the latest run is shown.
 - **email_outbox**: id PK · to_email String(254) · template String(48) · context_json Text · subject String(200) null (rendered at send) · status String(16) ∈ `queued` \| `sent` \| `failed` \| `recorded` · attempts Integer default 0 · last_error String(500) null · dedupe_key String(120) **unique** null · created_at · sent_at null. ix(status, created_at). `recorded` = SMTP not configured; the message is kept for the admin outbox view and never retried.
 
-## Phase 13 — migration `0009_alerts_directory_tiein` (`down_revision = "0008"`)
+## Phase 13 — migration `0010_alerts_directory_tiein` (`down_revision = "0009"`)
 
 - **saved_search**: id PK · user_id FK app_user CASCADE · name String(80) · criteria_json Text `{"types": [...], "topic_slugs": [...], "location_modes": [...]}` · alerts_enabled Boolean default true · created_at · updated_at. ≤10 per user.
 - **email_pref**: user_id FK app_user CASCADE PK · alerts Boolean default true · digest Boolean default true · updated_at.
