@@ -70,12 +70,22 @@ export function AddPartnerModal({
 
   return (
     <Modal open={open} onClose={onClose} title="Add partner" widthClassName="max-w-lg">
-      <form
+      {/* A <div>, not a <form>: this modal can render inside the opportunity
+          editor's <form>, and nested forms submit/reset the outer one. Enter is
+          handled explicitly; submit events are stopped from reaching the parent. */}
+      <div
         data-testid="add-partner-modal"
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault();
-          void submit();
+          e.stopPropagation();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.target as HTMLElement).tagName === "INPUT") {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!busy) void submit();
+          }
         }}
       >
         <div>
@@ -130,14 +140,23 @@ export function AddPartnerModal({
           </p>
         )}
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button type="submit" data-testid="add-partner-submit" loading={busy}>
+          <Button
+            type="button"
+            data-testid="add-partner-submit"
+            loading={busy}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              void submit();
+            }}
+          >
             Add partner
           </Button>
         </div>
-      </form>
+      </div>
     </Modal>
   );
 }
