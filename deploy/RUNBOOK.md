@@ -34,6 +34,64 @@ bash deploy/cloudrun/provision.sh              # prints CREATED <thing> / EXISTS
 
 It enables the APIs, creates the Artifact Registry repo, service accounts, the keyless GitHub WIF provider, the database and user, the `workshop0-*` secrets with per-secret IAM, a placeholder Cloud Run service, and the public-invoker binding. It never prompts: the `workshop0-dbinit` Cloud Run job creates the database as `workshop0_app`. An existing secret is never overwritten unless you pass `--rotate <name>`.
 
+## Trainer network secrets (Phase 11, operator step)
+
+Phase 11 adds secrets that only the operator can supply. Never paste or echo their values.
+
+1. Export the values into the shell from `.env` (names only are shown here):
+
+```bash
+set -a; . ./.env; set +a
+# provides WORKSHOP0_GOOGLE_CLIENT_SECRET, ANTHROPIC_API_KEY, ANTHROPIC_WORKSPACE_ID
+```
+
+2. Preview, then run for real:
+
+```bash
+bash deploy/cloudrun/provision.sh --dry-run
+bash deploy/cloudrun/provision.sh
+```
+
+It creates the private CV bucket `gs://ai-agent-boilerplate0-workshop0-cvs` (uniform access, public access prevention, runtime IAM for objects and V4 signed URLs) and the secrets `workshop0-session-secret` (generated), `workshop0-google-client-secret`, `workshop0-anthropic-api-key` and `workshop0-anthropic-workspace-id`, each with runtime `secretAccessor` and deployer `viewer` IAM. **SKIPPED rule:** if an operator-supplied value is absent from the environment, the script prints `SKIPPED secret <name> (set <KEY> and re-run)` instead of failing, and skips that secret's IAM. Export the value and re-run; the script is idempotent and never overwrites an existing secret.
+
+3. Rotate one secret (adds a new version; the old one stays until you disable it):
+
+```bash
+bash deploy/cloudrun/provision.sh --rotate workshop0-anthropic-api-key
+```
+
+4. Set the GitHub variables the deploy workflow reads (not secrets):
+
+```bash
+gh variable set WORKSHOP0_GOOGLE_CLIENT_ID --body "<google oauth client id>"
+gh variable set WORKSHOP0_ADMIN_EMAILS --body "<comma-separated admin emails>"
+```
+
+5. Deploy. The workflow maps each optional secret only when it has an enabled version, and maps the two Anthropic secrets **as a pair, only when both** have enabled versions (otherwise it warns and network AI drafting stays "skipped"):
+
+```bash
+gh workflow run deploy-cloudrun.yml --ref main
+```
+
+6. Verify: in the Cloud Run logs, the `app.startup` line must show `anthropic_key_present=true` and `anthropic_workspace_present=true`. An `ai.network_misconfigured` warning means the key is set without the workspace id. Then sign in to the admin area with a Google account listed in `WORKSHOP0_ADMIN_EMAILS`.
+
+> Phase 11b: placeholder, nothing to provision yet.
+
+## Two LLM providers
+
+| | Workshop help-desk (Phase 4) | Trainer network (Phases 11-12) |
+|---|---|---|
+| Provider | OpenRouter (`/api/v1/chat/completions`) | Anthropic Messages API, direct (official `anthropic` SDK) |
+| Used for | Participant help-desk answers | Profile drafting, opportunity drafting, shortlist ranking |
+| Secret | `workshop0-openrouter-api-key` | `workshop0-anthropic-api-key` + `workshop0-anthropic-workspace-id` |
+| Model setting | `WORKSHOP0_AI_MODEL` | `WORKSHOP0_AI_NETWORK_MODEL` / `WORKSHOP0_AI_NETWORK_FAST_MODEL` |
+
+The Anthropic client is constructed in exactly one place, `src/workshop0/ai/anthropic_client.py`. The key is not workspace-scoped, so every request must carry the header `anthropic-workspace-id` (set once as a default header at construction). Without it the API returns HTTP 400, which is why a key without a workspace id is treated as unavailable.
+
+## Confirming model pricing
+
+The cost recorded per network AI call comes from `PRICING_USD_PER_MTOK` in `src/workshop0/ai/pricing.py` (USD per million input/output tokens). The values for `claude-sonnet-5-5` and `claude-haiku-5-5` were carried over from list prices and not verified, so at the Phase 11 test compare them with Anthropic's pricing page. A correction is a one-line constant change; stored historic rows are not rewritten. A model missing from the table costs 0 and logs the warning `ai.pricing_unknown`: if you see it, add the model to the table.
+
 ## The pipeline
 
 Every push to `main` runs `.github/workflows/deploy-cloudrun.yml`:
@@ -148,6 +206,8 @@ Everything is reproducible from this repository plus three things that live outs
 1. **Infrastructure:** `bash deploy/cloudrun/provision.sh` recreates the Artifact Registry repo `workshop0`, service accounts `workshop0-run` / `workshop0-deployer`, the WIF provider `workshop0-github` (pool `github`, condition `smallTechOrg/workshop0`), the `workshop0` database and `workshop0_app` user, the `workshop0-*` secrets, the `workshop0-dbinit` job and a placeholder service `workshop0` with the public invoker binding.
 2. **Code:** push to `main` (or `gh workflow run deploy-cloudrun.yml --ref <ref>`) builds the image `us-central1-docker.pkg.dev/ai-agent-boilerplate0/workshop0/workshop0:<sha12>`, runs the `workshop0-migrate` job and deploys the service.
 3. **Data:** restore the latest logical export into the empty `workshop0` database (see "Database backup and restore"), or load a SQLite file with `deploy/cloudrun/import-data.sh --sqlite PATH`.
+
+The CV bucket `gs://ai-agent-boilerplate0-workshop0-cvs` is not restored by provisioning (it recreates the empty bucket only): back it up separately if CVs matter, and re-run `provision.sh` with the secrets exported from `.env` (see "Trainer network secrets") to re-read and recreate the Phase 11 secrets.
 
 The admin key is `WORKSHOP0_ADMIN_KEY` (secret `workshop0-admin-key`); losing it invalidates saved admin sessions but not facilitator or participant links. A final consistent copy of the retired VM's SQLite database is kept in the operator's local backups at `~/Backups/helmsman/` (outside this repository). The retired VM deploy path is recoverable from git tag `vm-deploy-final`; the VM, its disk and static IP are deleted and nothing in the repository depends on them.
 

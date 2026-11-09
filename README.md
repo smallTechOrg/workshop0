@@ -232,7 +232,7 @@ Production is Cloud Run + Cloud SQL (project `ai-agent-boilerplate0`, region `us
 bash deploy/cloudrun/provision.sh
 ```
 
-The trainer network adds the CV bucket and the `workshop0-session-secret`, `workshop0-google-client-secret`, `workshop0-anthropic-api-key` and `workshop0-anthropic-workspace-id` secrets. It also adds the GitHub variables `WORKSHOP0_GOOGLE_CLIENT_ID` and `WORKSHOP0_ADMIN_EMAILS`. All of these are operator steps, covered in [deploy/RUNBOOK.md](deploy/RUNBOOK.md) "Trainer network secrets (Phase 11)".
+The trainer network adds the CV bucket and the `workshop0-session-secret`, `workshop0-google-client-secret`, `workshop0-anthropic-api-key` and `workshop0-anthropic-workspace-id` secrets. It also adds the GitHub variables `WORKSHOP0_GOOGLE_CLIENT_ID` and `WORKSHOP0_ADMIN_EMAILS`. All of these are operator steps, covered in [deploy/RUNBOOK.md](deploy/RUNBOOK.md) "Trainer network secrets (Phase 11, operator step)".
 
 Workshop mode keeps one instance warm (no cold start). Traffic always follows the latest revision, so a plain update is enough:
 
