@@ -1,0 +1,29 @@
+From: Priya Nair <p.nair@zenvia.example>
+To: partnerships@smalltech.example
+Date: Mon, 9 Nov 2026 10:42:17 +0530
+Subject: Fwd: Trainer needed - GenAI + Python workshop, Pune, February
+
+Hi team,
+
+Forwarding the brief from our L&D side. Zenvia Learning Pvt Ltd is looking for a trainer to run a 2-day
+hybrid workshop on Generative AI with Python for about 30 of our engineers. The room is in our Pune
+office (Baner), and 4-5 participants from the Hyderabad team will join remotely, so the trainer should be
+comfortable running a hybrid classroom.
+
+Dates: 8 and 9 February 2027, 10:00 to 17:30 each day.
+
+What we want covered: prompt design, calling LLM APIs from Python, building a small retrieval-augmented
+app, and evaluating outputs. Participants are working engineers who already write Python daily; no ML
+background needed. Hands-on labs matter more to us than slides.
+
+Budget: Rs 8,000-12,000 per day plus travel (we cover train/flight and two nights' stay if you are
+travelling in). Please send your profile and a proposed agenda by 15 January 2027.
+
+Do not share the fee range outside your trainer network please. For questions you can reach me directly
+on +91 98450 12345 or reply to this mail.
+
+Thanks,
+Priya Nair
+Learning & Development Lead
+Zenvia Learning Pvt Ltd | Baner Road, Pune 411045
+p.nair@zenvia.example | +91 98450 12345
