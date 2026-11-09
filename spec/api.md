@@ -493,7 +493,7 @@ Specified for Phase 11; shapes are normative for that phase's slices. New error 
 | `POST …/trainers/{id}/notes` | `{"body"}` → admin_note; audit `trainer.note` |
 | `PUT …/trainers/{id}/tags` | `{"tags": [...]}` replaces the set; audit `trainer.tag` |
 | `GET …/trainers.csv?<same filters>` | CSV (UTF-8 BOM, `workshop0-trainers-YYYYMMDD.csv`), never includes CV text |
-| `GET/POST …/invites` | List / create `{"email", "name"}` → `{"invite": {"id", "email", "url": "…/invite/<token>", "expires_at", "accepted_at"}}`; audit `invite.create`. Phase 11 shows the URL for copying (email send = Phase 12) |
+| `GET/POST …/invites` | List / create `{"email", "name"}` → `{"invite": {"id", "email", "url": "…/invite/<token>", "expires_at", "accepted_at"}}`; audit `invite.create`. Phase 11 shows the URL for copying; the **Email invite** send is Phase 12 (`POST …/invites/{id}/email`, §Phase 12) |
 | `GET …/ai-spend` | `{"total_cost_usd", "call_count", "prompt_tokens", "completion_tokens", "by_purpose": [...]}` over `ai_usage WHERE workshop_id IS NULL` |
 
 Pretty routes: `GET /invite/{token}` → 307 `/app/network/join/?invite={token}` · `GET /network` → 307 `/app/network/`.
@@ -771,14 +771,16 @@ New error codes: 409 `opportunity_closed` (apply to a non-open listing) · 409 `
 | `GET /api/admin/opportunities/{id}/applications?status&page` | admin | Pipeline rows: trainer summary + status + note + source + dates |
 | `POST /api/admin/opportunities/{id}/applications/status` | admin | `{"application_ids": [...], "status": "shortlisted\|selected\|not_selected\|applied", "notify": true}` → bulk change; one audit row `application.status` listing ids; when `notify`, one `application.status_changed` email per trainer (dedupe `status:{application_id}:{status}`) |
 | `GET /api/admin/opportunities/{id}/applications.csv` | admin | CSV of the pipeline |
-| `GET /api/admin/network/trainers` (extended) | admin | Adds rule filters: `topic` + `min_level`, `budget_max` + `currency` + `unit` (rate_min ≤ budget_max, same currency/unit; no FX), `available_start`/`available_end` (available_from ≤ start and no blackout overlapping), `location_mode` + `city`, `verified`, `tag` |
+| `GET /api/admin/network/trainers` (extended) | admin | Adds rule filters: `topic` + `min_level`, `budget_max` + `currency` + `unit` (rate_min ≤ budget_max, same currency/unit; no FX), `available_start`/`available_end` (available_from ≤ start and no blackout overlapping), `location_mode` + `city` (a listing's "same city" = any of its Phase-11c cities, case-insensitive), `verified`, `tag` |
 | `POST /api/admin/opportunities/{id}/shortlist` | admin | Runs the shortlist ranker (agent.md) → `{"run_id", "ranked_by": "ai\|rules", "suggestions": [{"rank", "trainer": <row>, "rule_score", "reason"}], "cost_usd"}`; rate limit 20/h global |
 | `GET /api/admin/opportunities/{id}/shortlist` | admin | Latest run |
-| `POST /api/admin/opportunities/{id}/invites` | admin | `{"profile_ids": [...]}` → opportunity_invite rows + `opportunity.invite` emails (dedupe `invite:{opp}:{profile}`); audit |
+| `POST /api/admin/opportunities/{id}/invites` | admin | `{"profile_ids": [...]}` → opportunity_invite rows + `opportunity.invite` emails (dedupe `opp-invite:{opp}:{profile}`; skipped for profiles without `consent_at`); the email links to the listing's slug `public_url`; audit |
 | `GET /api/admin/outbox?status&page` | admin | Outbox rows + `{"smtp_configured": false}` |
 | `POST /api/admin/outbox/{id}/retry` | admin | `failed` → `queued` |
 
-The `network_invite` create endpoint now also enqueues `network.invite`; profile creation enqueues `network.welcome`. Opportunity admin payloads gain the Phase-12 budget fields (admin only) and, on admin list rows, `applicant_count` (applications not `withdrawn`) — the real value behind the Applicants column.
+| `POST /api/admin/network/invites/{id}/email` | admin | Explicit per-invite click (never automatic, never bulk): enqueues one `network.invite` (dedupe `invite:{id}:{token_prefix}`) containing the same `…/invite/<token>` URL (absolute, `WORKSHOP0_BASE_URL`), audit `invite.email`; → `{"outbox": {"id", "status"}}`. 409 `invite_revoked` / `invite_used` / `invite_expired` (Phase 11d states). A refreshed invite has a new token and so a new dedupe key |
+
+The `network_invite` create endpoint does **not** send mail on its own (the admin clicks **Email invite**); profile creation enqueues `network.welcome`. Every email link is absolute (`WORKSHOP0_BASE_URL`); listing links use the slug `public_url` (§Phase 11e). `GET /api/admin/outbox` rows with `status="recorded"` are labelled "not sent" in the UI; `smtp_configured` is true only when host, user and password are all set. The SMTP password is never returned or logged. Opportunity admin payloads gain the Phase-12 budget fields (admin only) and, on admin list rows, `applicant_count` (applications not `withdrawn`) — the real value behind the Applicants column.
 
 ---
 
