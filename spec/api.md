@@ -505,7 +505,7 @@ New error codes: 409 `opportunity_closed` (apply to a non-open listing) · 409 `
 | `GET /api/admin/outbox?status&page` | admin | Outbox rows + `{"smtp_configured": false}` |
 | `POST /api/admin/outbox/{id}/retry` | admin | `failed` → `queued` |
 
-The `network_invite` create endpoint now also enqueues `network.invite`; profile creation enqueues `network.welcome`. Opportunity admin payloads gain the Phase-12 budget fields (admin only).
+The `network_invite` create endpoint now also enqueues `network.invite`; profile creation enqueues `network.welcome`. Opportunity admin payloads gain the Phase-12 budget fields (admin only) and, on admin list rows, `applicant_count` (applications not `withdrawn`) — the real value behind the Applicants column.
 
 ---
 

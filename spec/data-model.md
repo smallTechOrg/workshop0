@@ -447,7 +447,7 @@ id PK · token String(43) unique (`token_urlsafe(32)`) · email String(254) not 
 
 ### ai_usage — changes (same migration)
 
-`workshop_id` becomes **nullable**; add `cv_document_id` FK cv_document.id SET NULL null and `opportunity_id` FK opportunity.id SET NULL null (Phase 12 shortlist). New `purpose` values: `profile_draft` (Phase 11), `shortlist_rank` (Phase 12). Network spend = `SUM(cost_usd) WHERE workshop_id IS NULL`.
+`workshop_id` becomes **nullable**; add `cv_document_id` FK cv_document.id SET NULL null and `opportunity_id` FK opportunity.id SET NULL null (Phase 12 shortlist). New `purpose` values: `profile_draft` (Phase 11), `shortlist_rank` (Phase 12). Network spend = `SUM(cost_usd) WHERE workshop_id IS NULL`. For these network rows the provider is Anthropic (agent.md §Network AI): `model` holds the Anthropic model id (e.g. `claude-sonnet-5-5`), `prompt_tokens`/`completion_tokens` are the response's `usage.input_tokens`/`output_tokens`, and `cost_usd` = those tokens × the `ai/pricing.py` table (0 for an unpriced model) — the OpenRouter `usage.cost` rule above applies to help-desk rows only. No schema change follows from the provider choice.
 
 ## Phase 12 — migration `0007_applications_matching_email` (`down_revision = "0006"`)
 
