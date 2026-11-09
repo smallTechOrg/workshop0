@@ -150,7 +150,7 @@ def _topic_exists_error():
     return api_error("topic_exists", TOPIC_EXISTS_MESSAGE, 409)
 
 
-def create_topic(session: Session, body: TopicCreate) -> dict:
+def create_topic(session: Session, body: TopicCreate, *, by: str = ADMIN_BY) -> dict:
     slug = slugify(body.name)
     if not slug:
         raise api_error(
@@ -182,7 +182,7 @@ def create_topic(session: Session, body: TopicCreate) -> dict:
         None,
         ADMIN_ACTOR,
         "topic.create",
-        {"name": topic.name, "slug": topic.slug, "category": topic.category, "by": ADMIN_BY},
+        {"name": topic.name, "slug": topic.slug, "category": topic.category, "by": by},
         subject_type="topic",
         subject_id=topic.id,
     )
@@ -191,7 +191,9 @@ def create_topic(session: Session, body: TopicCreate) -> dict:
     return _admin_topic_with_count(session, topic)
 
 
-def update_topic(session: Session, topic_id: int, body: TopicPatch) -> dict:
+def update_topic(
+    session: Session, topic_id: int, body: TopicPatch, *, by: str = ADMIN_BY
+) -> dict:
     topic = session.get(Topic, topic_id)
     if topic is None:
         raise api_error("not_found", "No topic matches this id.", 404)
@@ -226,7 +228,7 @@ def update_topic(session: Session, topic_id: int, body: TopicPatch) -> dict:
             None,
             ADMIN_ACTOR,
             "topic.update",
-            {"name": topic.name, "slug": topic.slug, "changed_fields": changed, "by": ADMIN_BY},
+            {"name": topic.name, "slug": topic.slug, "changed_fields": changed, "by": by},
             subject_type="topic",
             subject_id=topic.id,
         )

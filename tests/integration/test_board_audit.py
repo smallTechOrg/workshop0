@@ -34,8 +34,10 @@ def _new_rows(before: int) -> list[dict]:
 def test_each_opportunity_write_records_exactly_one_audit_row(client, admin_headers, create_opportunity):
     opp = create_opportunity(["python"])
     rows = _new_rows(0)
-    assert len(rows) == 1
-    create = rows[0]
+    # the fixture's legacy partner_internal_name creates its partner in the same transaction
+    assert [r["action"] for r in rows] == ["partner.create", "opportunity.create"]
+    assert rows[0]["detail"]["by"] == "admin-key" and rows[0]["subject_type"] == "partner"
+    create = rows[1]
     assert (create["actor"], create["workshop_id"], create["action"]) == ("admin", None, "opportunity.create")
     assert (create["subject_type"], create["subject_id"]) == ("opportunity", opp["id"])
     assert create["detail"]["title"] == opp["title"] and create["detail"]["by"] == "admin-key"

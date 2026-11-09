@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from src.workshop0.api._common import ok, request_base_url
+from src.workshop0.auth.deps import AdminActor, require_admin
 from src.workshop0.db.session import get_session
 from src.workshop0.security import require_admin_key
 from src.workshop0.services import opportunities, topics
@@ -50,9 +51,14 @@ def list_opportunities(
 
 @router.post("/opportunities")
 def create_opportunity(
-    body: OpportunityCreate, request: Request, session: Session = Depends(get_session)
+    body: OpportunityCreate,
+    request: Request,
+    actor: AdminActor = Depends(require_admin),
+    session: Session = Depends(get_session),
 ) -> dict:
-    created = opportunities.create_opportunity(session, body, base_url=request_base_url(request))
+    created = opportunities.create_opportunity(
+        session, body, base_url=request_base_url(request), by=actor.by
+    )
     return ok({"opportunity": created})
 
 
@@ -69,11 +75,12 @@ def update_opportunity(
     opportunity_id: str,
     body: OpportunityPatch,
     request: Request,
+    actor: AdminActor = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> dict:
     oid = parse_path_id(opportunity_id, NOT_FOUND_MESSAGE)
     updated = opportunities.update_opportunity(
-        session, oid, body, base_url=request_base_url(request)
+        session, oid, body, base_url=request_base_url(request), by=actor.by
     )
     return ok({"opportunity": updated})
 
@@ -84,13 +91,20 @@ def list_topics(session: Session = Depends(get_session)) -> dict:
 
 
 @router.post("/topics")
-def create_topic(body: TopicCreate, session: Session = Depends(get_session)) -> dict:
-    return ok({"topic": topics.create_topic(session, body)})
+def create_topic(
+    body: TopicCreate,
+    actor: AdminActor = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> dict:
+    return ok({"topic": topics.create_topic(session, body, by=actor.by)})
 
 
 @router.patch("/topics/{topic_id}")
 def update_topic(
-    topic_id: str, body: TopicPatch, session: Session = Depends(get_session)
+    topic_id: str,
+    body: TopicPatch,
+    actor: AdminActor = Depends(require_admin),
+    session: Session = Depends(get_session),
 ) -> dict:
     tid = parse_path_id(topic_id, TOPIC_NOT_FOUND_MESSAGE)
-    return ok({"topic": topics.update_topic(session, tid, body)})
+    return ok({"topic": topics.update_topic(session, tid, body, by=actor.by)})

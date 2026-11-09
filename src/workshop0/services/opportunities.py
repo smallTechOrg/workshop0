@@ -15,14 +15,21 @@ import math
 from datetime import date, datetime
 
 import structlog
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, StrictInt, field_validator
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from src.workshop0.api._common import api_error, as_utc, iso_z, utcnow
-from src.workshop0.db.models import FacilitatorAction, Opportunity, OpportunityTopic, Topic
+from src.workshop0.db.models import (
+    FacilitatorAction,
+    Opportunity,
+    OpportunityTopic,
+    Partner,
+    Topic,
+)
 from src.workshop0.services.audit import record_action
+from src.workshop0.services.partners import partner_ref, resolve_partner
 from src.workshop0.services.topics import ADMIN_ACTOR, ADMIN_BY
 
 log = structlog.get_logger("workshop0")
@@ -40,6 +47,9 @@ TOPICS_MIN, TOPICS_MAX = 1, 8
 CITY_MAX = 80
 DURATION_MAX = 80
 COMPENSATION_MAX = 120
+AMOUNT_MAX = 100_000_000
+CURRENCIES = ("INR", "USD")
+COMPENSATION_UNITS = ("hour", "day", "course", "month")
 PARTNER_MAX = 160
 NOTES_MAX = 5_000
 ACTIVITY_LIMIT = 20
@@ -64,10 +74,14 @@ FIELDS = (
     "starts_on",
     "ends_on",
     "duration_text",
+    "compensation_min",
+    "compensation_max",
+    "compensation_currency",
+    "compensation_unit",
     "compensation_text",
     "deadline",
     "partner_display_name",
-    "partner_internal_name",
+    "partner_id",
     "internal_notes",
     "status",
 )
@@ -147,10 +161,15 @@ class OpportunityPatch(BaseModel):
     starts_on: date | None = None
     ends_on: date | None = None
     duration_text: str | None = None
+    compensation_min: StrictInt | None = None
+    compensation_max: StrictInt | None = None
+    compensation_currency: str | None = None
+    compensation_unit: str | None = None
     compensation_text: str | None = None
     deadline: datetime | None = None
     partner_display_name: str | None = None
-    partner_internal_name: str | None = None
+    partner_id: StrictInt | None = None
+    partner_internal_name: str | None = None  # legacy: resolved to a partner, never stored as input
     internal_notes: str | None = None
     status: str | None = None
 
@@ -203,6 +222,23 @@ class OpportunityPatch(BaseModel):
     @classmethod
     def _duration(cls, v):
         return _bounded(v, low=1, high=DURATION_MAX, required=False)
+
+    @field_validator("compensation_min", "compensation_max")
+    @classmethod
+    def _amount(cls, v):
+        if v is not None and not (0 <= v <= AMOUNT_MAX):
+            raise ValueError(f"must be between 0 and {AMOUNT_MAX}")
+        return v
+
+    @field_validator("compensation_currency")
+    @classmethod
+    def _currency(cls, v):
+        return _one_of(v, CURRENCIES)
+
+    @field_validator("compensation_unit")
+    @classmethod
+    def _unit(cls, v):
+        return _one_of(v, COMPENSATION_UNITS)
 
     @field_validator("compensation_text")
     @classmethod
@@ -306,6 +342,10 @@ def public_card(opp: Opportunity, topics: list[Topic], base_url: str, now: datet
         "starts_on": _date_or_none(opp.starts_on),
         "ends_on": _date_or_none(opp.ends_on),
         "duration_text": opp.duration_text,
+        "compensation_min": opp.compensation_min,
+        "compensation_max": opp.compensation_max,
+        "compensation_currency": opp.compensation_currency,
+        "compensation_unit": opp.compensation_unit,
         "compensation_text": opp.compensation_text,
         "deadline": iso_z(opp.deadline),
         "published_at": _iso_or_none(opp.published_at),
@@ -318,8 +358,18 @@ def public_detail(opp: Opportunity, topics: list[Topic], base_url: str, now: dat
     return {**public_card(opp, topics, base_url, now), "description_md": opp.description_md}
 
 
-def admin_row(opp: Opportunity, topics: list[Topic], base_url: str, now: datetime) -> dict:
-    """AdminOpportunity list row (omits description_md and internal_notes)."""
+def admin_row(
+    opp: Opportunity,
+    topics: list[Topic],
+    base_url: str,
+    now: datetime,
+    partner: Partner | None = None,
+) -> dict:
+    """AdminOpportunity list row (omits description_md and internal_notes).
+
+    `partner` is the listing's partner row (callers batch-load it); `partner_internal_name`
+    is derived from it, never read from the legacy mirror column.
+    """
     return {
         "id": opp.id,
         "title": opp.title,
@@ -333,10 +383,16 @@ def admin_row(opp: Opportunity, topics: list[Topic], base_url: str, now: datetim
         "starts_on": _date_or_none(opp.starts_on),
         "ends_on": _date_or_none(opp.ends_on),
         "duration_text": opp.duration_text,
+        "compensation_min": opp.compensation_min,
+        "compensation_max": opp.compensation_max,
+        "compensation_currency": opp.compensation_currency,
+        "compensation_unit": opp.compensation_unit,
         "compensation_text": opp.compensation_text,
         "deadline": iso_z(opp.deadline),
         "partner_display_name": opp.partner_display_name,
-        "partner_internal_name": opp.partner_internal_name,
+        "partner_id": opp.partner_id,
+        "partner": partner_ref(partner) if partner is not None else None,
+        "partner_internal_name": partner.internal_name if partner is not None else None,
         "status": effective_status(opp, now),
         "stored_status": opp.status,
         "public_url": public_url(base_url, opp.id),
@@ -347,8 +403,14 @@ def admin_row(opp: Opportunity, topics: list[Topic], base_url: str, now: datetim
     }
 
 
-def admin_full(opp: Opportunity, topics: list[Topic], base_url: str, now: datetime) -> dict:
-    row = admin_row(opp, topics, base_url, now)
+def admin_full(
+    opp: Opportunity,
+    topics: list[Topic],
+    base_url: str,
+    now: datetime,
+    partner: Partner | None = None,
+) -> dict:
+    row = admin_row(opp, topics, base_url, now, partner)
     row["description_md"] = opp.description_md
     row["internal_notes"] = opp.internal_notes
     return row
@@ -356,7 +418,15 @@ def admin_full(opp: Opportunity, topics: list[Topic], base_url: str, now: dateti
 
 def _full(session: Session, opp: Opportunity, base_url: str) -> dict:
     topics = topics_by_opportunity(session, [opp.id])[opp.id]
-    return admin_full(opp, topics, base_url, utcnow())
+    partner = session.get(Partner, opp.partner_id) if opp.partner_id is not None else None
+    return admin_full(opp, topics, base_url, utcnow(), partner)
+
+
+def _partners_for(session: Session, rows: list[Opportunity]) -> dict[int, Partner]:
+    ids = {o.partner_id for o in rows if o.partner_id is not None}
+    if not ids:
+        return {}
+    return {p.id: p for p in session.scalars(select(Partner).where(Partner.id.in_(ids)))}
 
 
 # --------------------------------------------------------------------------- public reads
@@ -461,13 +531,23 @@ def list_admin(
             or_(
                 func.lower(Opportunity.title).like(pattern, escape="\\"),
                 func.lower(Opportunity.partner_display_name).like(pattern, escape="\\"),
-                func.lower(Opportunity.partner_internal_name).like(pattern, escape="\\"),
+                func.lower(Partner.internal_name).like(pattern, escape="\\"),
             )
         )
-    total = int(session.scalar(select(func.count(Opportunity.id)).where(*conditions)) or 0)
+    join_on = Opportunity.partner_id == Partner.id
+    total = int(
+        session.scalar(
+            select(func.count(Opportunity.id))
+            .select_from(Opportunity)
+            .outerjoin(Partner, join_on)
+            .where(*conditions)
+        )
+        or 0
+    )
     rows = list(
         session.scalars(
             select(Opportunity)
+            .outerjoin(Partner, join_on)
             .where(*conditions)
             .order_by(Opportunity.updated_at.desc(), Opportunity.id.desc())
             .offset((page - 1) * page_size)
@@ -475,8 +555,11 @@ def list_admin(
         )
     )
     topics = topics_by_opportunity(session, [o.id for o in rows])
+    partners = _partners_for(session, rows)
     return {
-        "opportunities": [admin_row(o, topics[o.id], base_url, now) for o in rows],
+        "opportunities": [
+            admin_row(o, topics[o.id], base_url, now, partners.get(o.partner_id)) for o in rows
+        ],
         "page": page,
         "page_size": page_size,
         "total": total,
@@ -548,6 +631,47 @@ def _validate_topics(
             raise validation_error(f"topic_ids: topic {topic_id} is inactive")
 
 
+def _validate_compensation(merged: dict) -> None:
+    low, high = merged["compensation_min"], merged["compensation_max"]
+    currency, unit = merged["compensation_currency"], merged["compensation_unit"]
+    if low is not None and high is not None and high < low:
+        raise validation_error("compensation_max: must be at least compensation_min")
+    if low is None and high is None:
+        if currency is not None or unit is not None:
+            raise validation_error(
+                "compensation_min: enter an amount, or clear the currency and unit"
+            )
+        return
+    if currency is None:
+        raise validation_error("compensation_currency: required with an amount")
+    if unit is None:
+        raise validation_error("compensation_unit: required with an amount")
+
+
+def _resolve_partner(
+    session: Session,
+    body: OpportunityPatch,
+    merged: dict,
+    *,
+    current_partner_id: int | None,
+    by: str,
+) -> Partner | None:
+    """Resolve + merge the listing's partner (id or legacy name) via `resolve_partner`."""
+    given = body.model_fields_set
+    partner = resolve_partner(
+        session,
+        partner_id=body.partner_id,
+        partner_id_given="partner_id" in given,
+        internal_name=body.partner_internal_name,
+        internal_name_given="partner_internal_name" in given,
+        display_name_hint=merged["partner_display_name"],
+        current_partner_id=current_partner_id,
+        by=by,
+    )
+    merged["partner_id"] = partner.id if partner is not None else None
+    return partner
+
+
 def _validate_merged(
     session: Session,
     merged: dict,
@@ -567,6 +691,7 @@ def _validate_merged(
         merged["city"] = None
     elif not merged["city"]:
         raise validation_error("city: required for onsite or hybrid")
+    _validate_compensation(merged)
     if merged["starts_on"] and merged["ends_on"] and merged["ends_on"] < merged["starts_on"]:
         raise validation_error("ends_on: must be on or after starts_on")
     # Publish rule (data-model.md): a write whose result is stored `open` and which
@@ -578,10 +703,12 @@ def _validate_merged(
             raise validation_error(PUBLISH_DEADLINE_MESSAGE)
 
 
-def _apply(opp: Opportunity, merged: dict) -> None:
+def _apply(opp: Opportunity, merged: dict, partner: Partner | None) -> None:
     for field in FIELDS:
         if field != "topic_ids":
             setattr(opp, field, merged[field])
+    # Legacy mirror (data-model.md §Phase 11b): new code never reads it.
+    opp.partner_internal_name = partner.internal_name if partner is not None else None
 
 
 def _set_topics(session: Session, opportunity_id: int, old: list[int], new: list[int]) -> None:
@@ -600,17 +727,21 @@ def _status_action(from_status: str, to_status: str) -> str:
     ]
 
 
-def create_opportunity(session: Session, body: OpportunityCreate, *, base_url: str) -> dict:
+def create_opportunity(
+    session: Session, body: OpportunityCreate, *, base_url: str, by: str = ADMIN_BY
+) -> dict:
     now = utcnow()
     provided = body.model_dump()
     for field, default in CREATE_DEFAULTS.items():
         if provided[field] is None:
             provided[field] = default
     merged = dict(provided)
+    merged.setdefault("partner_id", None)
     _validate_merged(session, merged, provided, previous=None, now=now)
+    partner = _resolve_partner(session, body, merged, current_partner_id=None, by=by)
 
     opp = Opportunity(created_at=now, updated_at=now)
-    _apply(opp, merged)
+    _apply(opp, merged, partner)
     if opp.status == "open":
         opp.published_at = now
     if opp.status == "closed":
@@ -624,7 +755,7 @@ def create_opportunity(session: Session, body: OpportunityCreate, *, base_url: s
         None,
         ADMIN_ACTOR,
         "opportunity.create",
-        {"title": opp.title, "changed_fields": changed, "to_status": opp.status, "by": ADMIN_BY},
+        {"title": opp.title, "changed_fields": changed, "to_status": opp.status, "by": by},
         subject_type="opportunity",
         subject_id=opp.id,
     )
@@ -634,7 +765,12 @@ def create_opportunity(session: Session, body: OpportunityCreate, *, base_url: s
 
 
 def update_opportunity(
-    session: Session, opportunity_id: int, body: OpportunityPatch, *, base_url: str
+    session: Session,
+    opportunity_id: int,
+    body: OpportunityPatch,
+    *,
+    base_url: str,
+    by: str = ADMIN_BY,
 ) -> dict:
     opp = _get_or_404(session, opportunity_id)
     now = utcnow()
@@ -643,8 +779,12 @@ def update_opportunity(
     provided = body.model_dump(include=body.model_fields_set)
     if "description_md" in provided and provided["description_md"] is None:
         provided["description_md"] = ""
+    provided.pop("partner_internal_name", None)  # legacy input, resolved below
     merged = {**previous, **provided}
     _validate_merged(session, merged, provided, previous=previous, now=now)
+    partner = _resolve_partner(
+        session, body, merged, current_partner_id=opp.partner_id, by=by
+    )
 
     changed = [
         f
@@ -657,9 +797,10 @@ def update_opportunity(
     from_status, to_status = previous["status"], merged["status"]
     status_changed = from_status != to_status
     if not changed and not status_changed:
+        session.commit()  # a legacy name that resolved to the same partner writes nothing
         return _full(session, opp, base_url)  # no-op: no write, no audit row
 
-    _apply(opp, merged)
+    _apply(opp, merged, partner)
     if "topic_ids" in changed:
         _set_topics(session, opp.id, old_topic_ids, merged["topic_ids"])
     if status_changed:
@@ -671,7 +812,7 @@ def update_opportunity(
             opp.closed_at = None
     opp.updated_at = now
 
-    detail: dict = {"title": opp.title, "changed_fields": changed, "by": ADMIN_BY}
+    detail: dict = {"title": opp.title, "changed_fields": changed, "by": by}
     if status_changed:
         detail.update({"from_status": from_status, "to_status": to_status})
         action = _status_action(from_status, to_status)

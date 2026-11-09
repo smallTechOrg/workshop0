@@ -11,6 +11,7 @@ from tests.conftest import BOARD_TYPES, db_execute, iso
 CARD_KEYS = {
     "id", "title", "type", "summary", "partner_display_name", "topics", "location_mode",
     "city", "starts_on", "ends_on", "duration_text", "compensation_text", "deadline",
+    "compensation_min", "compensation_max", "compensation_currency", "compensation_unit",
     "published_at", "status", "public_url",
 }
 
