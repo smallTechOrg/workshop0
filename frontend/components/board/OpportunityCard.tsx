@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { formatCompensation } from "@/lib/compensation";
 import { cn } from "@/lib/format";
 import {
   TYPE_LABELS,
@@ -74,6 +75,7 @@ export function OpportunityCard({
   now: number;
 }) {
   const extraTopics = o.topics.length - MAX_TOPICS;
+  const compensation = formatCompensation(o);
   return (
     <article
       data-testid="opportunity-card"
@@ -121,11 +123,13 @@ export function OpportunityCard({
             <PinIcon className="shrink-0 text-stone-400" />
             <dd className="min-w-0 truncate">{locationLabel(o)}</dd>
           </div>
-          {o.compensation_text && (
+          {compensation && (
             <div className="flex min-w-0 items-center gap-2">
               <dt className="sr-only">Compensation</dt>
               <WalletIcon className="shrink-0 text-stone-400" />
-              <dd className="min-w-0 truncate">{o.compensation_text}</dd>
+              <dd data-testid="opportunity-compensation" className="min-w-0 truncate">
+                {compensation}
+              </dd>
             </div>
           )}
           <div className="flex min-w-0 items-center gap-2">

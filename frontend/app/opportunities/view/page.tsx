@@ -10,6 +10,7 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { ApiError } from "@/lib/api";
+import { formatCompensation } from "@/lib/compensation";
 import { useNowTick } from "@/lib/format";
 import {
   boardHref,
@@ -97,11 +98,13 @@ function NotFound({ fromQs }: { fromQs: string }) {
   );
 }
 
-function MetaItem({ label, value }: { label: string; value: string }) {
+function MetaItem({ label, value, testId }: { label: string; value: string; testId?: string }) {
   return (
     <div className="min-w-0">
       <dt className="text-xs font-medium tracking-wide text-stone-400 uppercase">{label}</dt>
-      <dd className="mt-0.5 break-words text-stone-800">{value}</dd>
+      <dd data-testid={testId} className="mt-0.5 break-words text-stone-800">
+        {value}
+      </dd>
     </div>
   );
 }
@@ -175,11 +178,14 @@ function ListingInner() {
 
   const o = state.opportunity;
   const dates = dateRangeLabel(o.starts_on, o.ends_on);
-  const meta: { label: string; value: string }[] = [
+  const compensation = formatCompensation(o);
+  const meta: { label: string; value: string; testId?: string }[] = [
     { label: "Location", value: locationLabel(o) },
     ...(dates ? [{ label: "Dates", value: dates }] : []),
     ...(o.duration_text ? [{ label: "Duration", value: o.duration_text }] : []),
-    ...(o.compensation_text ? [{ label: "Compensation", value: o.compensation_text }] : []),
+    ...(compensation
+      ? [{ label: "Compensation", value: compensation, testId: "opportunity-compensation" }]
+      : []),
   ];
 
   return (
@@ -207,7 +213,7 @@ function ListingInner() {
             <p className="break-words text-stone-700">{o.summary}</p>
             <dl className="mt-5 grid gap-4 border-t border-stone-100 pt-5 sm:grid-cols-2">
               {meta.map((m) => (
-                <MetaItem key={m.label} label={m.label} value={m.value} />
+                <MetaItem key={m.label} label={m.label} value={m.value} testId={m.testId} />
               ))}
             </dl>
             {o.topics.length > 0 && (

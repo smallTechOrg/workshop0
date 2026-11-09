@@ -11,6 +11,7 @@
  */
 
 import { ApiError } from "@/lib/api";
+import type { CompensationUnit, Currency } from "@/lib/compensation";
 
 // ---------------------------------------------------------------------------
 // Fetch helper (same envelope handling as lib/api.ts)
@@ -94,6 +95,10 @@ export interface PublicOpportunityCard {
   ends_on: string | null;
   duration_text: string | null;
   compensation_text: string | null;
+  compensation_min: number | null;
+  compensation_max: number | null;
+  compensation_currency: Currency | null;
+  compensation_unit: CompensationUnit | null;
   deadline: string;
   published_at: string | null;
   status: PublicOpportunityStatus;
