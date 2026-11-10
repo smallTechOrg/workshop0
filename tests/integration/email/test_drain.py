@@ -172,3 +172,21 @@ def test_concurrent_drains_never_send_a_row_twice(smtp_env, monkeypatch):
     second.join()
     assert sorted(m["To"] for m in smtp_env.messages) == sorted(f"c{i}@example.test" for i in range(6))
     assert all(_row(i).status == "sent" for i in ids)
+
+
+def test_list_unsubscribe_headers_only_on_mail_with_an_unsubscribe_link(smtp_env):
+    alert_ctx = {"name": "Asha", "title": "T", "partner": "P", "compensation": "C", "cities": "Pune",
+                 "url": "http://base.test/opportunities/t", "search_names": "S",
+                 "unsubscribe_url": "http://base.test/api/email/unsubscribe?t=tok123",
+                 "manage_url": "http://base.test/app/network/searches/"}
+    with create_db_session() as s:
+        enqueue(s, to="lu@example.test", template="network.alert", context=alert_ctx, dedupe_key="lu-alert")
+        s.commit()
+    _enqueue(to="plain@example.test", key="lu-plain")
+    sender.drain()
+    by_to = {m["To"]: m for m in smtp_env.messages}
+    alert = by_to["lu@example.test"]
+    assert alert["List-Unsubscribe"] == "<http://base.test/api/email/unsubscribe?t=tok123>"
+    assert alert["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+    plain = by_to["plain@example.test"]
+    assert plain["List-Unsubscribe"] is None and plain["List-Unsubscribe-Post"] is None

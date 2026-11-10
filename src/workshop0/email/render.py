@@ -35,6 +35,9 @@ class Rendered:
     subject: str
     text: str
     html: str
+    # Set for mail carrying a signed unsubscribe link (alerts, digest): becomes the
+    # RFC 2369 / RFC 8058 List-Unsubscribe headers.
+    unsubscribe_url: str | None = None
 
 
 def _value(context: dict[str, Any], key: str) -> str:
@@ -96,4 +99,8 @@ def render(template: str, context: dict[str, Any]) -> Rendered:
         "<!doctype html><html><body>"
         f"{html_body.strip()}\n<hr><p><small>{html.escape(FOOTER)}</small></p></body></html>"
     )
-    return Rendered(subject=subject, text=text, html=page)
+    unsub = context.get("unsubscribe_url")
+    return Rendered(
+        subject=subject, text=text, html=page,
+        unsubscribe_url=unsub if isinstance(unsub, str) and unsub.startswith(("http://", "https://")) else None,
+    )
