@@ -24,7 +24,7 @@ This is the contract both generators build against **in parallel** — the backe
 | 409 | `workshop_not_started` | Join before `starts_at` (Phase 3) |
 | 409 | `undo_expired` | Undo requested after the 30 s window (Phase 2) |
 | 410 | `workshop_archived` | Any mutation on an archived workshop (Phase 3) |
-| 409 | `topic_exists` | Topic slug/name collision (Phase 10) — Phase 11, 11b and 12 codes are listed in their sections |
+| 409 | `topic_exists` | Topic slug/name collision (Phase 10) — Phase 11, 11b, 12 and 13 codes are listed in their sections |
 | 422 | `validation_error` | Body/param validation failure |
 | 500 | `internal_error` | Unexpected; logged with `request_id` |
 
@@ -32,7 +32,7 @@ This is the contract both generators build against **in parallel** — the backe
 
 `GET /j/{join_slug}` → `/app/join/?s=…` · `GET /p/{participant_token}` → `/app/p/?t=…` · `GET /f/{admin_token}` → `/app/f/?t=…` — all 307. **Phase 1.**
 `GET /admin` → `/app/admin/` — 307. **Phase 6.**
-`GET /opportunities/{key}`, `/sitemap.xml` and `/robots.txt` are server-rendered public pages. **Phase 11e**, see §Phase 11e.
+`GET /opportunities/{key}`, `/sitemap.xml` and `/robots.txt` are server-rendered public pages. **Phase 11e**, see §Phase 11e. **Phase 13** adds `GET /trainers` (307 → `/app/network/directory/`) and the server-rendered `GET /trainers/{slug}`, and extends the sitemap and robots (§Phase 13 endpoints → Server-rendered trainer pages).
 `GET /` — **Phase 1:** 307 → `/app/`. **Phase 6:** no longer a redirect — it serves the public marketing landing page HTML directly (200, `text/html`). See architecture.md §Serving the landing page at `/`.
 
 ---
@@ -733,7 +733,7 @@ The view page keeps its static route `/app/opportunities/view/`, because a stati
 It then calls `GET /api/public/opportunities/{key}`. When the page was reached at `/app/opportunities/view/?id=…` or `?slug=…`, it calls `window.location.replace("/opportunities/{slug}" + (from ? "?from=" + from : ""))` once loaded. One URL per listing is what users and crawlers see.
 
 ## `GET /sitemap.xml`
-`application/xml; charset=utf-8`. The body is a `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` with `{base}/opportunities` (no `lastmod`) and then one `<url>` per **effective-open** listing, ordered by `published_at` desc and `id` desc: `<loc>{public_url}</loc><lastmod>{updated_at, YYYY-MM-DD}</lastmod>`. All text is XML-escaped. Drafts, expired and closed listings are absent. `{base}` = `WORKSHOP0_BASE_URL` or the request origin, as for `public_url`.
+`application/xml; charset=utf-8`. The body is a `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` with `{base}/opportunities` (no `lastmod`) and then one `<url>` per **effective-open** listing, ordered by `published_at` desc and `id` desc: `<loc>{public_url}</loc><lastmod>{updated_at, YYYY-MM-DD}</lastmod>`. All text is XML-escaped. Drafts, expired and closed listings are absent. `{base}` = `WORKSHOP0_BASE_URL` or the request origin, as for `public_url`. **Extended in Phase 13:** also `{base}/trainers` and one entry per listed (opted-in, ≥ 60 %) trainer, see §Phase 13 endpoints → Server-rendered trainer pages.
 
 ## `GET /robots.txt`
 `text/plain; charset=utf-8`, exactly:
@@ -751,6 +751,7 @@ Disallow: /app/f/
 Disallow: /app/p/
 Sitemap: {base}/sitemap.xml
 ```
+**Extended in Phase 13:** three more `Disallow` lines (`/app/network/trainer/`, `/app/network/searches/`, `/app/network/unsubscribed/`), see §Phase 13 endpoints → Server-rendered trainer pages.
 > **Assumed:** besides the three requested paths, the token-bearing facilitator and participant links and the duplicate `/app/opportunities/view/` URL are disallowed. Disallowing `/admin` also covers `/admin/…`.
 
 ## Hard rule extension (gate-tested)
@@ -786,16 +787,89 @@ The `network_invite` create endpoint does **not** send mail on its own (the admi
 
 # Phase 13 endpoints — Alerts, digest, directory, workshop tie-in (C17–C19)
 
+Schema: [data-model.md](data-model.md) §Phase 13. Design and slice ownership: [roadmap.md](roadmap.md) §Phase 13. Conventions as everywhere above (success envelope, error envelope, `snake_case`, absolute URLs from `WORKSHOP0_BASE_URL` or the request origin). User endpoints use `require_user` (401 `not_signed_in`; the CSRF header on non-GET); admin endpoints use `require_admin` (key or admin session). **Phase 13 adds no AI call.**
+
+New error codes: 409 `profile_required` (already defined in Phase 12; also returned by saved-search create) · 409 `search_limit` · 401 `invalid_cron_key` · 404 `not_found` (cron path with no key configured; directory and tie-in misses).
+
+## Saved searches and email preferences (C17) — `api/network_me.py`
+
+**Search shape:** `{"id", "name", "criteria": {"types": [], "topic_slugs": [], "location_modes": [], "cities": []}, "alerts_enabled", "created_at", "updated_at"}`.
+
+| Endpoint | Behaviour |
+|---|---|
+| `GET /api/me/searches` | `{"searches": [<search>…], "limit": 10}`, newest first. Works without a profile (empty list) |
+| `POST /api/me/searches` | Body `{"name", "criteria", "alerts_enabled": true}`. Requires a profile (409 `profile_required`); more than 10 → 409 `search_limit`. `criteria` goes through `alerts.validate_criteria`: unknown keys, unknown type / location mode / topic slug, more than 10 slugs or 5 cities, a blank or over-80-char city, or all four lists empty → 422 `validation_error` (message names the field). Stored normalised (de-duplicated, city whitespace collapsed). Bucket `searches:user:{id}` 60/h. Audit `search.create` (actor `user`, subject trainer) |
+| `PATCH /api/me/searches/{id}` | Partial `name` / `criteria` / `alerts_enabled`; the same validation. Another user's id or unknown → 404 `not_found` |
+| `DELETE /api/me/searches/{id}` | `{"deleted": true}`; same 404 rule. Audit `search.delete` |
+| `GET /api/me/email-prefs` | `{"alerts": true, "digest": true}` (no row = both true) |
+| `PATCH /api/me/email-prefs` | Partial `{"alerts"?: bool, "digest"?: bool}`; any non-bool → 422; upserts; audit `email_pref.update` with the new values. Returns the full pair |
+
+**Matching rule (`alerts.matches(criteria, opportunity, topic_slugs)`, pure):** a listing matches when, for every **non-empty** criteria list, it satisfies that list: `types` contains the listing's `type`; `topic_slugs` intersects the listing's topic slugs; `location_modes` contains its `location_mode`; `cities` intersects its Phase-11c cities (`locations.parse_stored`, compared by whitespace-collapsed `casefold`; a remote listing has no cities and so never satisfies a non-empty `cities`). Empty lists never exclude. Only effective-`open` listings can match.
+
+## Alerts (internal, no endpoint)
+
+On every write that makes a listing effective-`open` that was not effective-`open` before it (create as open, publish, reopen, a deadline change that revives an expired listing), `opportunities.create_opportunity` / `update_opportunity` call `alerts.enqueue_alerts_for(session, opp, base_url=…)` before their single commit, inside a SAVEPOINT. For each user with at least one matching saved search who has a profile (`consent_at` set), `email_pref.alerts` true and that search's `alerts_enabled` true, it enqueues **one** `network.alert` (to `app_user.email`, dedupe `alert:{opportunity_id}:{user_id}`) and returns the number of newly created rows. Context: `{name, title, partner, compensation, cities, url, search_names, unsubscribe_url, manage_url}`. `title`…`url` come from `listing_text.listing_fields` (partner **display** name or "a smallTech partner", the Phase-11b compensation with its unit or "To be discussed", every city joined with ", " or the capitalised location mode, and the slug URL), `unsubscribe_url = {base}/api/email/unsubscribe?t=<token kind=alerts>`, `manage_url = {base}/app/network/searches/`. The admin routes `POST /api/admin/opportunities` and `PATCH /api/admin/opportunities/{id}` then call `sender.schedule_drain(background, limit=100)` when the stored status is `open`. Any exception in the hook is logged (`alerts.enqueue_failed`, no recipient data) and swallowed: the write still commits.
+
+## Unsubscribe (C17) — `api/network_public.py`
+
+`GET /api/email/unsubscribe?t=<token>` — no auth, no CSRF. The token is `unsubscribe.make_token(user_id, kind)`, `kind ∈ alerts|digest`, signed with `WORKSHOP0_SESSION_SECRET` (`itsdangerous.URLSafeSerializer`, salt `workshop0.unsubscribe`, no expiry, so old emails keep working; rotating the session secret invalidates them). A valid token for an existing user sets that one preference to false (upsert, idempotent; audit `email.unsubscribe`, actor `user`, detail `{kind}` only) and answers **303** to `/app/network/unsubscribed/?kind=<kind>`. A malformed, tampered, wrong-secret or deleted-user token answers 303 to `/app/network/unsubscribed/?error=invalid_link`. It never returns a 4xx/5xx to the link.
+
+## Weekly digest (C17) — `api/network_public.py`
+
+`POST /api/cron/weekly-digest`, header `X-Cron-Key`.
+1. `WORKSHOP0_CRON_KEY` blank → **404 `not_found`** whatever the request carries (the endpoint does not reveal that it exists).
+2. Header missing or different (`hmac.compare_digest`) → 401 `invalid_cron_key`. The key is accepted only in the header, never a query string, and is never logged, audited or returned.
+3. Otherwise `digest.run_weekly(session, now, base_url)`: `week = iso_week_label(now)` (`"2026-W46"`, ISO calendar in IST, fixed UTC+05:30). Listings = effective-open listings with `published_at ≥ now − 7 days`, newest first. Recipients = users with a profile, `email_pref.digest` true and at least one saved search (any `alerts_enabled`) matching at least one of those listings. For each, one `network.digest` (dedupe `digest:{user_id}:{week}`) whose context is `{name, count, listings: [{title, partner, compensation, cities, url}…up to 10], more: <count − 10 or 0>, board_url, unsubscribe_url (kind digest), manage_url}`; only the user's matching listings are included. `enqueued` counts rows newly created (an existing dedupe key adds nothing).
+4. One audit row `cron.weekly_digest` (actor `cron`, detail `{week, enqueued, listings}`), then `sender.schedule_drain(background, limit=100)`.
+5. Response: `{"enqueued": 28, "week": "2026-W46", "listings": 3}`. A second call in the same ISO week returns `enqueued: 0`.
+
+## Public directory (C18) — `api/directory_public.py`, no auth
+
+A profile is **listed** iff `visibility = 'public'` **and** `public_slug` is set **and** `completeness ≥ 60`. All three endpoints use one serializer, `directory.get_public` / `list_public`, an explicit allow-list built from the profile, its user's `display_name` / `avatar_url`, and its topics; no ORM row or `dict(model)` reaches a response.
+
+| Endpoint | Behaviour |
+|---|---|
+| `GET /api/public/trainers?topic=<slug>&page=<n>` | `{"items": [<card>…], "page", "page_size": 24, "total"}`; listed profiles only, ordered by `display_name` casefold then slug; `topic` filters to profiles holding that topic (unknown slug → empty list, not an error) |
+| `GET /api/public/trainers/{slug}` | `<card>` plus `bio_md` and `past_work`; the key is lower-cased and must match `^[a-z0-9-]{1,80}$`; **everything else returns the same 404** `{"code": "not_found", "message": "This trainer profile isn't available."}`: private, under 60 %, unknown, never public, numeric id, malformed |
+
+`<card>` = `{"slug", "display_name", "avatar_url", "headline", "city", "remote_ok", "topics": [{"slug", "name", "level"}], "verified", "links": {"linkedin", "github", "website"}, "public_url"}` (`links` values are `null` when unset; `public_url = {base}/trainers/{slug}`). `past_work` items are `{"title", "kind", "org", "year"}`. **Never present:** email, `rate_*`, `pro_bono`, availability, blackouts, CV or its metadata, admin notes, tags, `consent_*`, `autofilled_fields`, `visibility`, `verified_by` / `verified_at`, `id`, `user_id`, `public_slug` under any other name. Gate-tested on serialized JSON with sentinel values.
+
+## Own profile (C18) — `PATCH /api/me/profile` and the own payload
+
+`ProfilePatch` accepts `visibility` (`private` | `public`; other values 422). `public_slug` and `directory` in a body are ignored. Setting `public` calls `directory.ensure_slug` (data-model.md §trainer_profile — addition) and is audited as part of `profile.update` (`changed_fields` includes `visibility`). **A patch whose only field is `visibility` leaves `autofilled_fields` untouched**; a patch that sets any content field clears it as before. The own-profile payload (`profile` object of `GET/POST/PATCH /api/me/profile`) gains
+
+```json
+"directory": {"visibility": "public", "listed": true, "path": "/trainers/asha-rao-3f9c", "min_completeness": 60}
+```
+
+`listed` follows the rule above; `path` is `null` until a slug exists. The existing `visibility` field stays. Setting `public` below 60 % succeeds and returns `listed: false`; the UI explains what is missing from `completeness.missing`.
+
+## Server-rendered trainer pages and sitemap (C18) — `api/seo.py`, `services/seo.py`
+
+Registered with the 11e router (before the `/app` mount).
+- `GET /trainers` → **307** `/app/network/directory/` (like `/opportunities`).
+- `GET /trainers/{slug}/` → 301 to the slash-less path. `GET /trainers/{slug}`: slug not matching `^[A-Za-z0-9-]{1,80}$` or not listed → **404** with the same HTML shell and an SEO block of only `<title>Trainer not available — Workshop0</title>` and `<meta name="robots" content="noindex">`. A mixed-case key that lower-cases to a listed slug → 301 to the lower-case path. Listed → **200** with the exported `frontend/out/network/trainer/index.html`, its `<title>` and description meta removed, and, between `<!--w0-seo-->` and `<!--/w0-seo-->` before `</head>`: `<title>{display_name} — {headline} — Workshop0</title>`, `<meta name="description">` (the headline, then the bio, cut to 160 characters at a word boundary), `canonical` = `{base}/trainers/{slug}`, `og:type=profile`, `og:site_name`, `og:title`, `og:description`, `og:url`, `twitter:card=summary` and title/description, and one JSON-LD `Person`: `{"@context": "https://schema.org", "@type": "Person", "name", "jobTitle": <headline>, "url", "knowsAbout": [<topic names>], "sameAs": [<set links>], "address": {"@type": "PostalAddress", "addressLocality": <city>}}` (`address` only when a city is set). Escaping and `json_for_script` are the 11e rules. No `og:image` (the avatar is not embedded). The block is built only from the `directory.get_public` dict.
+- **Sitemap** (`GET /sitemap.xml`): after the Phase-11e entries (`{base}/opportunities`, then the open listings) the body gets `{base}/trainers` (no `lastmod`) **inserted right after `{base}/opportunities`**, and then one `<url>` per listed trainer from `directory.sitemap_entries`: `<loc>{base}/trainers/{slug}</loc><lastmod>{profile.updated_at, YYYY-MM-DD}</lastmod>`, ordered like the directory. Private, under-60 % and never-public profiles are absent; so are the numeric ids. This supersedes the "exactly the board and the open listings" wording of §Phase 11e.
+- **Robots** gains `Disallow: /app/network/trainer/` (the duplicate client route) and `Disallow: /app/network/searches/` and `Disallow: /app/network/unsubscribed/`, inserted after `Disallow: /app/network/me/`; the `Sitemap:` line stays last. The §Phase 11e text is otherwise unchanged.
+- **Client page** `/app/network/trainer/` reads its key in this order: `?slug=`, then `window.location.pathname` matching `^/trainers/([^/]+)/?$` (read in an effect after mount, because the page is served outside `basePath`). It calls `GET /api/public/trainers/{slug}` and, when reached at `/app/network/trainer/?slug=…`, `location.replace`s to `/trainers/{slug}`.
+- **Hard rule extension (gate-tested):** no injected block, 404 HTML or sitemap ever contains an email address, a rate, a note, a tag, a numeric profile or user id, or any trainer who is not listed.
+
+## Workshop tie-in (C19) — `api/admin.py`, `api/network_me.py`
+
+`<facilitator>` = `{"profile_id", "role", "display_name", "headline", "email", "linked_by", "created_at"}` (admin payload, so `email` is allowed here).
+
 | Endpoint | Auth | Behaviour |
 |---|---|---|
-| `GET/POST /api/me/searches`, `PATCH/DELETE /api/me/searches/{id}` | user | Saved searches (≤10) |
-| `GET/PATCH /api/me/email-prefs` | user | `{"alerts", "digest"}` |
-| `GET /api/email/unsubscribe?t=<signed>` | signed token | One-click: turns off the named kind; 303 to `/app/network/unsubscribed/` |
-| `POST /api/cron/weekly-digest` | header `X-Cron-Key` = `WORKSHOP0_CRON_KEY` | Enqueues one `network.digest` per opted-in user with ≥1 matching listing published in the last 7 days (dedupe `digest:{user}:{ISO week}`); idempotent per week |
-| (internal) on any transition to effective `open` | — | Enqueue `network.alert` for each matching saved search with alerts on (dedupe `alert:{search}:{opp}`) |
-| `GET /api/public/trainers?topic&page` | none | Public directory: only `visibility="public"` profiles with completeness ≥60 %; fields `{"id", "display_name", "avatar_url", "headline", "city", "remote_ok", "topics", "verified", "links"}` — **never** email, rates, CV, notes, tags |
-| `GET /api/public/trainers/{id}` | none | Same allow-list + `bio_md`, `past_work`; private → 404 |
-| `PATCH /api/me/profile` | user | Now accepts `visibility` |
-| `GET/PUT /api/admin/workshops/{id}/facilitators` | admin | Link network trainers `{"facilitators": [{"profile_id", "role"}]}`; audit `workshop.facilitators` |
-| `GET /api/me/workshops` | user | Workshops I am linked to: `{name, status, role, facilitator_url}` |
+| `GET /api/admin/workshops/{id}/facilitators` | admin | `{"facilitators": [<facilitator>…]}` ordered lead, co, ta, then link time. Unknown workshop → 404 |
+| `PUT /api/admin/workshops/{id}/facilitators` | admin | Body `{"facilitators": [{"profile_id", "role"}]}` **replaces** the set. ≤10 entries, at most one `lead`, no duplicate `profile_id`, role ∈ `lead\|co\|ta`, every profile must exist (else 422 `validation_error` naming the entry). An identical set is a no-op (no audit row). Otherwise one audit row `workshop.facilitators` (actor `admin`, `workshop_id` set, detail `{added: [{profile_id, role}], removed: [profile_id], changed: [{profile_id, role}], by}` with ids and roles only) |
+| `POST /api/admin/workshops/{id}/facilitators` | admin | Body `{"profile_id", "role": "co"}` adds or updates one link (the **Link as facilitator** button); the same validations and audit; returns the full list |
+| `GET /api/me/workshops` | user | `{"workshops": [{"workshop_id", "name", "status", "role", "facilitator_url", "linked_at"}]}` for the caller's profile only; `facilitator_url = {base}/f/{admin_token}`. No profile → `{"workshops": []}` |
+
+Linking grants the trainer the workshop's existing facilitator link and nothing else; unlinking removes it from their page but does **not** rotate `admin_token` (anyone who already copied the link keeps access; rotating is out of scope).
+
+**`opportunity.workshop_id`:** the admin create/PATCH body and every admin payload (`admin_row`, `admin_full`) gain `workshop_id` (int or null). Validation: the workshop must exist; the listing's type must be `cofacilitation` (changing the type away while a workshop is set → 422 `validation_error` "workshop_id: only for co-facilitation listings"). It is in `changed_fields` for audit like any admin field and is never in public cards, public detail, the SEO block, the sitemap or any email.
+
+## Email templates added (C16 → C17)
+
+`network.alert` — subject `New opportunity: {{ title }}`; `network.digest` — subject `Your Workshop0 digest: {{ count }} new opportunities`. Both are plain-text + simple HTML with exactly one footer line (added by `render`), absolute links, no images, an unsubscribe line and a manage-preferences line in the body. The repeat section `{{#listings}}…{{/listings}}` renders each digest item (`title`, `partner`, `compensation`, `cities`, `url`). Alerts and digests honour the Phase-12 drain rules unchanged: SMTP unset → `recorded`; per-recipient and global limits → `recorded` with `rate_limited`; 3 attempts → `failed`.
 

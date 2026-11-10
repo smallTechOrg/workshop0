@@ -137,13 +137,15 @@ src/workshop0/
 │   ├── network_admin.py       ← P11: /api/admin/network/* (pool, invites, CSV, ai-spend); P12 pipeline/shortlist/outbox
 │   ├── outbox_admin.py        ← P12: /api/admin/outbox…
 │   ├── network_public.py      ← P13: /api/email/unsubscribe, /api/cron/weekly-digest
-│   └── directory_public.py    ← P13: /api/public/trainers[/{id}]
+│   ├── directory_public.py    ← P13: /api/public/trainers[/{slug}]
+│   └── seo.py                 ← P11e: /opportunities/{key}, /sitemap.xml, /robots.txt · P13: /trainers, /trainers/{slug}
 ├── auth/                      ← P11: THE identity module (swap seam) — oidc.py, sessions.py, deps.py, routes.py
 ├── services/
 │   ├── topics.py · opportunities.py   ← P10 (effective_status lives here) · partners.py ← P11b
 │   ├── profiles.py · invites.py · ratelimit.py · cv_text.py   ← P11
 │   ├── applications.py · matching.py  ← P12
-│   └── alerts.py · directory.py · tiein.py   ← P13
+│   ├── slugs.py · locations.py · seo.py · invites.py   ← P11c–11e (slugs: P13 adds a `fallback` keyword)
+│   └── alerts.py · listing_text.py · digest.py · unsubscribe.py · email_prefs.py · saved_searches.py · directory.py · tiein.py   ← P13
 ├── storage/                   ← P11: blobstore.py (BlobStore, LocalDiskStore, GcsStore)
 ├── ai/                        ← P11: anthropic_client.py (the only Anthropic client), pricing.py, usage.py, profile_draft.py, prompts/profile_draft_*.md · P11b: opportunity_draft.py, prompts/opportunity_draft_*.md · P12: shortlist_rank.py, prompts/shortlist_rank_*.md (network AI = Anthropic; the help-desk's openrouter.py is a separate, future Phase-4 file)
 └── email/                     ← P12: outbox.py (enqueue — P12 schema slice), sender.py, smtp.py, templates/*.txt|*.html
@@ -151,7 +153,7 @@ frontend/
 ├── app/opportunities/{page,view/page}.tsx        ← P10 public board
 ├── app/admin/{opportunities/{page,edit/page},topics/page}.tsx   ← P10 admin · app/admin/partners/page.tsx ← P11b
 ├── components/admin/{partners,drafting}/        ← P11b (PartnerSelect; PasteToFill, DraftedChip)
-├── app/signin/page.tsx, app/network/{page,join/page,me/page}.tsx   ← P11 (P12: applications/, matches/; P13: directory/, trainer/, searches/, unsubscribed/)
+├── app/signin/page.tsx, app/network/{page,join/page,me/page}.tsx   ← P11 (P12: applications/, matches/; P13: directory/, trainer/, searches/, unsubscribed/; trainer/ is the client page behind the server-rendered `/trainers/{slug}`)
 ├── app/admin/network/{page,trainer/page}.tsx     ← P11 (P12: app/admin/outbox/, app/admin/opportunities/pipeline/)
 ├── components/{board,admin,network}/
 └── lib/{board,adminBoard}.ts (P10) · lib/{network,adminNetwork}.ts (P11) · lib/{adminPartners,adminDraft,compensation}.ts (P11b; compensation.ts is the only compensation formatter)
@@ -237,13 +239,18 @@ Two constraints the frontend slice must honour so this is safe (a generator must
 | Path | Serves | Auth | Phase |
 |---|---|---|---|
 | `/opportunities` → 307 `/app/opportunities/` | Public board | none | 10 |
-| `/opportunities/{id}` → 307 `/app/opportunities/view/?id={id}` | Public listing | none | 10 |
+| `/opportunities/{key}` — server-rendered HTML (numeric id → 301 to the slug); was 307 `/app/opportunities/view/?id={id}` | Public listing | none | 10, 11e |
+| `/sitemap.xml`, `/robots.txt` | Crawler files (listings; from 13 also `/trainers` and listed trainers) | none | 11e, 13 |
 | `/app/admin/opportunities/`, `/app/admin/opportunities/edit/`, `/app/admin/topics/` | Admin board tooling | admin key (P11+: or admin session) | 10 |
 | `/app/admin/partners/` | Partner list | admin | 11b |
 | `/app/signin/`, `/app/network/`, `/app/network/join/`, `/app/network/me/` | Sign-in, network home, onboarding, my profile | session | 11 |
 | `/invite/{token}` → 307 `/app/network/join/?invite={token}`; `/network` → 307 `/app/network/` | Invite + pretty network link | none | 11 |
 | `/app/admin/network/`, `/app/admin/network/trainer/` | Trainer pool | admin | 11 |
 | `/api/auth/google/callback` | OIDC redirect URI | — | 11 |
+| `/app/network/applications/`, `/app/network/matches/`, `/app/admin/opportunities/pipeline/`, `/app/admin/outbox/` | Applications, matched listings, pipeline, outbox | session / admin | 12 |
+| `/trainers` → 307 `/app/network/directory/` · `/trainers/{slug}` server-rendered (SEO block, `Person` JSON-LD) | Public trainer directory and profile | none | 13 |
+| `/app/network/directory/`, `/app/network/trainer/` (client route behind `/trainers/{slug}`), `/app/network/searches/`, `/app/network/unsubscribed/` | Directory, trainer view, saved searches + email preferences, unsubscribe result | none / session / none | 13 |
+| `GET /api/email/unsubscribe`, `POST /api/cron/weekly-digest` | One-click unsubscribe (signed token), weekly digest trigger (`X-Cron-Key`; 404 when the key is unset) | token / cron key | 13 |
 
 Pretty redirects live in `src/workshop0/api/__init__.py` with the existing ones (declared before the `/app` mount). Every new page is a static-export route; dynamic ids travel as query params (`?id=`), exactly like `?t=` on the workshop pages. Pages under `/app/opportunities/` read their query with `useSearchParams` inside a `<Suspense>` boundary (required for static export). Public board pages fetch from the browser (no build-time data), so the export stays data-free.
 
@@ -277,9 +284,15 @@ Pretty redirects live in `src/workshop0/api/__init__.py` with the existing ones 
 
 Transactional outbox: `email/outbox.py::enqueue(session, *, to, template, context, dedupe_key=None)` inserts a row **in the caller's transaction** (unique `dedupe_key` → silently no second row). After commit, a BackgroundTask runs `email/sender.py::drain(limit=20)`: claims `queued` rows (`FOR UPDATE SKIP LOCKED` on PostgreSQL), renders `email/templates/<template>.{txt,html}` (subject on the first line of the `.txt`), sends via `smtp.py`, marks `sent`, or increments `attempts` and marks `failed` after 3. Without SMTP host/user/password, rows are marked `recorded` (shown as "not sent") and logged (`email.recorded`, recipient masked); production boots and runs this way when the SMTP secret is absent. Messages are multipart (plain text + simple HTML), one footer line, no tracking pixels. Per-recipient (10/h) and global (100/h) rate limits are applied at drain time (excess → `recorded`, `rate_limited`). Links use `WORKSHOP0_BASE_URL`, and listing links the slug URL. The password is never logged. Tests use an in-process `aiosmtpd` fake only. Admin page load of the outbox also triggers a drain (self-healing after restarts — no scheduler).
 
+**Phase 13 additions.** Two templates join the allow-list: `network.alert` and `network.digest`. `render` gains one construct, a repeat section `{{#listings}}…{{/listings}}` over a list of flat dicts (inner variables resolve from the item first and are HTML-escaped in the `.html` part; no nesting), so the digest needs no HTML built outside the template. `email_pref` (alerts, digest) is consulted when the row is **enqueued**, never at drain time, and applies to those two templates only; transactional mail ignores it. Listing text for `opportunity.invite`, `network.alert` and `network.digest` comes from one helper, `services/listing_text.py::listing_fields` (partner display name, compensation with unit, every city, slug URL). Unsubscribe links are `{base}/api/email/unsubscribe?t=<token>` with the token signed by `WORKSHOP0_SESSION_SECRET`, which production already has, so Phase 13 needs **no new secret**. Bursts (a publish matching many searches, the weekly digest) drain through `schedule_drain(background, limit=100)`; SMTP unset still ends every row `recorded`.
+
 ### Scheduled work (Phase 13)
 
-The only scheduled job is the weekly digest: a Cloud Scheduler job `workshop0-weekly-digest` (Mondays 09:00 `Asia/Kolkata`) POSTs `/api/cron/weekly-digest` with header `X-Cron-Key` (secret `workshop0-cron-key`). The endpoint is idempotent per ISO week (dedupe keys), so a retry or a double fire sends nothing twice. Alerts are not scheduled — they are enqueued in the transaction that makes a listing open.
+The only scheduled job is the **optional** weekly digest. `POST /api/cron/weekly-digest` requires header `X-Cron-Key` equal to `WORKSHOP0_CRON_KEY`; with the setting blank the path answers **404**, which is the production default until an operator opts in (deploy/RUNBOOK.md: store a secret `workshop0-cron-key`, apply the proposed conditional mapping, create the Cloud Scheduler job `workshop0-weekly-digest`, Mondays 09:00 `Asia/Kolkata`). The endpoint is idempotent per ISO week (dedupe keys `digest:{user}:{YYYY-Www}`), so a retry or double fire sends nothing twice, and it works on any instance because the dedupe lives in the database. Alerts are not scheduled: they are enqueued inside the transaction that makes a listing open (in a SAVEPOINT, so a failure never blocks publishing), and expire-on-read means a listing that reopens through a later deadline is treated as a new open transition, de-duplicated by `alert:{opportunity}:{user}`.
+
+### Public directory (Phase 13)
+
+Opt-in and allow-listed, mirroring the board: `services/directory.py` is the only code that builds a public trainer payload, from an explicit field list (like `opportunities.public_card`), so rates, email, CV, notes and tags are structurally unreachable. A profile is listed when `visibility = 'public'`, completeness ≥ 60 % and a `public_slug` exists. Completeness is evaluated in Python with batch-loaded topic counts and CV presence; at hundreds of trainers that is cheaper than a second source of truth in SQL. URLs are `/trainers/{slug}` (server-rendered in `api/seo.py` with the exported `network/trainer` page as template, as listings are), never numeric ids. The sitemap and robots extensions are in api.md §Phase 13.
 
 ## Live-update mechanism: versioned coalesced polling (decision + justification)
 
@@ -395,7 +408,7 @@ The credential table above is **unchanged**. Creation simply stops requiring the
 | `WORKSHOP0_SMTP_HOST` / `_PORT` / `_STARTTLS` | no (P12) | `smtp.gmail.com` / `587` / `1` | SMTP server; tests use a local `aiosmtpd` sink with STARTTLS `0` |
 | `WORKSHOP0_SMTP_USER` / `WORKSHOP0_SMTP_PASSWORD` | no (P12) | — | Gmail address + app password; either empty ⇒ outbox records, never sends; never logged. Not in Secret Manager until the operator runs `provision.sh --rotate workshop0-smtp-password` and applies the proposed workflow mapping (RUNBOOK) |
 | `WORKSHOP0_SMTP_FROM` | no (P12) | `Workshop0 <SMTP_USER>` | From header |
-| `WORKSHOP0_CRON_KEY` | no (P13) | — | Shared secret for `/api/cron/*`; empty ⇒ cron endpoints return 404 |
+| `WORKSHOP0_CRON_KEY` | no (P13) | — | Shared secret for `/api/cron/*` (header `X-Cron-Key`); empty ⇒ cron endpoints return 404. Optional: production runs without it (digest off) until the operator follows the RUNBOOK; CI passes a test value to the `:8001` and `:8013` e2e instances and leaves it empty on `:8014` |
 
 ## Deploy shape
 
@@ -477,9 +490,9 @@ Single source of truth for every name (Phase 9). Each entry replaces the same-ki
 | GitHub Actions variable | `WORKSHOP0_BASE_URL` |
 | Import bucket (transient) | `ai-agent-boilerplate0-workshop0-import-<rand>` |
 | CV bucket (Phase 11) | `ai-agent-boilerplate0-workshop0-cvs` (`us-central1`, private, uniform access, public-access prevention); `workshop0-run` has `roles/storage.objectAdmin` on it only, plus `roles/iam.serviceAccountTokenCreator` on itself (V4 signed URLs) |
-| Network secrets | `workshop0-google-client-secret` (P11, value from the operator), `workshop0-session-secret` (P11, generated), `workshop0-anthropic-api-key` + `workshop0-anthropic-workspace-id` (P11, values from the operator), `workshop0-smtp-password` (P12, Gmail app password), `workshop0-cron-key` (P13, generated) |
+| Network secrets | `workshop0-google-client-secret` (P11, value from the operator), `workshop0-session-secret` (P11, generated), `workshop0-anthropic-api-key` + `workshop0-anthropic-workspace-id` (P11, values from the operator), `workshop0-smtp-password` (P12, Gmail app password, optional), `workshop0-cron-key` (P13, **optional**, operator-chosen value; `provision.sh` skips it when no value is given and never generates one, so a fresh Phase-13 deploy needs no new secret) |
 | GitHub Actions variables (network) | `WORKSHOP0_GOOGLE_CLIENT_ID`, `WORKSHOP0_ADMIN_EMAILS` (P11), `WORKSHOP0_SMTP_USER` (P12; proposal only, workflow unchanged in Phase 12) |
-| Cloud Scheduler job (Phase 13) | `workshop0-weekly-digest` (`us-central1`) |
+| Cloud Scheduler job (Phase 13, optional) | `workshop0-weekly-digest` (`us-central1`), created by the operator from the RUNBOOK, not by `provision.sh` or the workflow |
 
 The three permitted survivals of the previous name in the repository are: the git tag `vm-deploy-final` (it contains no legacy word), the operator's local backup directory path and one historical sentence ("Workshop0 was previously called Workshop <previous name>") in `deploy/RUNBOOK.md`, plus the `LEGACY-COMPAT` shim lines described above.
 
