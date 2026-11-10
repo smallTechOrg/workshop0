@@ -15,7 +15,26 @@ CTX = {
     "invite_url": "http://base.test/invite/tok",
     "expires_at": "2026-12-01",
     "status": "not_selected",
+    "search_names": "Pune workshops",
+    "unsubscribe_url": "http://base.test/api/email/unsubscribe?t=x",
+    "manage_url": "http://base.test/app/network/searches/",
+    "board_url": "http://base.test/app/opportunities/",
+    "count": 1,
+    "more": 0,
+    "listings": [{"title": "T", "partner": "P", "compensation": "C", "cities": ["Pune"], "url": "http://base.test/opportunities/t"}],
 }
+
+
+def test_templates_exact_set():
+    assert set(TEMPLATES) == {
+        "network.welcome",
+        "network.invite",
+        "opportunity.invite",
+        "application.received",
+        "application.status_changed",
+        "network.alert",
+        "network.digest",
+    }
 
 
 @pytest.mark.parametrize("template", TEMPLATES)

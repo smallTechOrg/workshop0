@@ -19,7 +19,7 @@ MAX_SHORT_COLLISIONS = 5
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 
-def slug_base(title: str, first_city: str | None) -> str:
+def slug_base(title: str, first_city: str | None, *, fallback: str = FALLBACK_BASE) -> str:
     """NFKD → drop non-ASCII → lower → runs of non-[a-z0-9] → '-' → trim → cut at 60
     on a word boundary → trim. Empty → 'opportunity'."""
     raw = f"{title} {first_city}" if first_city else title
@@ -30,7 +30,7 @@ def slug_base(title: str, first_city: str | None) -> str:
         if base[BASE_MAX] != "-" and "-" in cut:  # the cut fell inside a word
             cut = cut[: cut.rindex("-")]
         base = cut.strip("-")
-    return base or FALLBACK_BASE
+    return base or fallback
 
 
 def new_suffix(nbytes: int = SUFFIX_BYTES) -> str:

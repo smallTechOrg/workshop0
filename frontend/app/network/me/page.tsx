@@ -6,8 +6,8 @@
  * Completeness meter + top-3 nudges, the Verified badge when granted, every
  * field editable through the shared ProfileForm (`PATCH /api/me/profile`), the
  * owner's own CV (download + replace), the danger zone, and the labelled stubs
- * for My applications / Matched for you (Phase 12) and Saved searches / Public
- * directory profile (Phase 13).
+ * for My applications / Matched for you (Phase 12), directory visibility, email
+ * preferences and the owner's linked workshops.
  *
  *   signed out   → sign-in card (back here)
  *   no profile   → onboarding `/app/network/join/`
@@ -19,12 +19,16 @@ import { useRouter } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { useCurrentUser } from "@/lib/networkAuth";
+import { getEmailPrefs, setEmailPrefs, type EmailPrefs } from "@/lib/networkSearches";
 import {
   OWN_CV_URL,
   RATE_UNIT_LABELS,
   getProfile,
   normalizeProfileInput,
   patchProfile,
+  setVisibility,
+  listMyWorkshops,
+  type MyWorkshop,
   type OwnProfile,
   type OwnProfilePayload,
   type ProfileInput,
@@ -33,7 +37,6 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { StubCard } from "@/components/ui/StubBadge";
 import { GoogleButton } from "@/components/network/auth/GoogleButton";
 import { NetworkShell } from "@/components/network/profile/NetworkShell";
 import { CompletenessMeter } from "@/components/network/profile/CompletenessMeter";
@@ -232,15 +235,222 @@ function ComingSoon() {
             Opportunities that fit your topics, level and availability.
           </p>
         </a>
-        <StubCard
-          title="Saved searches & alerts"
-          description="Save a board search and get an email when a new listing matches."
-        />
-        <StubCard
-          title="Public directory profile"
-          description="Choose whether partners can find you in a public trainer directory."
-        />
+        <a
+          href="/app/network/searches/"
+          data-testid="link-searches"
+          className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm hover:border-brand-300"
+        >
+          <h3 className="text-sm font-semibold text-stone-900">Saved searches &amp; alerts</h3>
+          <p className="mt-1.5 text-sm text-stone-600">
+            Manage your saved board searches and the emails they send.
+          </p>
+        </a>
       </div>
+    </section>
+  );
+}
+
+function DirectoryCard({
+  profile,
+  pct,
+  onChange,
+}: {
+  profile: OwnProfile;
+  pct: number;
+  onChange: (p: OwnProfilePayload) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const isPublic = (profile.directory?.visibility ?? profile.visibility) === "public";
+  const min = profile.directory?.min_completeness ?? 60;
+  const listed = profile.directory?.listed ?? false;
+  const path = profile.directory?.path ?? null;
+
+  async function toggle() {
+    setBusy(true);
+    setErr(null);
+    try {
+      onChange(await setVisibility(isPublic ? "private" : "public"));
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not update your directory setting.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  let status: string;
+  if (!isPublic) status = "Private — partners can't find you in the directory.";
+  else if (listed) status = "Listed";
+  else status = `Complete your profile to ${min}% to be listed (you're at ${pct}%).`;
+
+  return (
+    <section aria-labelledby="directory-title">
+      <Card className="space-y-3 p-4" data-testid="directory-card">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 id="directory-title" className="font-semibold text-stone-900">
+              Public directory profile
+            </h2>
+            <p className="mt-0.5 text-sm text-stone-600">
+              Show a public page (name, headline, topics, links — never your email, rates or CV).
+            </p>
+          </div>
+          <label className="inline-flex items-center gap-2 text-sm font-medium text-stone-800">
+            <input
+              type="checkbox"
+              role="switch"
+              data-testid="directory-toggle"
+              checked={isPublic}
+              disabled={busy}
+              onChange={() => void toggle()}
+              className="size-4"
+            />
+            List me
+          </label>
+        </div>
+        <p className="text-sm text-stone-700" data-testid="directory-status" aria-live="polite">
+          {status}
+        </p>
+        {isPublic && listed && path && (
+          <a
+            href={path}
+            data-testid="directory-link"
+            className="text-sm font-medium text-brand-700 underline underline-offset-4"
+          >
+            View my public page
+          </a>
+        )}
+        {err && (
+          <p role="alert" className="text-sm text-red-700">
+            {err}
+          </p>
+        )}
+      </Card>
+    </section>
+  );
+}
+
+function EmailPrefsCard() {
+  const [prefs, setPrefs] = useState<EmailPrefs | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    setErr(null);
+    getEmailPrefs().then(setPrefs, () => setErr("We couldn't load your email preferences."));
+  }, []);
+  useEffect(() => load(), [load]);
+
+  async function flip(key: keyof EmailPrefs) {
+    if (!prefs) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      setPrefs(await setEmailPrefs({ [key]: !prefs[key] }));
+    } catch {
+      setErr("We couldn't save that change — try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section aria-labelledby="prefs-title">
+      <Card className="space-y-3 p-4" data-testid="email-prefs">
+        <h2 id="prefs-title" className="font-semibold text-stone-900">
+          Email preferences
+        </h2>
+        {!prefs && !err && <Skeleton className="h-10 w-full" />}
+        {err && (
+          <div role="alert" className="flex items-center gap-3 text-sm text-red-700">
+            {err}
+            {!prefs && (
+              <Button size="sm" variant="secondary" onClick={load}>
+                Try again
+              </Button>
+            )}
+          </div>
+        )}
+        {prefs && (
+          <div className="space-y-2">
+            {(
+              [
+                ["alerts", "email-pref-alerts", "New-listing alerts for my saved searches"],
+                ["digest", "email-pref-digest", "Weekly digest of matching opportunities"],
+              ] as const
+            ).map(([key, id, label]) => (
+              <label key={key} className="flex items-center gap-2 text-sm text-stone-800">
+                <input
+                  type="checkbox"
+                  role="switch"
+                  data-testid={id}
+                  checked={prefs[key]}
+                  disabled={busy}
+                  onChange={() => void flip(key)}
+                  className="size-4"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+        )}
+      </Card>
+    </section>
+  );
+}
+
+function MyWorkshops() {
+  const [rows, setRows] = useState<MyWorkshop[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    listMyWorkshops().then(
+      (d) => setRows(d.workshops),
+      () => setErr("We couldn't load your workshops."),
+    );
+  }, []);
+  return (
+    <section aria-labelledby="workshops-title">
+      <Card className="space-y-3 p-4" data-testid="my-workshops">
+        <h2 id="workshops-title" className="font-semibold text-stone-900">
+          My Workshop0 workshops
+        </h2>
+        {err && (
+          <p role="alert" className="text-sm text-red-700">
+            {err}
+          </p>
+        )}
+        {!rows && !err && <Skeleton className="h-10 w-full" />}
+        {rows && rows.length === 0 && (
+          <p className="text-sm text-stone-500" data-testid="workshops-empty">
+            Workshops you facilitate will show up here once smallTech links you to one.
+          </p>
+        )}
+        {rows && rows.length > 0 && (
+          <ul className="divide-y divide-stone-100">
+            {rows.map((w) => (
+              <li
+                key={w.workshop_id}
+                data-testid="workshop-row"
+                className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+              >
+                <span>
+                  <span className="font-medium text-stone-900">{w.name}</span>
+                  <span className="ml-2 text-stone-500">
+                    {w.role} · {w.status}
+                  </span>
+                </span>
+                <a
+                  href={w.facilitator_url}
+                  data-testid="workshop-dashboard-link"
+                  className="font-medium text-brand-700 underline underline-offset-4"
+                >
+                  Open dashboard
+                </a>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
     </section>
   );
 }
@@ -385,6 +595,13 @@ export default function MyProfilePage() {
             onSubmit={(input) => save(input)}
           />
         </div>
+        <DirectoryCard
+          profile={profile}
+          pct={completeness.pct}
+          onChange={(p) => setLoad({ kind: "ready", payload: p })}
+        />
+        <EmailPrefsCard />
+        <MyWorkshops />
         <ComingSoon />
         <DeleteAccount
           email={profile.email}

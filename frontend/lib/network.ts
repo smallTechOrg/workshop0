@@ -198,6 +198,23 @@ export interface OwnProfileTopic extends ProfileTopic {
   name: string;
 }
 
+/** `profile.directory` — spec/api.md §Phase 13. */
+export interface OwnDirectory {
+  visibility: "private" | "public";
+  listed: boolean;
+  path: string | null;
+  min_completeness: number;
+}
+
+export interface MyWorkshop {
+  workshop_id: number;
+  name: string;
+  status: string;
+  role: string;
+  facilitator_url: string;
+  linked_at: string;
+}
+
 /** OwnProfile (`profiles.own_profile`) — the ONLY non-admin payload carrying rates, email, CV. */
 export interface OwnProfile extends Omit<ProfileInput, "topics"> {
   id: number;
@@ -206,6 +223,7 @@ export interface OwnProfile extends Omit<ProfileInput, "topics"> {
   avatar_url: string | null;
   topics: OwnProfileTopic[];
   visibility: string;
+  directory?: OwnDirectory;
   verified: boolean;
   verified_at: string | null;
   consent_at: string;
@@ -504,4 +522,14 @@ export function splitFieldError(message: string): { field: string | null; messag
   const m = /^([a-z_]+)(?:\.[\w.]+)?:\s*([\s\S]+)$/.exec(message.trim());
   if (!m) return { field: null, message };
   return { field: m[1], message: m[2] };
+}
+
+/** `PATCH /api/me/profile` with only `visibility` (leaves autofilled_fields untouched). */
+export function setVisibility(visibility: "private" | "public"): Promise<OwnProfilePayload> {
+  return call("/api/me/profile", { method: "PATCH", body: JSON.stringify({ visibility }) });
+}
+
+/** `GET /api/me/workshops`. */
+export function listMyWorkshops(): Promise<{ workshops: MyWorkshop[] }> {
+  return call("/api/me/workshops");
 }

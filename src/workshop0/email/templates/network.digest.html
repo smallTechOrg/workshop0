@@ -1,0 +1,7 @@
+<p>Hi {{ name }},</p>
+<p>Here are this week's new opportunities that match your saved searches.</p>
+<ul>
+{{#listings}}<li><a href="{{ url }}">{{ title }}</a> ({{ partner }}) - {{ compensation }} - {{ cities }}</li>
+{{/listings}}</ul>
+{{#more}}<p>+{{ more }} more on the <a href="{{ board_url }}">board</a></p>{{/more}}
+<p><a href="{{ unsubscribe_url }}">Unsubscribe from the weekly digest</a> | <a href="{{ manage_url }}">Manage your searches and email preferences</a></p>

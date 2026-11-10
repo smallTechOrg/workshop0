@@ -137,5 +137,14 @@ export default function NetworkHomePage() {
     );
   }
 
-  return <NetworkShell>{content}</NetworkShell>;
+  return (
+    <NetworkShell>
+      {content}
+      <p className="pb-8 text-center text-sm text-stone-500">
+        <a data-testid="link-directory" className="underline underline-offset-4" href="/trainers">
+          Browse the trainer directory
+        </a>
+      </p>
+    </NetworkShell>
+  );
 }

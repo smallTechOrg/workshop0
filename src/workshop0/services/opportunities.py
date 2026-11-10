@@ -13,6 +13,7 @@
 import json
 import math
 import re
+from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
@@ -31,6 +32,7 @@ from src.workshop0.db.models import (
     OpportunityTopic,
     Partner,
     Topic,
+    Workshop,
 )
 from src.workshop0.services import locations as loc
 from src.workshop0.services import slugs
@@ -100,6 +102,7 @@ FIELDS = (
     "deadline",
     "partner_display_name",
     "partner_id",
+    "workshop_id",  # Phase 13, admin-only
     "internal_notes",
     "status",
 )
@@ -229,6 +232,7 @@ class OpportunityPatch(BaseModel):
     deadline: datetime | None = None
     partner_display_name: str | None = None
     partner_id: StrictInt | None = None
+    workshop_id: StrictInt | None = None  # Phase 13, admin-only; cofacilitation listings only
     partner_internal_name: str | None = None  # legacy: resolved to a partner, never stored as input
     internal_notes: str | None = None
     status: str | None = None
@@ -481,6 +485,7 @@ def admin_row(
         "deadline": iso_z(opp.deadline),
         "partner_display_name": opp.partner_display_name,
         "partner_id": opp.partner_id,
+        "workshop_id": opp.workshop_id,  # admin payloads only (api.md §Phase 13)
         "partner": partner_ref(partner) if partner is not None else None,
         "partner_internal_name": partner.internal_name if partner is not None else None,
         "status": effective_status(opp, now),
@@ -791,6 +796,27 @@ def _validate_compensation(merged: dict) -> None:
         raise validation_error("compensation_unit: required with an amount")
 
 
+def _validate_workshop(session: Session, merged: dict) -> None:
+    workshop_id = merged.get("workshop_id")
+    if workshop_id is None:
+        return
+    if merged["type"] != "cofacilitation":
+        raise validation_error("workshop_id: only for co-facilitation listings")
+    if not (1 <= workshop_id <= ID_MAX) or session.get(Workshop, workshop_id) is None:
+        raise validation_error("workshop_id: no workshop matches this id")
+
+
+def _enqueue_alerts_safely(session: Session, opp: Opportunity, base_url: str) -> None:
+    """Phase 13 hook: runs in the caller's transaction inside a SAVEPOINT; never raises."""
+    from src.workshop0.services import alerts
+
+    try:
+        with session.begin_nested():
+            alerts.enqueue_alerts_for(session, opp, base_url=base_url)
+    except Exception as error:  # noqa: BLE001 - an alert failure must never fail the write
+        log.error("alerts.enqueue_failed", opportunity_id=opp.id, error=type(error).__name__)
+
+
 def _validate_budget(merged: dict) -> None:
     """Phase 12 admin-only budget: same shape rules as the public compensation."""
     low, high = merged["budget_min"], merged["budget_max"]
@@ -855,6 +881,7 @@ def _validate_merged(
         )
     _validate_compensation(merged)
     _validate_budget(merged)
+    _validate_workshop(session, merged)
     if merged["starts_on"] and merged["ends_on"] and merged["ends_on"] < merged["starts_on"]:
         raise validation_error("ends_on: must be on or after starts_on")
     # Publish rule (data-model.md): a write whose result is stored `open` and which
@@ -980,7 +1007,12 @@ def _flush_with_slug_retry(session: Session, opp: Opportunity, base: str, slug: 
 
 
 def create_opportunity(
-    session: Session, body: OpportunityCreate, *, base_url: str, by: str = ADMIN_BY
+    session: Session,
+    body: OpportunityCreate,
+    *,
+    base_url: str,
+    by: str = ADMIN_BY,
+    on_opened: Callable[[], None] | None = None,
 ) -> dict:
     now = utcnow()
     provided = body.model_dump()
@@ -1017,7 +1049,12 @@ def create_opportunity(
         subject_type="opportunity",
         subject_id=opp.id,
     )
+    opened = effective_status(opp, now) == "open"
+    if opened:
+        _enqueue_alerts_safely(session, opp, base_url)
     session.commit()
+    if opened and on_opened is not None:
+        on_opened()
     log.info("opportunity.created", opportunity_id=opp.id, type=opp.type, status=opp.status)
     return _full(session, opp, base_url)
 
@@ -1029,6 +1066,7 @@ def update_opportunity(
     *,
     base_url: str,
     by: str = ADMIN_BY,
+    on_opened: Callable[[], None] | None = None,
 ) -> dict:
     opp = _get_or_404(session, opportunity_id)
     now = utcnow()
@@ -1062,6 +1100,7 @@ def update_opportunity(
         session.commit()  # a legacy name that resolved to the same partner writes nothing
         return _full(session, opp, base_url)  # no-op: no write, no audit row
 
+    was_open = effective_status(opp, now) == "open"
     _apply(opp, merged, partner)
     new_slug = _recompute_draft_slug(session, opp, merged)  # before a publish below freezes it
     if new_slug is not None:
@@ -1087,7 +1126,13 @@ def update_opportunity(
         session, None, ADMIN_ACTOR, action, detail,
         subject_type="opportunity", subject_id=opp.id,
     )
+    opened = not was_open and effective_status(opp, now) == "open"
+    if opened:
+        session.flush()
+        _enqueue_alerts_safely(session, opp, base_url)
     session.commit()
+    if opened and on_opened is not None:
+        on_opened()
     if status_changed:
         log.info(
             "opportunity.status_changed",

@@ -1,4 +1,6 @@
-/** Admin workshop facilitators client. spec/api.md §Phase 13. Stub: slice F5 implements. */
+/** Admin workshop facilitators client. spec/api.md §Phase 13. */
+
+import { ApiError } from "@/lib/api";
 
 export type FacilitatorRole = "lead" | "co" | "ta";
 
@@ -12,35 +14,72 @@ export interface Facilitator {
   created_at: string;
 }
 
-const NOT_IMPLEMENTED = "adminFacilitators: not implemented (Phase 13 slice F5)";
+async function request<T>(adminKey: string, path: string, init: RequestInit = {}): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      cache: "no-store",
+      credentials: "include",
+      ...init,
+      headers: {
+        Accept: "application/json",
+        ...(adminKey ? { "X-Admin-Key": adminKey } : {}),
+        "X-Requested-With": "workshop0",
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+      },
+    });
+  } catch {
+    throw new ApiError("network_error", "Could not reach the server — check your connection.", 0);
+  }
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch {
+    // non-JSON body — fall through to status handling
+  }
+  if (!res.ok) {
+    const detail = (body as { detail?: { code?: string; message?: string } } | null)?.detail;
+    throw new ApiError(
+      detail?.code ?? "internal_error",
+      detail?.message ?? `The server returned an unexpected error (${res.status}).`,
+      res.status,
+    );
+  }
+  return (body as { data: T }).data;
+}
 
-export async function getFacilitators(
+const url = (workshopId: number) => `/api/admin/workshops/${workshopId}/facilitators`;
+
+export function getFacilitators(
   adminKey: string,
   workshopId: number,
 ): Promise<{ facilitators: Facilitator[] }> {
-  void adminKey;
-  void workshopId;
-  throw new Error(NOT_IMPLEMENTED);
+  return request(adminKey, url(workshopId));
 }
 
-export async function putFacilitators(
+/** Replaces the whole set (an empty list unlinks everyone). */
+export function putFacilitators(
   adminKey: string,
   workshopId: number,
   facilitators: { profile_id: number; role: FacilitatorRole }[],
 ): Promise<{ facilitators: Facilitator[] }> {
-  void adminKey;
-  void workshopId;
-  void facilitators;
-  throw new Error(NOT_IMPLEMENTED);
+  return request(adminKey, url(workshopId), {
+    method: "PUT",
+    body: JSON.stringify({ facilitators }),
+  });
 }
 
-export async function addFacilitator(
+/** Adds or updates one link. */
+export function addFacilitator(
   adminKey: string,
   workshopId: number,
   body: { profile_id: number; role: FacilitatorRole },
 ): Promise<{ facilitators: Facilitator[] }> {
-  void adminKey;
-  void workshopId;
-  void body;
-  throw new Error(NOT_IMPLEMENTED);
+  return request(adminKey, url(workshopId), { method: "POST", body: JSON.stringify(body) });
 }
+
+export const ROLE_LABELS: Record<FacilitatorRole, string> = {
+  lead: "Lead",
+  co: "Co-facilitator",
+  ta: "Teaching assistant",
+};

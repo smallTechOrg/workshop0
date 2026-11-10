@@ -1,0 +1,14 @@
+Your Workshop0 digest: {{ count }} new opportunities
+Hi {{ name }},
+
+Here are this week's new opportunities that match your saved searches.
+{{#listings}}
+* {{ title }} ({{ partner }}) - {{ compensation }} - {{ cities }}
+  {{ url }}
+{{/listings}}
+{{#more}}
++{{ more }} more on the board: {{ board_url }}
+{{/more}}
+
+Unsubscribe from the weekly digest: {{ unsubscribe_url }}
+Manage your searches and email preferences: {{ manage_url }}

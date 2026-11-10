@@ -6,6 +6,7 @@ import { ApiError, joinInfo, joinWorkshop, type JoinInfo } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { JoinNetworkCard } from "@/components/participant/JoinNetworkCard";
 import { Markdown } from "@/components/ui/Markdown";
 
 function JoinSkeleton() {
@@ -295,6 +296,9 @@ function JoinInner() {
             Join workshop
           </Button>
         </form>
+        <div className="mt-6">
+          <JoinNetworkCard />
+        </div>
       </Card>
     </main>
   );

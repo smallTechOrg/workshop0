@@ -1,0 +1,15 @@
+New opportunity: {{ title }}
+Hi {{ name }},
+
+A new opportunity matches your saved search: {{ search_names }}.
+
+{{ title }}
+Partner: {{ partner }}
+Compensation: {{ compensation }}
+Cities: {{ cities }}
+
+View it here: {{ url }}
+
+Matches your saved search: {{ search_names }}
+Unsubscribe from alerts: {{ unsubscribe_url }}
+Manage your searches and email preferences: {{ manage_url }}

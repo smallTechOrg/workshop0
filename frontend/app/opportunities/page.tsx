@@ -30,6 +30,7 @@ import { JoinNetworkCta } from "@/components/board/JoinNetworkCta";
 import { OpportunityCard, OpportunityCardSkeleton } from "@/components/board/OpportunityCard";
 import { TopicFilter, TypeAndSortBar, type TopicsState } from "@/components/board/FilterBar";
 import { Pagination } from "@/components/board/Pagination";
+import { SaveSearchButton } from "@/components/board/SaveSearchButton";
 
 type ListState =
   | { kind: "loading" }
@@ -239,6 +240,7 @@ function BoardInner() {
             onClear={() => navigate({ ...query, topics: [], page: 1 })}
             onRetry={() => setTopicsAttempt((n) => n + 1)}
           />
+          <SaveSearchButton type={query.type ?? ""} topics={query.topics} />
         </aside>
 
         <div ref={resultsRef} className="min-w-0 scroll-mt-4">

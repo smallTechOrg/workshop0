@@ -4,12 +4,13 @@ Thin HTTP layer: validation, status rules, audit and logging live in
 services/opportunities.py and services/topics.py.
 """
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from src.workshop0.api._common import ok, request_base_url
 from src.workshop0.auth.deps import AdminActor, require_admin
 from src.workshop0.db.session import get_session
+from src.workshop0.email import sender
 from src.workshop0.security import require_admin_key
 from src.workshop0.services import opportunities, topics
 from src.workshop0.services.opportunities import (
@@ -53,11 +54,13 @@ def list_opportunities(
 def create_opportunity(
     body: OpportunityCreate,
     request: Request,
+    background: BackgroundTasks,
     actor: AdminActor = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> dict:
     created = opportunities.create_opportunity(
-        session, body, base_url=request_base_url(request), by=actor.by
+        session, body, base_url=request_base_url(request), by=actor.by,
+        on_opened=lambda: sender.schedule_drain(background, limit=100),
     )
     return ok({"opportunity": created})
 
@@ -75,12 +78,14 @@ def update_opportunity(
     opportunity_id: str,
     body: OpportunityPatch,
     request: Request,
+    background: BackgroundTasks,
     actor: AdminActor = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> dict:
     oid = parse_path_id(opportunity_id, NOT_FOUND_MESSAGE)
     updated = opportunities.update_opportunity(
-        session, oid, body, base_url=request_base_url(request), by=actor.by
+        session, oid, body, base_url=request_base_url(request), by=actor.by,
+        on_opened=lambda: sender.schedule_drain(background, limit=100),
     )
     return ok({"opportunity": updated})
 

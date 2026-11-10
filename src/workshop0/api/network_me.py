@@ -19,7 +19,8 @@ from src.workshop0.auth.deps import CurrentUser, require_user
 from src.workshop0.db.session import create_db_session, get_session
 from src.workshop0.auth.routes import clean_invite_token
 from src.workshop0.email import sender
-from src.workshop0.services import applications, invites, profiles
+from src.workshop0.services import applications, email_prefs, invites, profiles, saved_searches, tiein
+from src.workshop0.services.audit import record_action
 from src.workshop0.services.profiles import ProfileCreate, ProfilePatch
 from src.workshop0.services.ratelimit import enforce, hit
 
@@ -31,6 +32,7 @@ SESSION_COOKIE = "workshop0_session"
 CV_LIMIT, CV_WINDOW_S = 10, 3600  # CV upload/paste: 10/h/user
 DRAFT_LIMIT, DRAFT_WINDOW_S = 600, 3600  # profile drafting: 600/h global (cost guard)
 DRAFT_BUCKET = "draft:global"
+SEARCHES_LIMIT, SEARCHES_WINDOW_S = 60, 3600  # saved-search creates: 60/h/user
 INVITE_ACCEPT_LIMIT, INVITE_ACCEPT_WINDOW_S = 20, 3600  # direct invite accept: 20/h/user
 
 
@@ -234,3 +236,93 @@ def matched_for_you(
     session: Session = Depends(get_session),
 ) -> dict:
     return ok(applications.matches(session, user.id, base_url=request_base_url(request)))
+
+
+# --------------------------------------------------------------------------- Phase 13
+
+
+@router.get("/searches")
+def list_searches(
+    user: CurrentUser = Depends(require_user), session: Session = Depends(get_session)
+) -> dict:
+    return ok({"searches": saved_searches.list_for(session, user.id), "limit": saved_searches.LIMIT})
+
+
+@router.post("/searches")
+def create_search(
+    body: dict[str, Any] = Body(default_factory=dict),
+    user: CurrentUser = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    enforce(session, f"searches:user:{user.id}", SEARCHES_LIMIT, SEARCHES_WINDOW_S)
+    payload = saved_searches.create(session, user.id, body)
+    session.commit()
+    return ok({"search": payload})
+
+
+@router.patch("/searches/{search_id}")
+def update_search(
+    search_id: int,
+    body: dict[str, Any] = Body(default_factory=dict),
+    user: CurrentUser = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    payload = saved_searches.update(session, user.id, search_id, body)
+    session.commit()
+    return ok({"search": payload})
+
+
+@router.delete("/searches/{search_id}")
+def delete_search(
+    search_id: int,
+    user: CurrentUser = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    saved_searches.delete(session, user.id, search_id)
+    session.commit()
+    return ok({"deleted": True})
+
+
+def _prefs_payload(prefs) -> dict:
+    return {"alerts": prefs.alerts, "digest": prefs.digest}
+
+
+@router.get("/email-prefs")
+def get_email_prefs(
+    user: CurrentUser = Depends(require_user), session: Session = Depends(get_session)
+) -> dict:
+    return ok(_prefs_payload(email_prefs.get(session, user.id)))
+
+
+@router.patch("/email-prefs")
+def patch_email_prefs(
+    body: dict[str, Any] = Body(default_factory=dict),
+    user: CurrentUser = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    changes = {}
+    for key in ("alerts", "digest"):
+        if key in body:
+            if not isinstance(body[key], bool):
+                raise profiles.validation_error(f"{key}: must be true or false")
+            changes[key] = body[key]
+    prefs = email_prefs.set_prefs(session, user.id, **changes)
+    profile = profiles.get_profile(session, user.id)
+    record_action(
+        session, None, "user", "email_pref.update", _prefs_payload(prefs),
+        subject_type="trainer" if profile else None, subject_id=profile.id if profile else None,
+    )
+    session.commit()
+    return ok(_prefs_payload(prefs))
+
+
+@router.get("/workshops")
+def my_workshops(
+    request: Request,
+    user: CurrentUser = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    profile = profiles.get_profile(session, user.id)
+    if profile is None:
+        return ok({"workshops": []})
+    return ok({"workshops": tiein.workshops_for(session, profile.id, base_url=request_base_url(request))})

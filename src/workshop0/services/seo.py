@@ -37,6 +37,9 @@ ROBOTS_LINES = (
     "Disallow: /api/",
     "Disallow: /network/me",
     "Disallow: /app/network/me/",
+    "Disallow: /app/network/trainer/",
+    "Disallow: /app/network/searches/",
+    "Disallow: /app/network/unsubscribed/",
     "Disallow: /app/opportunities/view/",
     "Disallow: /f/",
     "Disallow: /p/",
@@ -182,14 +185,81 @@ def render_listing_html(
     return page[: match.start()] + block + page[match.start() :]
 
 
-def render_sitemap(base_url: str, entries: list[tuple[str, date | datetime]]) -> str:
-    """`entries` = (public_url, updated_at) per effective-open listing, already ordered."""
+TRAINER_NOT_FOUND_TITLE = f"Trainer not available — {SITE_NAME}"
+
+
+def trainer_url(base_url: str, slug: str) -> str:
+    return f"{base_url}/trainers/{slug}"
+
+
+def build_person(trainer: dict, url: str) -> dict:
+    """schema.org Person from the `directory.get_public` dict only."""
+    person: dict = {
+        "@context": "https://schema.org",
+        "@type": "Person",
+        "name": trainer["display_name"],
+        "jobTitle": trainer.get("headline") or "",
+        "url": url,
+        "knowsAbout": [t["name"] for t in trainer.get("topics") or []],
+        "sameAs": [v for v in (trainer.get("links") or {}).values() if v],
+    }
+    if trainer.get("city"):
+        person["address"] = {"@type": "PostalAddress", "addressLocality": trainer["city"]}
+    return person
+
+
+def build_trainer_head_block(trainer: dict | None, base_url: str) -> str:
+    if trainer is None:
+        lines = [f"<title>{_esc(TRAINER_NOT_FOUND_TITLE)}</title>", NOINDEX]
+        return SEO_START + "\n".join(lines) + SEO_END
+    url = trainer_url(base_url, trainer["slug"])
+    headline = trainer.get("headline") or ""
+    title = _esc(f"{trainer['display_name']} — {headline} — {SITE_NAME}")
+    og_title = _esc(trainer["display_name"])
+    description = _esc(cut_description(f"{headline} {trainer.get('bio_md') or ''}"))
+    lines = [
+        f"<title>{title}</title>",
+        f'<meta name="description" content="{description}">',
+        f'<link rel="canonical" href="{_esc(url)}">',
+        '<meta property="og:type" content="profile">',
+        f'<meta property="og:site_name" content="{SITE_NAME}">',
+        f'<meta property="og:title" content="{title}">',
+        f'<meta property="og:description" content="{description}">',
+        f'<meta property="og:url" content="{_esc(url)}">',
+        '<meta name="twitter:card" content="summary">',
+        f'<meta name="twitter:title" content="{title}">',
+        f'<meta name="twitter:description" content="{description}">',
+        '<script type="application/ld+json">'
+        + json_for_script(build_person(trainer, url))
+        + "</script>",
+    ]
+    return SEO_START + "\n".join(lines) + SEO_END
+
+
+def render_trainer_html(template: str, trainer: dict | None, base_url: str) -> str:
+    page = _TITLE_RE.sub("", template)
+    page = _DESCRIPTION_RE.sub("", page)
+    block = build_trainer_head_block(trainer, base_url)
+    match = _HEAD_CLOSE_RE.search(page)
+    if match is None:
+        return block + page
+    return page[: match.start()] + block + page[match.start() :]
+
+
+def render_sitemap(
+    base_url: str,
+    entries: list[tuple[str, date | datetime]],
+    trainer_entries: list[tuple[str, date | datetime]] | None = None,
+) -> str:
+    """`entries` = (public_url, updated_at) per effective-open listing, already ordered.
+    `trainer_entries` = (slug, updated_at) per listed trainer, directory order."""
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
         f"<url><loc>{xml_escape(base_url + '/opportunities')}</loc></url>",
+        f"<url><loc>{xml_escape(base_url + '/trainers')}</loc></url>",
     ]
-    for url, updated in entries:
+    for url, updated in [*entries, *((trainer_url(base_url, s), u) for s, u in trainer_entries or [])]:
         day = updated.date() if isinstance(updated, datetime) else updated
         parts.append(
             f"<url><loc>{xml_escape(url)}</loc><lastmod>{day.isoformat()}</lastmod></url>"

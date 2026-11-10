@@ -12,6 +12,8 @@ import {
   type AppStatus,
   type PipelineData,
 } from "@/lib/adminPipeline";
+import { adminGetOpportunity } from "@/lib/adminBoard";
+import { LinkFacilitatorButton } from "@/components/admin/facilitators/LinkFacilitatorButton";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -30,6 +32,7 @@ export function PipelineBoard({ opportunityId }: { opportunityId: number }) {
   const [moving, setMoving] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [cofac, setCofac] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -51,6 +54,13 @@ export function PipelineBoard({ opportunityId }: { opportunityId: number }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // "Link as facilitator" only applies to co-facilitation listings.
+  useEffect(() => {
+    adminGetOpportunity(adminKey, opportunityId)
+      .then((r) => setCofac(r.opportunity.type === "cofacilitation"))
+      .catch(() => setCofac(false));
+  }, [adminKey, opportunityId]);
 
   const toggle = (id: number) =>
     setSelected((prev) => {
@@ -241,10 +251,15 @@ export function PipelineBoard({ opportunityId }: { opportunityId: number }) {
                           </p>
                         )}
                       </div>
-                      <span className="shrink-0 text-xs whitespace-nowrap text-stone-400">
-                        {a.source === "invite" ? "Invited · " : ""}
-                        applied {timeAgo(a.created_at, Date.now())}
-                      </span>
+                      <div className="flex shrink-0 flex-col items-end gap-1.5">
+                        <span className="text-xs whitespace-nowrap text-stone-400">
+                          {a.source === "invite" ? "Invited · " : ""}
+                          applied {timeAgo(a.created_at, Date.now())}
+                        </span>
+                        {cofac && a.status === "selected" && (
+                          <LinkFacilitatorButton profileId={a.trainer.id} opportunityId={opportunityId} />
+                        )}
+                      </div>
                     </li>
                   );
                 })}

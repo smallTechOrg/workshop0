@@ -37,6 +37,7 @@ import { Leaderboard } from "@/components/participant/Leaderboard";
 import { HelpPanel } from "@/components/participant/HelpPanel";
 import { RoomQuestions } from "@/components/participant/RoomQuestions";
 import { ProfileCard } from "@/components/participant/ProfileCard";
+import { JoinNetworkCard } from "@/components/participant/JoinNetworkCard";
 import { BroadcastBanner } from "@/components/participant/BroadcastBanner";
 
 function TrackerSkeleton() {
@@ -418,6 +419,7 @@ function TrackerInner() {
             submittedInputs={data.me.milestone_inputs ?? {}}
             onToggle={onToggle}
           />
+          {total > 0 && doneCount >= total && <JoinNetworkCard />}
         </div>
 
         <div className="space-y-4">

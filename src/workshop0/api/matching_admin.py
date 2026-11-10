@@ -24,16 +24,15 @@ from src.workshop0.db.models import (
     MatchSuggestion,
     Opportunity,
     OpportunityInvite,
-    Partner,
     TrainerProfile,
 )
 from src.workshop0.db.session import get_session
 from src.workshop0.email import outbox, sender
 from src.workshop0.security import require_admin_key
-from src.workshop0.services import locations as loc
 from src.workshop0.services import matching, pool, ratelimit
 from src.workshop0.services.audit import record_action
-from src.workshop0.services.opportunities import effective_status, parse_path_id, public_url
+from src.workshop0.services.listing_text import listing_fields
+from src.workshop0.services.opportunities import effective_status, parse_path_id
 
 log = structlog.get_logger("workshop0")
 
@@ -44,8 +43,6 @@ RATE_BUCKET = "shortlist_rank"
 RATE_LIMIT = 20
 RATE_WINDOW_S = 3600
 INVITE_MAX = 50
-UNIT_LABEL = {"hour": "hour", "day": "day", "course": "course", "month": "month"}
-CURRENCY_SYMBOL = {"INR": "₹", "USD": "$"}
 
 
 class InviteBody(BaseModel):
@@ -146,30 +143,8 @@ def latest_shortlist(opportunity_id: str, session: Session = Depends(get_session
     )
 
 
-def _compensation(opp: Opportunity) -> str:
-    low, high = opp.compensation_min, opp.compensation_max
-    if low is None and high is None:
-        return opp.compensation_text or "To be discussed"
-    symbol = CURRENCY_SYMBOL.get(opp.compensation_currency or "", (opp.compensation_currency or "") + " ")
-    amount = f"{low:,}" if high is None or low == high else f"{low:,}–{high:,}" if low is not None else f"{high:,}"
-    unit = f" per {UNIT_LABEL[opp.compensation_unit]}" if opp.compensation_unit in UNIT_LABEL else ""
-    return f"{symbol}{amount}{unit}"
-
-
 def _email_context(session: Session, opp: Opportunity, user: AppUser, base_url: str) -> dict:
-    partner = opp.partner_display_name
-    if not partner and opp.partner_id is not None:
-        found = session.get(Partner, opp.partner_id)
-        partner = found.display_name if found is not None else None
-    cities = [i["city"] for i in loc.parse_stored(opp.locations_json, opp.city, opp.location_mode)]
-    return {
-        "name": user.display_name,
-        "title": opp.title,
-        "partner": partner or "a smallTech partner",
-        "compensation": _compensation(opp),
-        "cities": ", ".join(cities) if cities else opp.location_mode.capitalize(),
-        "url": public_url(base_url, opp.slug),
-    }
+    return {"name": user.display_name, **listing_fields(session, opp, base_url)}
 
 
 @router.post("/{opportunity_id}/invites")
