@@ -106,6 +106,45 @@ bash deploy/cloudrun/provision.sh --rotate workshop0-smtp-password
 
 Also set `WORKSHOP0_SMTP_HOST=smtp.gmail.com`, `WORKSHOP0_SMTP_USER=<sender>` (and optionally `WORKSHOP0_SMTP_FROM`) on the service, for example via `--update-env-vars` in the deploy step, or as GitHub repository variables passed through.
 
+## Weekly digest operator handoff (Phase 13)
+
+Nothing here has been executed by the build, and `deploy-cloudrun.yml` is untouched. No new secret is required: alerts, the directory, the tie-in and unsubscribe work on the Phase 12 deployment as it is. `WORKSHOP0_CRON_KEY` is optional; while it is unset, `POST /api/cron/weekly-digest` answers **404** and the weekly digest does not run.
+
+Optional secret: `workshop0-cron-key` (a value you choose; `provision.sh` never generates it, and with no value it prints `SKIPPED`).
+
+1. Pick a long random value and store it (via stdin only, never echoed):
+
+```bash
+# from the repo root
+export WORKSHOP0_CRON_KEY="$(openssl rand -hex 24)"   # keep a copy in your password manager
+bash deploy/cloudrun/provision.sh --dry-run
+bash deploy/cloudrun/provision.sh --rotate workshop0-cron-key
+```
+
+(Alternatively: `printf '%s' "$KEY" | gcloud secrets create workshop0-cron-key --data-file=-`, then grant the runtime service account `secretAccessor` on it.)
+
+2. PROPOSED (not applied) change to the "Resolve optional runtime secrets" step of `.github/workflows/deploy-cloudrun.yml`, next to the SMTP mapping, before `RUN_SECRETS` is written:
+
+```diff
++          if has_enabled workshop0-cron-key; then
++            SECRETS="${SECRETS},WORKSHOP0_CRON_KEY=workshop0-cron-key:latest"
++            echo "workshop0-cron-key: mapped"
++          else
++            echo "workshop0-cron-key: absent (weekly digest stays off, cron path 404)"
++          fi
+```
+
+3. Create the scheduler job (Mondays 09:00 IST):
+
+```bash
+gcloud scheduler jobs create http workshop0-weekly-digest --location us-central1 \
+  --schedule "0 9 * * 1" --time-zone Asia/Kolkata \
+  --uri https://workshop0.smalltech.in/api/cron/weekly-digest --http-method POST \
+  --headers "X-Cron-Key=$KEY"
+```
+
+Until all three steps are done, production serves alerts and the directory and answers 404 on the cron path. A second call in the same ISO week enqueues nothing.
+
 ## Two LLM providers
 
 | | Workshop help-desk (Phase 4) | Trainer network (Phases 11-12) |

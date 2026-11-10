@@ -14,7 +14,6 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import { useAdmin } from "@/components/admin/AdminGate";
 
 interface Entry {
   profile_id: number;
@@ -26,8 +25,17 @@ interface Entry {
 const ROLES: FacilitatorRole[] = ["lead", "co", "ta"];
 
 /** "Facilitators" button + picker modal on an admin workshop card. */
-export function FacilitatorsButton({ workshopId, workshopName }: { workshopId: number; workshopName: string }) {
-  const { adminKey, onUnauthorized } = useAdmin();
+export function FacilitatorsButton({
+  workshopId,
+  workshopName,
+  adminKey,
+  onUnauthorized,
+}: {
+  workshopId: number;
+  workshopName: string;
+  adminKey: string;
+  onUnauthorized: () => void;
+}) {
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [entries, setEntries] = useState<Entry[] | null>(null);

@@ -85,11 +85,12 @@ test.describe.serial('Phase 12 — email outbox', () => {
         .poll(() => fs.readFileSync(DUMP, 'utf8').split('\n').filter((l) => l.includes(email)).length, { timeout: 20_000 })
         .toBeGreaterThan(0);
       const msg = JSON.parse(fs.readFileSync(DUMP, 'utf8').split('\n').filter((l) => l.includes(email))[0]);
-      const links: string[] = msg.body.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
+      const bodyText: string = msg.text ?? msg.body;
+      const links: string[] = bodyText.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
       expect(links.length).toBeGreaterThan(0);
       for (const l of links) expect(l.startsWith(BASE_URL), `link ${l}`).toBe(true);
       expect(links.some((l) => l.includes('/invite/'))).toBe(true);
-      expect(msg.body).not.toContain('<img');
+      expect(bodyText).not.toContain('<img');
     }
 
     // Second click is idempotent: still exactly one row for this recipient.

@@ -141,7 +141,7 @@ jobs:
       - name: Phase-11 pages exported + Tailwind compiled
         run: |
           set -euo pipefail
-          for p in signin network network/join network/me admin/network admin/network/trainer; do
+          for p in signin network network/join network/me admin/network admin/network/trainer network/directory network/trainer network/searches network/unsubscribed network/applications network/matches admin/outbox admin/opportunities/pipeline; do
             test -f "frontend/out/$p/index.html" || { echo "missing frontend/out/$p/index.html" >&2; exit 1; }
           done
           grep -q '\.flex' frontend/out/_next/static/css/*.css
@@ -154,6 +154,7 @@ jobs:
     needs: [backend, frontend-build]
     env:
       WORKSHOP0_ADMIN_KEY: ci-admin-key-0123456789
+      WORKSHOP0_CRON_KEY: ci-cron-key-0123456789
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/workshop0_e2e
     services:
       postgres:
@@ -224,14 +225,16 @@ jobs:
           uv run alembic upgrade head
           # Phase 12 outbox e2e: a fake SMTP sink + three app instances on one DB
           # (main -> sink, :8013 -> closed port, :8014 -> SMTP unset).
-          nohup uv run python tests/support/fake_smtp.py --port 8025 > fake_smtp.log 2>&1 &
+          # Phase 13: the sink dumps delivered messages; the alert/digest specs read them.
+          echo "SMTP_DUMP_FILE=${RUNNER_TEMP}/smtp.jsonl" >> "$GITHUB_ENV"
+          nohup uv run python tests/support/fake_smtp.py --port 8025 --dump "${RUNNER_TEMP}/smtp.jsonl" > fake_smtp.log 2>&1 &
           WORKSHOP0_SMTP_HOST=127.0.0.1 WORKSHOP0_SMTP_PORT=8025 WORKSHOP0_SMTP_STARTTLS=false \
             WORKSHOP0_SMTP_USER=ci WORKSHOP0_SMTP_PASSWORD=ci WORKSHOP0_SMTP_FROM=ci@example.test \
             nohup uv run python -m src > server.log 2>&1 &
           PORT=8013 WORKSHOP0_SMTP_HOST=127.0.0.1 WORKSHOP0_SMTP_PORT=1 WORKSHOP0_SMTP_STARTTLS=false \
             WORKSHOP0_SMTP_USER=ci WORKSHOP0_SMTP_PASSWORD=ci WORKSHOP0_SMTP_FROM=ci@example.test \
             nohup uv run python -m src > server_fail.log 2>&1 &
-          PORT=8014 WORKSHOP0_SMTP_HOST= WORKSHOP0_SMTP_USER= WORKSHOP0_SMTP_PASSWORD= \
+          PORT=8014 WORKSHOP0_CRON_KEY= WORKSHOP0_SMTP_HOST= WORKSHOP0_SMTP_USER= WORKSHOP0_SMTP_PASSWORD= \
             nohup uv run python -m src > server_unconf.log 2>&1 &
           for port in 8001 8013 8014; do
             for i in $(seq 1 40); do
@@ -245,6 +248,11 @@ jobs:
           set -euo pipefail
           curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8001/invite/abc | grep -qx 307
           curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/me/cv/text | grep -qx 401
+      - name: Phase-13 smoke (weekly-digest cron key gate)
+        run: |
+          set -euo pipefail
+          curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8001/api/cron/weekly-digest | grep -qx 401
+          curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H "X-Cron-Key: ${WORKSHOP0_CRON_KEY}" http://localhost:8014/api/cron/weekly-digest | grep -qx 404
       - name: Playwright e2e
         run: BASE_URL=http://localhost:8001 pnpm exec playwright test tests/e2e --reporter=line
       - name: Server + issuer logs (on failure)

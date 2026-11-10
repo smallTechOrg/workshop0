@@ -36,7 +36,7 @@ CV_BUCKET="${CV_BUCKET:-${PROJECT_ID}-workshop0-cvs}"
 SECRETS=(workshop0-database-url workshop0-openrouter-api-key workshop0-admin-key
          workshop0-session-secret workshop0-google-client-secret
          workshop0-anthropic-api-key workshop0-anthropic-workspace-id
-         workshop0-smtp-password)
+         workshop0-smtp-password workshop0-cron-key)
 
 DRY=0
 ROTATE=""
@@ -214,6 +214,7 @@ val_google()     { source_value WORKSHOP0_GOOGLE_CLIENT_SECRET; }
 val_anthropic_key()       { source_value ANTHROPIC_API_KEY; }
 val_anthropic_workspace() { source_value ANTHROPIC_WORKSPACE_ID; }
 val_smtp_password()       { source_value WORKSHOP0_SMTP_PASSWORD; }
+val_cron_key()            { source_value WORKSHOP0_CRON_KEY; }   # operator-chosen, never generated
 
 # Optional operator-supplied secret: an absent source value prints SKIPPED, never dies.
 # Only a create or an explicit --rotate needs the value; an existing secret is left as is.
@@ -239,6 +240,7 @@ put_optional_secret workshop0-google-client-secret WORKSHOP0_GOOGLE_CLIENT_SECRE
 put_optional_secret workshop0-anthropic-api-key ANTHROPIC_API_KEY val_anthropic_key
 put_optional_secret workshop0-anthropic-workspace-id ANTHROPIC_WORKSPACE_ID val_anthropic_workspace
 put_optional_secret workshop0-smtp-password WORKSHOP0_SMTP_PASSWORD val_smtp_password
+put_optional_secret workshop0-cron-key WORKSHOP0_CRON_KEY val_cron_key
 PW=""
 
 # 7. IAM -------------------------------------------------------------------
@@ -256,6 +258,7 @@ optional_secret_key() {
     workshop0-anthropic-api-key)      echo ANTHROPIC_API_KEY ;;
     workshop0-anthropic-workspace-id) echo ANTHROPIC_WORKSPACE_ID ;;
     workshop0-smtp-password)          echo WORKSHOP0_SMTP_PASSWORD ;;
+    workshop0-cron-key)               echo WORKSHOP0_CRON_KEY ;;
     *) echo "" ;;
   esac
 }
