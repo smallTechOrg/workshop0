@@ -411,7 +411,8 @@ bucket String(120) + window_start DateTime → composite PK; count Integer not n
 | availability_json | Text default `'{}'` | Weekly pattern `{"mon": ["morning","afternoon","evening"], …}` (keys `mon`…`sun`, values ⊆ the three day-parts) |
 | available_from | Date null | |
 | blackout_json | Text default `'[]'` | ≤20 ranges `{"start": "2026-12-20", "end": "2027-01-02"}` |
-| visibility | String(16) default `'private'` | `private` \| `public` — activated in Phase 13 (C18) |
+| visibility | String(16) default `'private'` | `private` \| `public`. Set by the owner (Phase 13, C18). A profile is **listed** publicly only when `public` **and** completeness ≥ 60 % **and** `public_slug` is set (§Phase 13) |
+| public_slug | String(80) null, unique | *(Phase 13, `0012`)* Public URL key `/trainers/{slug}`; server-generated the first time `visibility` becomes `public`, frozen afterwards; never accepted from a request |
 | verified | Boolean default false · verified_at DateTime null · verified_by String(254) null | Admin "Verified" badge; invite-created trainers start verified |
 | consent_at | DateTime **not null** · consent_version String(16) not null | Consent to share the profile with partners for matching; current version `2026-11`. The `consent_at` checks in the email gate are defensive only (the column is NOT NULL) |
 | autofilled_fields_json | Text default `'[]'` | Field keys pre-filled from the CV and not yet reviewed (drives "From your CV — please check"). Set at create (`POST /api/me/profile`) to the drafted fields the person left unchanged on the review screen; cleared to `[]` by the first `PATCH /api/me/profile` |
@@ -600,8 +601,42 @@ The second and later cities are lost on downgrade. That is accepted and document
 
 ## Phase 13 — migration `0012_alerts_directory_tiein` (`down_revision = "0011"`)
 
-- **saved_search**: id PK · user_id FK app_user CASCADE · name String(80) · criteria_json Text `{"types": [...], "topic_slugs": [...], "location_modes": [...]}` · alerts_enabled Boolean default true · created_at · updated_at. ≤10 per user.
-- **email_pref**: user_id FK app_user CASCADE PK · alerts Boolean default true · digest Boolean default true · updated_at.
-- **workshop_facilitator**: workshop_id FK workshop CASCADE + profile_id FK trainer_profile CASCADE → composite PK · role String(8) `lead` \| `co` \| `ta` · linked_by String(254) · created_at.
-- **opportunity** gains `workshop_id` FK workshop.id SET NULL null (a `cofacilitation` listing names the Workshop0 workshop it staffs).
+Owned by S0 ([roadmap.md](roadmap.md) §Phase 13). **Purely additive** (new tables plus nullable columns), so the Phase-12 revision keeps working during the one-deploy overlap (architecture.md §Production topology → Migrations). All ALTERs use `batch_alter_table`; `downgrade()` drops the new columns, indexes and tables in reverse order. Written against head `0011` (Phase 12), the code state on 2026-11-10.
+
+### saved_search
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| id | Integer | PK | |
+| user_id | Integer | FK app_user.id **CASCADE**, not null; index `ix_saved_search_user_id` | Owner. Account deletion removes the searches |
+| name | String(80) | not null | Trimmed, 1–80 chars, plain text |
+| criteria_json | Text | not null | Normalised object `{"types": [...], "topic_slugs": [...], "location_modes": [...], "cities": [...]}`; every key always present, empty list = no constraint. `types` ⊆ the four listing types, `topic_slugs` ⊆ existing topic slugs (≤10), `location_modes` ⊆ `remote\|onsite\|hybrid`, `cities` ≤5 entries, each collapsed whitespace, 1–80 chars, de-duplicated case-insensitively. At least one list is non-empty. Matching rules: api.md §Phase 13 |
+| alerts_enabled | Boolean | not null, default true, server_default true | Per-search alert switch (the digest ignores it) |
+| created_at / updated_at | DateTime(tz) | not null | |
+
+≤10 per user (enforced by `services/saved_searches.py`, not by the DB). A user needs a `trainer_profile` to create one (its `consent_at` is the consent for these emails).
+
+### email_pref
+
+`user_id` Integer PK, FK app_user.id **CASCADE** · `alerts` Boolean not null default true · `digest` Boolean not null default true · `updated_at` DateTime(tz). **A missing row means both true**; rows are created lazily by the first `PATCH /api/me/email-prefs` or unsubscribe. Applies only to the `network.alert` and `network.digest` templates; transactional mail (`network.invite`, `network.welcome`, `opportunity.invite`, `application.*`) is not controlled by it.
+
+### workshop_facilitator
+
+`workshop_id` FK workshop.id **CASCADE** + `profile_id` FK trainer_profile.id **CASCADE** → composite PK · `role` String(8) not null (`lead` \| `co` \| `ta`) · `linked_by` String(254) not null (admin email or `"admin-key"`, same attribution as `created_by` elsewhere) · `created_at` DateTime(tz). Index `ix_workshop_facilitator_profile_id` (the trainer's "My Workshop0 workshops" lookup). At most one `lead` per workshop, ≤10 rows per workshop (service-enforced). Deleting a trainer account removes their links; deleting a workshop removes its links. Linking never changes the workshop's `admin_token`.
+
+### trainer_profile — addition
+
+`public_slug` String(80) **nullable**, unique constraint `uq_trainer_profile_public_slug`. Rule (implemented by `services/directory.py::ensure_slug`, reusing `services/slugs.py`):
+1. Generated the **first time** `visibility` is set to `public` (whether or not the profile is yet listed). Never generated at profile creation.
+2. `base = slugs.slug_base(app_user.display_name, None)` with the fallback `trainer` instead of `opportunity` when the name has no ASCII letters or digits (so `Zoë Müller` → `zoe-muller`, a Devanagari-only name → `trainer`). `slug = f"{base}-{suffix}"`, suffix `secrets.token_hex(2)`, after 5 collisions `token_hex(3)`, with the same IntegrityError retry as listings. The slug never contains the email, the numeric id or any other field.
+3. **Frozen forever** once set: toggling to private and back, renaming the Google display name, or editing the profile never changes it, so a shared link stays valid. Private or under-60 % profiles keep their slug but resolve to 404.
+4. The numeric `trainer_profile.id` and `app_user.id` are never used in a public URL or public payload.
+
+### opportunity — addition
+
+`workshop_id` Integer FK workshop.id **SET NULL**, nullable; index `ix_opportunity_workshop_id`. **Admin-only** (admin payloads, never public payloads, never the SEO block, sitemap or emails). Allowed only on `type = 'cofacilitation'` listings (service validation, 422 otherwise); it names the Workshop0 workshop the listing staffs and is the default target of **Link as facilitator**.
+
+### Outbox usage (no schema change)
+
+`email_outbox` already has everything Phase 13 needs. New templates `network.alert` and `network.digest` (added to `email/render.py::TEMPLATES`). Dedupe keys: `alert:{opportunity_id}:{user_id}` and `digest:{user_id}:{YYYY-Www}` (≤ 120 chars). Contexts hold only display strings and URLs (listing title, partner **display** name, formatted compensation, joined cities, slug URL, search names, unsubscribe and manage URLs), never ids that map to admin-only data.
 

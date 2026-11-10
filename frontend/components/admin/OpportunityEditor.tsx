@@ -28,6 +28,7 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { Markdown } from "@/components/ui/Markdown";
 import { SuggestedTrainersPanel } from "@/components/admin/matching/SuggestedTrainersPanel";
 import { useToast } from "@/components/ui/Toast";
+import { adminListWorkshops, type AdminWorkshopSummary } from "@/lib/api";
 import { useAdmin } from "@/components/admin/AdminGate";
 import { ActivityList } from "@/components/admin/ActivityList";
 import { PasteToFill } from "@/components/admin/drafting/PasteToFill";
@@ -72,6 +73,7 @@ interface FormState {
   partner_display_name: string;
   partner: PartnerRef | null;
   internal_notes: string;
+  workshop_id: number | null;
 }
 
 type BodyKey = Exclude<keyof OpportunityBody, "status">;
@@ -100,6 +102,7 @@ const BODY_KEYS: BodyKey[] = [
   "deadline",
   "partner_display_name",
   "partner_id",
+  "workshop_id",
   "internal_notes",
 ];
 
@@ -158,6 +161,7 @@ function emptyForm(): FormState {
     deadline_local: defaultDeadline(),
     partner_display_name: "",
     partner: null,
+    workshop_id: null,
     internal_notes: "",
   };
 }
@@ -187,6 +191,7 @@ function formFrom(o: AdminOpportunity): FormState {
     deadline_local: isoToLocalInput(o.deadline),
     partner_display_name: o.partner_display_name ?? "",
     partner: o.partner ?? null,
+    workshop_id: o.workshop_id ?? null,
     internal_notes: o.internal_notes ?? "",
   };
 }
@@ -272,6 +277,7 @@ function toBody(f: FormState): Omit<OpportunityBody, "status"> {
     deadline: localInputToIso(f.deadline_local),
     partner_display_name: opt(f.partner_display_name),
     partner_id: f.partner?.id ?? null,
+    workshop_id: f.type === "cofacilitation" ? f.workshop_id : null,
     internal_notes: opt(f.internal_notes),
   };
 }
@@ -320,6 +326,7 @@ const FORM_KEY: Record<BodyKey, keyof FormState> = {
   deadline: "deadline_local",
   partner_display_name: "partner_display_name",
   partner_id: "partner",
+  workshop_id: "workshop_id",
   internal_notes: "internal_notes",
 };
 
@@ -347,6 +354,7 @@ const FIELD_LABEL: Record<BodyKey, string> = {
   deadline: "Application deadline",
   partner_display_name: "Public partner name",
   partner_id: "Partner",
+  workshop_id: "Workshop",
   internal_notes: "Internal notes",
 };
 
@@ -536,6 +544,7 @@ export function OpportunityEditor({
     internal_name: string;
     display_name: string | null;
   } | null>(null);
+  const [workshops, setWorkshops] = useState<AdminWorkshopSummary[] | null>(null);
   const [descTab, setDescTab] = useState<"write" | "preview">("write");
 
   // Latest form/initial, read by the re-seed effect without re-running it.
@@ -592,6 +601,14 @@ export function OpportunityEditor({
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [isNew, dirty]);
+
+  const isCofac = form.type === "cofacilitation";
+  useEffect(() => {
+    if (!isCofac || workshops !== null) return;
+    adminListWorkshops(adminKey)
+      .then((r) => setWorkshops(r.workshops))
+      .catch(() => setWorkshops([]));
+  }, [isCofac, workshops, adminKey]);
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [key]: value }));
@@ -1345,6 +1362,36 @@ export function OpportunityEditor({
                 error={err.partner_id}
               />
             </div>
+            {isCofac && (
+              <Field
+                id="opp-workshop-id"
+                label="Workshop"
+                error={err.workshop_id}
+                errorField="workshop_id"
+                hint="The workshop trainers would co-facilitate. Admin only; used to prefill Link as facilitator."
+              >
+                <select
+                  id="opp-workshop-id"
+                  data-testid="opp-workshop-select"
+                  value={form.workshop_id ?? ""}
+                  onChange={(e) =>
+                    set("workshop_id", e.target.value === "" ? null : Number(e.target.value))
+                  }
+                  className={inputCls(Boolean(err.workshop_id))}
+                >
+                  <option value="">No workshop linked</option>
+                  {(workshops ?? []).map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                    </option>
+                  ))}
+                  {form.workshop_id != null &&
+                    !(workshops ?? []).some((w) => w.id === form.workshop_id) && (
+                      <option value={form.workshop_id}>Workshop #{form.workshop_id}</option>
+                    )}
+                </select>
+              </Field>
+            )}
             <Field
               id="opp-internal-notes"
               label="Internal notes"

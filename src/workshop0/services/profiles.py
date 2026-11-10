@@ -275,6 +275,14 @@ class ProfilePatch(BaseModel):
     availability: dict[str, list[str]] | None = None
     available_from: date | None = None
     blackouts: list[BlackoutIn] | None = None
+    visibility: str | None = None  # Phase 13; `public_slug` / `directory` in a body are ignored
+
+    @field_validator("visibility")
+    @classmethod
+    def _visibility(cls, v):
+        if v not in ("private", "public"):
+            raise ValueError("must be private or public")
+        return v
 
     @field_validator("headline")
     @classmethod
@@ -494,6 +502,18 @@ def _profile_topics(session: Session, profile_id: int) -> list[dict]:
     return [{"slug": slug, "name": name, "level": level} for slug, name, level in rows]
 
 
+def _directory_block(profile: TrainerProfile, topics: list[dict], has_cv: bool) -> dict:
+    from src.workshop0.services import directory  # lazy: directory imports this module
+
+    slug = profile.public_slug
+    return {
+        "visibility": profile.visibility,
+        "listed": directory._is_listed(profile, topics, has_cv),
+        "path": directory.public_path(slug) if slug else None,
+        "min_completeness": directory.MIN_COMPLETENESS,
+    }
+
+
 def own_profile(session: Session, profile: TrainerProfile, user: AppUser) -> dict:
     """OwnProfile — the ONLY non-admin payload carrying rates, email and CV fields.
     An explicit allow-list (never "model minus some fields")."""
@@ -524,6 +544,7 @@ def own_profile(session: Session, profile: TrainerProfile, user: AppUser) -> dic
             "available_from": profile.available_from.isoformat() if profile.available_from else None,
             "blackouts": _loads(profile.blackout_json, []),
             "visibility": profile.visibility,
+            "directory": _directory_block(profile, topics, cv is not None),
             "verified": bool(profile.verified),
             "verified_at": iso_z(profile.verified_at) if profile.verified_at else None,
             "consent_at": iso_z(profile.consent_at),
@@ -678,22 +699,32 @@ def update_profile(session: Session, user_id: int, body: ProfilePatch) -> dict:
     if "topics" in sent:
         resolved = _resolve_topics(session, sent["topics"], keep_ids=_current_topic_ids(session, profile.id))
 
+    visibility = body.visibility if "visibility" in body.model_fields_set else None
     _apply(profile, sent)
     if resolved is not None:
         _set_topics(session, profile.id, resolved)
-    profile.autofilled_fields_json = "[]"
+    if visibility is not None:
+        from src.workshop0.services import directory  # lazy: directory imports this module
+
+        profile.visibility = visibility
+        if visibility == "public":
+            directory.ensure_slug(session, profile, user)
+    # A visibility-only patch is not a review of the pre-fill; any content field is.
+    if sent or visibility is None:
+        profile.autofilled_fields_json = "[]"
     profile.updated_at = utcnow()
+    changed = sorted(set(sent) | ({"visibility"} if visibility is not None else set()))
     record_action(
         session,
         None,
         "user",
         "profile.update",
-        {"changed_fields": sorted(sent)},
+        {"changed_fields": changed},
         subject_type="trainer",
         subject_id=profile.id,
     )
     session.flush()
-    log.info("profile.updated", profile_id=profile.id, changed_fields=sorted(sent))
+    log.info("profile.updated", profile_id=profile.id, changed_fields=changed)
     return own_profile(session, profile, user)
 
 

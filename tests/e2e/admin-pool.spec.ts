@@ -329,16 +329,16 @@ test('admin signs in with Google, curates the pool and invites a trainer', async
   await adminCtx.close();
 });
 
-test('the seeded trainer sees the My profile stubs and the Verified badge', async () => {
+test('the seeded trainer sees real My profile controls and the Verified badge', async () => {
   const page = await trainerCtx.newPage();
   await page.goto(`${APP_BASE}/network/me/`);
   await expect(page.getByText(HEADLINE).first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('verified-badge')).toBeVisible();
   await expect(page.getByTestId('link-applications')).toHaveAttribute('href', /\/network\/applications\/?$/);
   await expect(page.getByTestId('link-matches')).toHaveAttribute('href', /\/network\/matches\/?$/);
-  for (const label of ['Saved searches & alerts', 'Public directory profile']) {
-    await expect(stubWithLabel(page.getByTestId('profile-stubs'), label)).toBeVisible();
-  }
+  await expect(page.getByTestId('link-searches')).toHaveAttribute('href', /\/network\/searches\/?$/);
+  await expect(page.getByTestId('directory-toggle')).toBeVisible();
+  await expect(page.getByTestId('stub-badge')).toHaveCount(0);
   await page.close();
 });
 

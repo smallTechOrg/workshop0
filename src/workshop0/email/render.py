@@ -14,10 +14,13 @@ TEMPLATES = (
     "opportunity.invite",
     "application.received",
     "application.status_changed",
+    "network.alert",
+    "network.digest",
 )
 FOOTER = "You received this email because of your activity on Workshop0."
 _DIR = Path(__file__).parent / "templates"
 _VAR = re.compile(r"\{\{\s*(\w+)\s*\}\}")
+_SECTION = re.compile(r"\{\{#(\w+)\}\}(.*?)\{\{/\1\}\}", re.DOTALL)
 _STATUS_LABELS = {
     "applied": "Applied",
     "shortlisted": "Shortlisted",
@@ -48,15 +51,46 @@ def _value(context: dict[str, Any], key: str) -> str:
     return str(val)
 
 
+def _expand(markup: str, context: dict[str, Any], escape: bool) -> str:
+    """Expand `{{#key}}..{{/key}}` then `{{var}}`.
+
+    A list value repeats the body once per item (items are flat dicts; inner variables
+    resolve from the item first, then the outer context). A truthy scalar renders the
+    body once, a falsy or missing value renders nothing. Nested sections are not supported.
+    """
+
+    def fmt(ctx: dict[str, Any]):
+        def sub(m: re.Match[str]) -> str:
+            v = _value(ctx, m.group(1))
+            return html.escape(v, quote=True) if escape else v
+
+        return sub
+
+    def section(m: re.Match[str]) -> str:
+        val = context.get(m.group(1))
+        body = m.group(2)
+        if isinstance(val, (list, tuple)):
+            out = []
+            for item in val:
+                if not isinstance(item, dict):
+                    continue
+                merged = {**context, **item}
+                out.append(_VAR.sub(fmt(merged), body))
+            return "".join(out)
+        return _VAR.sub(fmt(context), body) if val else ""
+
+    return _VAR.sub(fmt(context), _SECTION.sub(section, markup))
+
+
 def render(template: str, context: dict[str, Any]) -> Rendered:
     if template not in TEMPLATES:
         raise ValueError(f"unknown email template: {template}")
     txt = (_DIR / f"{template}.txt").read_text(encoding="utf-8")
     markup = (_DIR / f"{template}.html").read_text(encoding="utf-8")
-    plain = _VAR.sub(lambda m: _value(context, m.group(1)), txt)
+    plain = _expand(txt, context, escape=False)
     subject, _, body = plain.partition("\n")
     subject = " ".join(subject.split())[:200]
-    html_body = _VAR.sub(lambda m: html.escape(_value(context, m.group(1)), quote=True), markup)
+    html_body = _expand(markup, context, escape=True)
     text = f"{body.strip()}\n\n--\n{FOOTER}\n"
     page = (
         "<!doctype html><html><body>"

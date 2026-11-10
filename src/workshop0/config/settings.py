@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     workshop0_email_rate_per_recipient: int = Field(default=10)  # per rolling hour
     workshop0_email_rate_global: int = Field(default=100)  # per rolling hour
 
+    # Phase 13 - optional shared key for POST /api/cron/weekly-digest (unset => endpoint 404s).
+    workshop0_cron_key: SecretStr = Field(default=SecretStr(""), repr=False)
+
     @field_validator("database_url")
     @classmethod
     def _normalize_database_url(cls, value: str) -> str:
@@ -83,6 +86,10 @@ class Settings(BaseSettings):
             and self.workshop0_smtp_user.strip()
             and self.workshop0_smtp_password.get_secret_value()
         )
+
+    @property
+    def cron_enabled(self) -> bool:
+        return bool(self.workshop0_cron_key.get_secret_value().strip())
 
     @property
     def resolved_smtp_from(self) -> str:

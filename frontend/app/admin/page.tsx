@@ -372,6 +372,8 @@ export default function AdminHomePage() {
                 key={w.id}
                 workshop={w}
                 justCreated={w.id === justCreatedId}
+                adminKey={adminKey}
+                onUnauthorized={() => void refreshList()}
               />
             ))}
           </div>

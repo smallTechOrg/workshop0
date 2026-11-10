@@ -20,6 +20,9 @@ Disallow: /app/admin/
 Disallow: /api/
 Disallow: /network/me
 Disallow: /app/network/me/
+Disallow: /app/network/trainer/
+Disallow: /app/network/searches/
+Disallow: /app/network/unsubscribed/
 Disallow: /app/opportunities/view/
 Disallow: /f/
 Disallow: /p/
@@ -170,18 +173,23 @@ def test_sitemap_lists_exactly_the_open_listings(client, admin_headers, create_o
     assert root.tag == f"{SITEMAP_NS}urlset"
     locs = [el.text for el in root.iter(f"{SITEMAP_NS}loc")]
     assert locs[0] == "http://testserver/opportunities"
-    assert set(locs) == {"http://testserver/opportunities", open_a["public_url"], open_b["public_url"]}
-    assert len(locs) == 3
-    assert locs[1:] == [open_b["public_url"], open_a["public_url"]]  # newest published first
+    assert locs[1] == "http://testserver/trainers"
+    assert set(locs) == {
+        "http://testserver/opportunities", "http://testserver/trainers",
+        open_a["public_url"], open_b["public_url"],
+    }
+    assert len(locs) == 4
+    assert locs[2:] == [open_b["public_url"], open_a["public_url"]]  # newest published first
     for el in root.iter(f"{SITEMAP_NS}lastmod"):
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", el.text)
     for gone in (closed, expired, draft):
         assert gone["slug"] not in response.text
 
 
-def test_empty_sitemap_has_only_the_board(client):
+def test_empty_sitemap_has_only_the_two_indexes(client):
     root = ET.fromstring(client.get("/sitemap.xml").content)
-    assert [el.text for el in root.iter(f"{SITEMAP_NS}loc")] == ["http://testserver/opportunities"]
+    assert [el.text for el in root.iter(f"{SITEMAP_NS}loc")] == [
+        "http://testserver/opportunities", "http://testserver/trainers"]
 
 
 def test_robots_is_exact(client):

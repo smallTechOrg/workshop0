@@ -158,6 +158,16 @@ WORKSHOP0_SMTP_FROM=
 
 Production: see "Email (SMTP) operator handoff" in `deploy/RUNBOOK.md`.
 
+## Alerts, directory and workshop tie-in (Phase 13)
+
+**Saved searches and alerts.** A signed-in trainer with a profile can save a board search (type and topics, plus city and similar criteria) from the board's **Save this search** button or the Saved searches page (up to 10). When an admin publishes a matching listing, the trainer gets one email per listing, even if several searches match. Alerts use the same listing text as invites (partner display name, compensation with unit, all cities, slug URL). Without SMTP the alert is recorded as *not sent* and publishing is never affected.
+
+**Weekly digest and unsubscribe.** A weekly digest of open listings goes to trainers who have it on. Every alert and digest carries an unsubscribe link that switches off exactly that kind (alerts or digest) with no sign-in. The digest is triggered by `POST /api/cron/weekly-digest` with an `X-Cron-Key` header and is **off by default**: with `WORKSHOP0_CRON_KEY` unset the endpoint answers 404. To enable it in production see "Weekly digest operator handoff" in `deploy/RUNBOOK.md`.
+
+**Public trainer directory.** In My profile, a trainer can set **Public directory profile** on. They are listed only when it is on and the profile is at least 60% complete. The public page lives at `/trainers/{slug}` (a generated slug, never a numeric id) and shows only an allow-listed subset: rates, email, CV, notes and tags are never public. Listed trainers appear in `/sitemap.xml`; switching to private removes the page.
+
+**Workshop tie-in.** Admins can link facilitators (trainer profiles) to a workshop with a role (lead, co, ta) from the listing's pool view. A trainer sees the workshops they facilitate in their network area.
+
 ## Opportunity Board (Phase 11b)
 
 **Partners.** Admins manage the partner list at `/app/admin/partners/` (also reachable from a listing via **Manage partners**). Adding a name that already exists (ignoring case and extra spaces) is rejected. Deactivated partners leave the editor dropdown but still show on listings that use them. The real partner name and notes are never on a public page or API; the public sees only the default public name (for example "A Pune edtech").
@@ -332,6 +342,7 @@ gcloud run services update workshop0 --region us-central1 --project ai-agent-boi
 | `ANTHROPIC_WORKSPACE_ID` | with the key (P11) | — | Sent as header `anthropic-workspace-id` on every Anthropic request; key set and this empty means network AI is unavailable, plus an `ai.network_misconfigured` WARNING (Cloud Run: secret `workshop0-anthropic-workspace-id`) |
 | `WORKSHOP0_AI_NETWORK_MODEL` | no (P11) | `claude-sonnet-5-5` | Anthropic model for CV extraction |
 | `WORKSHOP0_AI_NETWORK_FAST_MODEL` | no (P11) | `claude-haiku-5-5` | Anthropic model for cheap calls (only the client's real-key smoke tests in Phase 11) |
+| `WORKSHOP0_CRON_KEY` | no (P13) | — | Shared key for `POST /api/cron/weekly-digest` (`X-Cron-Key` header). Unset: the endpoint answers 404 and the digest does not run (Cloud Run: optional secret `workshop0-cron-key`) |
 
 ## Status
 

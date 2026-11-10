@@ -27,3 +27,23 @@ def test_fake_smtp_captures_and_can_fail_next():
         assert len(sink.messages) == 2
     finally:
         sink.stop()
+
+
+def test_fake_smtp_dump_appends_one_json_object_per_message(tmp_path):
+    import json
+
+    dump = tmp_path / "smtp.jsonl"
+    sink = run_in_thread(dump=str(dump))
+    try:
+        _send(sink.port)
+        _send(sink.port)
+        lines = dump.read_text().splitlines()
+        assert len(lines) == 2
+        first = json.loads(lines[0])
+        assert set(first) == {"to", "subject", "text", "html"}
+        assert first["to"] == ["b@x.test"]
+        assert first["subject"] == "hello"
+        assert first["text"].strip() == "body"
+        assert first["html"] == ""
+    finally:
+        sink.stop()

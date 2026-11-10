@@ -1,14 +1,16 @@
 """Admin surface — header `X-Admin-Key` (see spec/api.md §Admin surface)."""
 
 import structlog
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Body, Depends, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.workshop0.api._common import iso_z, ok, request_base_url
+from src.workshop0.auth.deps import AdminActor, require_admin
 from src.workshop0.db.models import HelpRequest, Participant, Workshop
 from src.workshop0.db.session import get_session
 from src.workshop0.security import require_admin_key
+from src.workshop0.services import tiein
 from src.workshop0.services.workshops import (  # re-exported: the shared request models
     MilestoneIn,
     WorkshopCreate,
@@ -72,3 +74,34 @@ def create_workshop(
         creator_email=None,
         base_url=request_base_url(request),
     )
+
+
+@router.get("/workshops/{workshop_id}/facilitators")
+def get_facilitators(workshop_id: int, session: Session = Depends(get_session)) -> dict:
+    return ok({"facilitators": tiein.list_for_workshop(session, workshop_id)})
+
+
+@router.put("/workshops/{workshop_id}/facilitators")
+def put_facilitators(
+    workshop_id: int,
+    body: dict = Body(...),
+    session: Session = Depends(get_session),
+    actor: AdminActor = Depends(require_admin),
+) -> dict:
+    items = body.get("facilitators")
+    return ok({"facilitators": tiein.replace_for_workshop(session, workshop_id, items, by=actor.by)})
+
+
+@router.post("/workshops/{workshop_id}/facilitators")
+def post_facilitator(
+    workshop_id: int,
+    body: dict = Body(...),
+    session: Session = Depends(get_session),
+    actor: AdminActor = Depends(require_admin),
+) -> dict:
+    profile_id, role = body.get("profile_id"), body.get("role", "co")
+    if isinstance(profile_id, bool) or not isinstance(profile_id, int):
+        raise tiein._validation_error("profile_id: must be an integer")
+    if role not in tiein.ROLES:
+        raise tiein._validation_error("role: must be one of lead, co, ta")
+    return ok({"facilitators": tiein.add_one(session, workshop_id, profile_id, role, by=actor.by)})

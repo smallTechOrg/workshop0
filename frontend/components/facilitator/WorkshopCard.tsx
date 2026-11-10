@@ -7,15 +7,20 @@ import {
 } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { Badge, WorkshopStatusBadge } from "@/components/ui/Badge";
+import { FacilitatorsButton } from "@/components/admin/facilitators/FacilitatorsButton";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { cn, formatDate } from "@/lib/format";
 
 export function WorkshopCard({
   workshop,
   justCreated = false,
+  adminKey = "",
+  onUnauthorized = () => {},
 }: {
   workshop: AdminWorkshopSummary;
   justCreated?: boolean;
+  adminKey?: string;
+  onUnauthorized?: () => void;
 }) {
   const adminToken = tokenFromFacilitatorUrl(workshop.facilitator_url);
   // Phase 6 (C7): origin + creator email — admin surface only. Servers that
@@ -105,7 +110,7 @@ export function WorkshopCard({
         </div>
       </dl>
 
-      <div className="mt-4">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         <Link
           href={`/f/?t=${encodeURIComponent(adminToken)}`}
           className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-sm font-medium text-stone-800 shadow-sm transition-colors hover:bg-stone-50"
@@ -115,6 +120,10 @@ export function WorkshopCard({
             <path fillRule="evenodd" d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z" clipRule="evenodd" />
           </svg>
         </Link>
+        <FacilitatorsButton workshopId={workshop.id} workshopName={workshop.name}
+          adminKey={adminKey}
+          onUnauthorized={onUnauthorized}
+        />
       </div>
     </Card>
   );

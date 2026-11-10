@@ -155,6 +155,8 @@ export interface AdminOpportunityRow {
   deadline: string;
   partner_display_name: string | null;
   partner_id: number | null;
+  /** Phase 13: the workshop a co-facilitation listing is for (admin only). */
+  workshop_id?: number | null;
   partner: PartnerRef | null;
   /** Derived from `partner.internal_name` (read-only). */
   partner_internal_name: string | null;
@@ -240,6 +242,7 @@ export interface OpportunityBody {
   deadline: string | null;
   partner_display_name: string | null;
   partner_id: number | null;
+  workshop_id?: number | null;
   internal_notes: string | null;
   status: StoredStatus;
 }

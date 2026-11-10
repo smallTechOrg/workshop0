@@ -167,6 +167,7 @@ def test_sitemap_and_robots():
     xml = seo.render_sitemap(BASE, [(f"{BASE}/opportunities/a-b-1234?x=1&y=2", NOW)])
     assert "<loc>https://example.test/opportunities</loc>" in xml
     assert "<loc>https://example.test/opportunities/a-b-1234?x=1&amp;y=2</loc><lastmod>2026-11-10</lastmod>" in xml
+    assert xml.index("/opportunities</loc>") < xml.index("/trainers</loc>") < xml.index("a-b-1234")
     robots = seo.render_robots(BASE)
     assert robots.splitlines()[0] == "User-agent: *"
     assert robots.splitlines()[-1] == "Sitemap: https://example.test/sitemap.xml"

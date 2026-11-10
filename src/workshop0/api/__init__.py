@@ -84,11 +84,13 @@ def create_app() -> FastAPI:
         board_admin,
         board_ai_admin,
         board_public,
+        directory_public,
         facilitator,
         health,
         matching_admin,
         network_admin,
         network_me,
+        network_public,
         outbox_admin,
         participant,
         partners_admin,
@@ -166,6 +168,10 @@ def create_app() -> FastAPI:
 
     # Phase 11e — server-rendered listing pages, sitemap and robots (api/seo.py).
     app.include_router(seo.router)
+
+    # Phase 13 - unsubscribe/cron and the public directory API (before the static mount).
+    app.include_router(network_public.router)
+    app.include_router(directory_public.router)
 
     # Phase 11 — invite + pretty network links (before the static mount).
     @app.get("/invite/{token}", include_in_schema=False)

@@ -144,3 +144,31 @@ def test_drain_without_smtp_env_records_and_opens_no_socket(monkeypatch):
     assert sender.drain() == 1
     row = _row(rid)
     assert row.status == "recorded" and row.sent_at is None and row.attempts == 0
+
+
+def test_concurrent_drains_never_send_a_row_twice(smtp_env, monkeypatch):
+    """A batch claim + per-row commit used to release the remaining locks, letting a second
+    drain re-send them. Each row must be claimed in its own transaction."""
+    import threading
+    import time
+
+    from src.workshop0.email import smtp as smtp_mod
+
+    monkeypatch.setattr(sender, "_rate_limited", lambda session, to: False)
+    ids = [_enqueue(to=f"c{i}@example.test", key=f"conc-{i}") for i in range(6)]
+    real_send = smtp_mod.send
+
+    def slow_send(*a, **kw):
+        time.sleep(0.15)
+        return real_send(*a, **kw)
+
+    monkeypatch.setattr(smtp_mod, "send", slow_send)
+    first = threading.Thread(target=sender.drain)
+    first.start()
+    time.sleep(0.25)  # the first drain has committed row 1 and is mid-send on row 2
+    second = threading.Thread(target=sender.drain)
+    second.start()
+    first.join()
+    second.join()
+    assert sorted(m["To"] for m in smtp_env.messages) == sorted(f"c{i}@example.test" for i in range(6))
+    assert all(_row(i).status == "sent" for i in ids)

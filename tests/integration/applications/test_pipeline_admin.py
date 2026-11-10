@@ -220,7 +220,7 @@ def test_bulk_status_schedules_drain_only_when_emails_queued(
     from src.workshop0.email import sender
 
     calls = []
-    monkeypatch.setattr(sender, "schedule_drain", lambda bg: calls.append(1))
+    monkeypatch.setattr(sender, "schedule_drain", lambda bg, **kw: calls.append(1))
     listing = open_listing()
     ids = seed_applicants(trainer_factory, listing["id"], 2)  # 2 apply() calls also schedule
     base = len(calls)

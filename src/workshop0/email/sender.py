@@ -30,9 +30,9 @@ def _mask(email: str) -> str:
     return f"{local[:2]}***@{domain}" if domain else f"{local[:2]}***"
 
 
-def schedule_drain(background_tasks: BackgroundTasks) -> None:
-    """Run `drain()` after the response is sent."""
-    background_tasks.add_task(drain)
+def schedule_drain(background_tasks: BackgroundTasks, limit: int = 20) -> None:
+    """Run `drain(limit)` after the response is sent."""
+    background_tasks.add_task(drain, limit)
 
 
 def _limit(name: str, default: int) -> int:
@@ -107,14 +107,18 @@ def drain(limit: int = 20) -> int:
     done = 0
     try:
         with create_db_session() as session:
-            rows = session.scalars(
-                select(EmailOutbox)
-                .where(EmailOutbox.status == "queued")
-                .order_by(EmailOutbox.id)
-                .limit(limit)
-                .with_for_update(skip_locked=True)
-            ).all()
-            for row in rows:
+            # Claim ONE row per transaction: committing releases every lock taken in it, so
+            # a batch claim would let a concurrent drain grab (and re-send) the rest.
+            while done < limit:
+                row = session.scalars(
+                    select(EmailOutbox)
+                    .where(EmailOutbox.status == "queued")
+                    .order_by(EmailOutbox.id)
+                    .limit(1)
+                    .with_for_update(skip_locked=True)
+                ).first()
+                if row is None:
+                    break
                 _process(session, row)
                 session.commit()  # per row: a sent mail is never re-sent after a later crash
                 done += 1

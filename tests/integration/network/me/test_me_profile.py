@@ -252,3 +252,12 @@ def test_profiles_are_isolated_between_users(make_user, signed_in_client):
     assert b.post("/api/me/profile", json=profile_body(headline="Bob the trainer")).status_code == 200
     assert a.get("/api/me/profile").json()["data"]["profile"]["headline"] == "Alice the trainer"
     assert b.get("/api/me/profile").json()["data"]["profile"]["headline"] == "Bob the trainer"
+
+
+def test_own_payload_has_directory_block_and_ignores_slug_in_create(trainer):
+    user, client = trainer
+    response = client.post("/api/me/profile", json=profile_body(public_slug="evil", visibility="public"))
+    assert response.status_code == 200, response.text
+    profile = response.json()["data"]["profile"]
+    assert set(profile["directory"]) == {"visibility", "listed", "path", "min_completeness"}
+    assert profile["directory"]["path"] is None and profile["directory"]["listed"] is False

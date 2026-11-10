@@ -247,17 +247,10 @@ test.describe('network onboarding — sign in, CV-drafted profile, delete', () =
     // Phase 12: applications and matches are real links, not stubs.
     await expect(page.getByTestId('link-applications')).toHaveAttribute('href', /\/network\/applications\/?$/);
     await expect(page.getByTestId('link-matches')).toHaveAttribute('href', /\/network\/matches\/?$/);
-    for (const label of [
-      'Saved searches & alerts',
-      'Public directory profile',
-    ]) {
-      const stub = page
-        .getByTestId('profile-stubs')
-        .locator('[aria-disabled="true"]')
-        .filter({ hasText: label });
-      await expect(stub, `${label} is a labelled stub`).toBeVisible();
-      await expect(stub).toContainText(STUB_PILL);
-    }
+    // Phase 13: saved searches and the public directory profile are real controls.
+    await expect(page.getByTestId('link-searches')).toHaveAttribute('href', /\/network\/searches\/?$/);
+    await expect(page.getByTestId('directory-toggle')).toBeVisible();
+    await expect(page.getByTestId('stub-badge')).toHaveCount(0);
     expect((await authMe())!.has_profile).toBe(true);
   });
 
