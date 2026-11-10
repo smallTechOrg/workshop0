@@ -254,7 +254,9 @@ The participant poll's `broadcast` field activates with the same shape. Definiti
 
 ---
 
-# Phase 4 endpoints — AI help-desk
+# Phase 4 endpoints — AI help-desk (not yet implemented)
+
+> None of the endpoints below exist in code yet (verified 2026-11-10); Phase 4 is specified, not built.
 
 | Endpoint | Auth | Body → Effect |
 |---|---|---|

@@ -25,7 +25,7 @@
 | Package manager (frontend) | pnpm | frontend deps in `frontend/`, e2e deps in root `package.json` |
 | E2E testing | Playwright | `@playwright/test`, chromium, config at repo root, tests in `tests/e2e/` |
 | Backend testing | pytest | `tests/unit/`, `tests/integration/` |
-| LLM provider — help-desk (Phase 4) | OpenRouter | key: `OPENROUTER_API_KEY` (exact name — project convention); default model `anthropic/claude-sonnet-4-6` via `WORKSHOP0_AI_MODEL`. Unchanged by the trainer network; not migrated (§Key decisions). **Code truth (grep of `src/`, 2026-11-09):** only the settings fields and the `ai_usage`/`ai_state` schema exist — the pipeline module is absent (agent.md header) |
+| LLM provider — help-desk (Phase 4) | OpenRouter | key: `OPENROUTER_API_KEY` (exact name — project convention); default model `anthropic/claude-sonnet-4-6` via `WORKSHOP0_AI_MODEL`. Unchanged by the trainer network; not migrated (§Key decisions). **Code truth (grep of `src/`, 2026-11-10):** the `ai/` package exists for the network AI only; the help-desk module is not yet in code — only the settings fields and the `ai_usage`/`ai_state` schema exist (agent.md header) |
 | LLM provider — trainer network (Phase 11+) | **Anthropic, direct** (user decision) | `anthropic` Python SDK; key `ANTHROPIC_API_KEY` + `ANTHROPIC_WORKSPACE_ID`, the latter sent on **every** request as header `anthropic-workspace-id` (hard requirement — agent.md §Provider); models `claude-sonnet-5-5` (`WORKSHOP0_AI_NETWORK_MODEL`, CV extraction, opportunity drafting (P11b) + ranking) and `claude-haiku-5-5` (`WORKSHOP0_AI_NETWORK_FAST_MODEL`, cheap calls); cost = tokens × `ai/pricing.py` table |
 | LLM SDK (Phase 11) | `anthropic` ≥2.6.0 (brings its own httpx fork, `httpx2`) | Added to `pyproject.toml` + `uv.lock` in the Phase-11 scaffold (Phase 10 adds no dependency). Constructed only in `src/workshop0/ai/anthropic_client.py`; structured output via `output_config` json_schema (agent.md §Shared client) |
 | Deploy (production, Phase 7+) | **Cloud Run + Cloud SQL**, GitHub Actions + Workload Identity Federation | see §Production topology. Supersedes the Phase-5 VM path (Docker Compose + Caddy + SQLite on GCE), removed from the repo in Phase 8 (recoverable from git tag `vm-deploy-final`) |
@@ -64,17 +64,12 @@ workshop0/                  ← repo root IS the project; all commands run from 
 │       │   └── participant.py      ← /api/join/…, /api/p/{token}/… surface
 │       ├── services/
 │       │   ├── snapshots.py        ← versioned poll-payload builders (stateless; in-process memo dropped in Phase 7)
-│       │   ├── lifecycle.py        ← lazy status transitions (Phase 3)
 │       │   ├── intelligence.py     ← stuck / bottleneck / pulse computation (Phase 2)
 │       │   ├── undo.py             ← undoable-action record/replay (Phase 2)
-│       │   ├── templates.py        ← template instantiate/save-as (Phase 3)
+│       │   ├── audit.py · join_form.py · milestone_input.py
 │       │   └── workshops.py        ← Phase 6: the ONE creation service both admin.py and public.py call
-│       ├── ai/                     ← AI help-desk pipeline (Phase 4; see spec/agent.md) — NOT YET IN CODE (verified 2026-11-09); Phase 11 creates the package with the network-AI modules below
-│       │   ├── pipeline.py         ← run_help_desk(help_request_id)
-│       │   ├── context.py          ← context gathering
-│       │   ├── corpus.py           ← FTS5 corpus maintenance + similarity search
-│       │   ├── openrouter.py       ← httpx client, usage/cost capture
-│       │   └── prompts/            ← *.md prompt templates
+│       │                             (network services: see Trainer Network additions below)
+│       ├── ai/                     ← exists for the Anthropic network AI (see Trainer Network additions below). The Phase-4 help-desk module (pipeline.py run_help_desk, context.py, corpus.py, openrouter.py, prompts/ — agent.md) is NOT YET IN CODE (verified 2026-11-10)
 │       └── observability/
 │           └── logging.py          ← structlog config + request-logging middleware
 ├── frontend/
@@ -118,7 +113,7 @@ workshop0/                  ← repo root IS the project; all commands run from 
 │   ├── cloudrun/                   ← Phase 7: provision.sh, dbinit.py · Phase 8: import-data.sh, domain-map.sh
 │   └── RUNBOOK.md                  ← Phase 8: rewritten for Cloud Run (topology, cutover, rollback, VM decommission)
 └── .github/workflows/
-    ├── ci.yml                      ← PR/push: tests on a PostgreSQL 17 service container
+    ├── ci.yml                      ← PR/push jobs: `backend` (pytest on a PostgreSQL 17 service container), `frontend-build` (pnpm build), `e2e` (Playwright against a live single-origin server on PostgreSQL)
     └── deploy-cloudrun.yml         ← production deploy (WIF → AR → migrate job → revision → traffic); push to main + workflow_dispatch (any branch ref)
 ```
 

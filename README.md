@@ -328,7 +328,7 @@ gcloud run services update workshop0 --region us-central1 --project ai-agent-boi
 | `WORKSHOP0_ADMIN_KEY` | **yes** | — | Facilitator access key for Admin Home |
 | `WORKSHOP0_BASE_URL` | no | derived from request | Absolute base for generated share links |
 | `WORKSHOP0_LOG_LEVEL` | no | `INFO` | Log level (structlog, JSON to stdout) |
-| `OPENROUTER_API_KEY` | no | — | AI help-desk (Phase 4); absent = fully air-gapped |
+| `OPENROUTER_API_KEY` | no | — | AI help-desk (Phase 4, not yet built); absent = fully air-gapped |
 | `WORKSHOP0_AI_MODEL` | no | `anthropic/claude-sonnet-4-6` | OpenRouter model id |
 | `WORKSHOP0_AI_CONFIDENCE` | no | `0.75` | AI auto-answer confidence threshold |
 | `WORKSHOP0_GOOGLE_CLIENT_ID` | no (P11) | — | Google OAuth web client id; with the secret, enables trainer-network sign-in |

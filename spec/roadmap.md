@@ -11,7 +11,7 @@ Ground-up rebuild. The old `src/` and `frontend/` are **removed at scaffold**; n
 | 1 | Core live loop (create, join, milestones, live dashboard, manual help desk) | delivered |
 | 2 | Facilitator command & proactive intelligence | delivered |
 | 3 | Lifecycle, templates & re-run | delivered |
-| 4 | AI help-desk (OpenRouter) | delivered — but see the code-truth note below |
+| 4 | AI help-desk (OpenRouter) | specified, not built (deferred) — see the code-truth note below |
 | 5 | Docker + CI/CD (VM path, since retired) | delivered |
 | 6 | Public landing page & self-service creation | delivered |
 | 7 | Cloud Run + Cloud SQL (fresh database) | delivered |
@@ -25,7 +25,7 @@ Ground-up rebuild. The old `src/` and `frontend/` are **removed at scaffold**; n
 | 12 | Applications, matching & email outbox (C14–C16) | delivered (PR #13, `0011`) |
 | 13 | Alerts & digest, public directory, workshop tie-in (C17–C19) | specified — reconciled with the code at head `0011` on 2026-11-10; builds as migration `0012` |
 
-> **Code truth — Phase 4 (verified 2026-11-09 by grepping `src/`):** the help-desk pipeline is not in code. There is no `src/workshop0/ai/`; only its schema (`ai_usage`, `help_request.ai_state`), the settings `openrouter_api_key`/`workshop0_ai_model` and the startup key-presence log exist. This is drift for `/zero-shot-sync`; Phases 10–13 neither repair it nor depend on it. Phase 11 creates `src/workshop0/ai/` for the **Anthropic**-backed network AI.
+> **Code truth — Phase 4 (verified 2026-11-10 by grepping `src/`):** the help-desk pipeline is not in code. `src/workshop0/ai/` exists but holds only the **Anthropic**-backed network AI (Phases 11–12); there is no help-desk module (no OpenRouter client, no `run_help_desk`) and no `POST /api/f/{t}/ai` or `/api/p/{token}/help/{id}/escalate` routes. Groundwork only: the `openrouter_api_key` setting, `help_request.ai_state`, `ai_usage.purpose = triage_answer`, `ai_enabled` in the facilitator payload, and the startup key-presence log. Phases 10–13 neither build nor depend on it.
 
 **Trainer Network ordering rationale.** Phase 10 needs nothing external (no Google client, no SMTP, no LLM key) and is valuable alone. Phases 11–13 each keep their **automated** gate free of human-only steps — sign-in is gated through a real OIDC protocol run against the local test issuer, email through a real local SMTP sink, network-AI calls through the real **Anthropic** key + workspace id read from the gitignored local `.env` (already present) — while the steps only a human can do (Google Console client, Gmail app password, creating Secret Manager secrets) are part of that phase's "How the user tests it". So no build ever stalls on an AFK user; external blockers bite only at the human testing gate, where the human is present.
 
@@ -115,7 +115,7 @@ The e2e smoke covers the full loop against the live single-origin app: create wo
 
 **Goal:** Help requests are triaged by AI that knows the participant's context and every past resolution: confident → instant badged auto-answer with one-tap human escalation; unsure → draft for facilitator review — fully audited, costed per workshop, per-workshop toggleable, and a zero-error no-op without an API key.
 
-**Capabilities delivered:** AI triage & auto-answer pipeline · Escalation & transparency (AI badge, "Get a human", exact-context disclosure) · Cross-workshop learning corpus (FTS5) · Spend tracking + per-workshop toggle + air-gapped guarantee. Design is fixed in [agent.md](agent.md).
+**Capabilities planned:** AI triage & auto-answer pipeline · Escalation & transparency (AI badge, "Get a human", exact-context disclosure) · Cross-workshop learning corpus (FTS5) · Spend tracking + per-workshop toggle + air-gapped guarantee. Design is fixed in [agent.md](agent.md).
 
 **Independent slices (parallel; S1↔S2 share only the `run_help_desk(help_request_id)` interface fixed in agent.md — no serialization needed):**
 

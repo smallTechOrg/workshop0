@@ -2,7 +2,7 @@
 
 > The trainer network (Phases 11–12) adds two more single-call transforms — the profile drafter and the shortlist ranker — specified in §Network AI at the end of this file. **They call Anthropic (Claude) directly, not OpenRouter** (user decision, 2026-11); the help-desk below stays on OpenRouter. Phase 10 uses no AI.
 >
-> **Code truth (verified 2026-11-09 by grepping `src/`):** the help-desk pipeline below is specified but **not present in code** — there is no `src/workshop0/ai/` package. What exists: the `ai_usage` table and `help_request.ai_state` column (`db/models.py`), the settings fields `openrouter_api_key` / `workshop0_ai_model`, and the `openrouter_key_present` boolean in the `app.startup` log. This is spec↔code drift for `/zero-shot-sync`; Phases 10–13 neither fix nor depend on it.
+> **Code truth (verified 2026-11-10 by grepping `src/`):** the help-desk pipeline below is specified but **not present in code**. `src/workshop0/ai/` exists but holds only the Anthropic network AI (§Network AI); there is no help-desk module (no `openrouter.py`, no `run_help_desk`) and no `POST /api/f/{t}/ai` or `/api/p/{token}/help/{id}/escalate` routes. What exists: the `ai_usage` table and `help_request.ai_state` column (`db/models.py`), the settings fields `openrouter_api_key` / `workshop0_ai_model`, and the `openrouter_key_present` boolean in the `app.startup` log. This is spec↔code drift for `/zero-shot-sync`; Phases 10–13 neither fix nor depend on it.
 
 The AI layer arrives in **Phase 4**, but this design is fixed now: the schema (data-model.md), the API surface (api.md), and this pipeline are designed once so Phase 4 wires — it does not redesign.
 
