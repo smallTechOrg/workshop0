@@ -28,9 +28,10 @@ DB_NAME="workshop0"
 DB_USER="workshop0_app"
 SERVICE="workshop0"
 DBINIT_JOB="workshop0-dbinit"
-# dbinit runs from a public Google image (the app image does not exist before the
-# first deploy); psycopg is pip-installed at job start, dbinit.py is passed as base64.
-DBINIT_IMAGE="gcr.io/google.com/cloudsdktool/google-cloud-cli:slim"
+# dbinit runs from a public Python image (the app image does not exist before the
+# first deploy, and the slim gcloud image has no python3); psycopg is pip-installed at
+# job start, dbinit.py is passed as base64. It only runs when the database is missing.
+DBINIT_IMAGE="docker.io/library/python:3.12-slim"
 # Phase 11: private CV bucket (architecture.md §CV storage).
 CV_BUCKET="${CV_BUCKET:-${PROJECT_ID}-workshop0-cvs}"
 SECRETS=(workshop0-database-url workshop0-openrouter-api-key workshop0-admin-key
@@ -348,9 +349,15 @@ JOB_VERB=""
 if gcloud run jobs describe "$DBINIT_JOB" --region "$REGION" "${G[@]}" >/dev/null 2>&1; then JOB_VERB=update; else JOB_VERB=create; fi
 DB_EXISTED=0
 gcloud sql databases list --instance "$SQL_INSTANCE" "${G[@]}" --format='value(name)' | grep -qx "$DB_NAME" && DB_EXISTED=1
-if [ $DRY -eq 1 ]; then
+if [ "$DB_EXISTED" -eq 1 ]; then
+  # The database is already there; schema is owned by the deploy workflow's Alembic
+  # migrations, so there is nothing for dbinit to do. Skip it rather than run a job
+  # that can only re-verify privileges (and must never abort an otherwise-good run).
+  exists "database $DB_NAME"
+  info "dbinit skipped: database $DB_NAME already exists (migrations run in the deploy workflow)"
+elif [ $DRY -eq 1 ]; then
   [ "$JOB_VERB" = create ] && would "run-job $DBINIT_JOB" || exists "run-job $DBINIT_JOB"
-  [ "$DB_EXISTED" -eq 1 ] && exists "database $DB_NAME" || would "database $DB_NAME (via $DBINIT_JOB)"
+  would "database $DB_NAME (via $DBINIT_JOB)"
 else
   gcloud run jobs "$JOB_VERB" "$DBINIT_JOB" --region "$REGION" "${G[@]}" \
     --image "$DBINIT_IMAGE" --service-account "$RUN_SA" \
@@ -366,7 +373,7 @@ else
       --limit 15 --freshness 15m --format='value(textPayload)' >&2 || true
     exit 1
   fi
-  if [ "$DB_EXISTED" -eq 1 ]; then exists "database $DB_NAME"; else created "database $DB_NAME (owner $DB_USER)"; fi
+  created "database $DB_NAME (owner $DB_USER)"
   info "dbinit ok: schema create privilege verified for $DB_USER on $DB_NAME"
 fi
 

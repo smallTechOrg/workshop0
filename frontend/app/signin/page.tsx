@@ -24,7 +24,7 @@ import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Avatar } from "@/components/network/auth/Avatar";
 import { GoogleButton } from "@/components/network/auth/GoogleButton";
-import { NetworkShell } from "@/components/network/auth/NetworkShell";
+import { NetworkShell } from "@/components/network/NetworkShell";
 import { signinErrorMessage } from "@/components/network/auth/signinErrors";
 
 type ConfigState =
@@ -218,7 +218,7 @@ function SigninInner() {
 
 export default function SigninPage() {
   return (
-    <NetworkShell showAccount={false}>
+    <NetworkShell showAccount={false} variant="entry">
       <Suspense
         fallback={
           <div className="mx-auto max-w-md px-4 py-12 sm:py-16">

@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { GoogleButton } from "@/components/network/auth/GoogleButton";
-import { NetworkShell } from "@/components/network/auth/NetworkShell";
+import { NetworkShell } from "@/components/network/NetworkShell";
 
 const BENEFITS: { title: string; body: string }[] = [
   {
@@ -138,7 +138,7 @@ export default function NetworkHomePage() {
   }
 
   return (
-    <NetworkShell>
+    <NetworkShell variant="entry">
       {content}
       <p className="pb-8 text-center text-sm text-stone-500">
         <a data-testid="link-directory" className="underline underline-offset-4" href="/trainers">

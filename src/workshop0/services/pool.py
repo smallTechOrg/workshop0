@@ -214,6 +214,17 @@ def _topics_by_profile(session: Session, profile_ids: list[int]) -> dict[int, li
     return result
 
 
+def _cv_user_ids(session: Session, user_ids: list[int]) -> set[int]:
+    """One query: which of these users have a CV on file (completeness's `cv` check)."""
+    if not user_ids:
+        return set()
+    return set(
+        session.scalars(
+            select(CvDocument.user_id).where(CvDocument.user_id.in_(user_ids)).distinct()
+        ).all()
+    )
+
+
 def _tags_by_profile(session: Session, profile_ids: list[int]) -> dict[int, list[str]]:
     result: dict[int, list[str]] = {pid: [] for pid in profile_ids}
     if not profile_ids:
@@ -248,11 +259,13 @@ def _rate(profile: TrainerProfile) -> dict | None:
     }
 
 
-def _completeness(profile: TrainerProfile) -> profiles.Completeness:
-    return profiles.completeness(profile)
+def _completeness(profile: TrainerProfile, topic_count: int, has_cv: bool) -> profiles.Completeness:
+    return profiles.completeness(profile, topic_count=topic_count, has_cv=has_cv)
 
 
-def _row(profile: TrainerProfile, user: AppUser, topics: list[dict], tags: list[str]) -> dict:
+def _row(
+    profile: TrainerProfile, user: AppUser, topics: list[dict], tags: list[str], has_cv: bool
+) -> dict:
     return {
         "id": profile.id,
         "user_id": user.id,
@@ -265,7 +278,7 @@ def _row(profile: TrainerProfile, user: AppUser, topics: list[dict], tags: list[
         "topics": topics,
         "rate": _rate(profile),
         "verified": bool(profile.verified),
-        "completeness_pct": _completeness(profile).pct,
+        "completeness_pct": _completeness(profile, len(topics), has_cv).pct,
         "tags": tags,
         "created_at": iso_z(profile.created_at),
         "updated_at": iso_z(profile.updated_at),
@@ -280,9 +293,11 @@ def _loads(raw: str | None, default):
     return value if isinstance(value, type(default)) else default
 
 
-def _full(profile: TrainerProfile, user: AppUser, topics: list[dict], tags: list[str]) -> dict:
-    done = _completeness(profile)
-    full = _row(profile, user, topics, tags)
+def _full(
+    profile: TrainerProfile, user: AppUser, topics: list[dict], tags: list[str], has_cv: bool
+) -> dict:
+    done = _completeness(profile, len(topics), has_cv)
+    full = _row(profile, user, topics, tags, has_cv)
     full.update(
         {
             "bio_md": profile.bio_md,
@@ -340,8 +355,9 @@ def list_trainers(session: Session, filters: TrainerFilters, *, page: int, page_
     ids = [profile.id for profile, _ in rows]
     topics = _topics_by_profile(session, ids)
     tags = _tags_by_profile(session, ids)
+    cv_users = _cv_user_ids(session, [u.id for _, u in rows])
     return {
-        "trainers": [_row(p, u, topics[p.id], tags[p.id]) for p, u in rows],
+        "trainers": [_row(p, u, topics[p.id], tags[p.id], u.id in cv_users) for p, u in rows],
         "page": page,
         "page_size": page_size,
         "total": total,
@@ -361,7 +377,8 @@ def trainer_rows(session: Session, profile_ids: list[int]) -> dict[int, dict]:
     ids = [p.id for p, _ in rows]
     topics = _topics_by_profile(session, ids)
     tags = _tags_by_profile(session, ids)
-    return {p.id: _row(p, u, topics[p.id], tags[p.id]) for p, u in rows}
+    cv_users = _cv_user_ids(session, [u.id for _, u in rows])
+    return {p.id: _row(p, u, topics[p.id], tags[p.id], u.id in cv_users) for p, u in rows}
 
 
 def _get_or_404(session: Session, profile_id: int) -> tuple[TrainerProfile, AppUser]:
@@ -430,7 +447,7 @@ def get_trainer(session: Session, profile_id: int) -> dict:
     tags = _tags_by_profile(session, [profile.id])[profile.id]
     cv = _cv_for_user(session, user.id)
     return {
-        "trainer": _full(profile, user, topics, tags),
+        "trainer": _full(profile, user, topics, tags, cv is not None),
         "notes": _notes(session, profile.id),
         "tags": tags,
         "cv": _cv_meta(cv),
@@ -492,6 +509,7 @@ def export_csv(session: Session, filters: TrainerFilters) -> str:
     ids = [profile.id for profile, _ in rows]
     topics = _topics_by_profile(session, ids)
     tags = _tags_by_profile(session, ids)
+    cv_users = _cv_user_ids(session, [u.id for _, u in rows])
     buffer = io.StringIO()
     buffer.write("﻿")
     writer = csv.writer(buffer, lineterminator="\r\n")
@@ -511,7 +529,9 @@ def export_csv(session: Session, filters: TrainerFilters) -> str:
             "rate_unit": profile.rate_unit,
             "pro_bono": bool(profile.pro_bono),
             "verified": bool(profile.verified),
-            "completeness_pct": _completeness(profile).pct,
+            "completeness_pct": _completeness(
+                profile, len(topics[profile.id]), user.id in cv_users
+            ).pct,
             "tags": "; ".join(tags[profile.id]),
             "linkedin_url": profile.linkedin_url,
             "github_url": profile.github_url,
