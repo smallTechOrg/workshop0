@@ -193,7 +193,7 @@ test.describe.serial('Phase 13 — alerts, unsubscribe and weekly digest', () =>
     }
   });
 
-  test('unsubscribe link -> 303 to the confirmation page; alerts off, digest still on', async ({ playwright }) => {
+  test('unsubscribe link: GET only confirms (no change), the Unsubscribe click turns alerts off, digest stays on', async ({ playwright, browser }) => {
     const link = DUMP
       ? (dumpMessages('one')[0].text.match(/https?:\/\/[^\s"'<>]*\/api\/email\/unsubscribe\?t=[^\s"'<>]+/) ?? [])[0]
       : undefined;
@@ -203,8 +203,19 @@ test.describe.serial('Phase 13 — alerts, unsubscribe and weekly digest', () =>
       const anon = await playwright.request.newContext({ baseURL: ORIGIN });
       const res = await anon.get(`${u.pathname}${u.search}`, { maxRedirects: 0 });
       expect(res.status()).toBe(303);
-      expect(res.headers()['location']).toContain('/app/network/unsubscribed/?kind=alerts');
+      expect(res.headers()['location']).toContain('/app/network/unsubscribed/?confirm=alerts');
       await anon.dispose();
+      // A prefetching mail scanner would stop here: nothing changed yet.
+      const before = data(await (await trainerCtx.request.get(`${ORIGIN}/api/me/email-prefs`)).json());
+      expect(before).toMatchObject({ alerts: true, digest: true });
+
+      const ctx = await browser.newContext();
+      const page = await ctx.newPage();
+      await page.goto(`${ORIGIN}${u.pathname}${u.search}`);
+      await expect(page.getByTestId('unsubscribe-question')).toContainText('new-opportunity alerts');
+      await page.getByTestId('unsubscribe-confirm').click();
+      await expect(page.getByTestId('unsubscribed-message')).toContainText("You're unsubscribed from new-opportunity alerts");
+      await ctx.close();
     }
     const prefs = data(await (await trainerCtx.request.get(`${ORIGIN}/api/me/email-prefs`)).json());
     if (link) expect(prefs).toMatchObject({ alerts: false, digest: true });

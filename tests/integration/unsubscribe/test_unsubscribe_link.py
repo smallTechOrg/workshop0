@@ -73,24 +73,50 @@ def test_make_token_rejects_unknown_kind():
         unsubscribe.make_token(1, "admin")  # type: ignore[arg-type]
 
 
+def _confirm_url(kind, tok):
+    from urllib.parse import urlencode
+
+    return f"/app/network/unsubscribed/?{urlencode({'confirm': kind, 't': tok})}"
+
+
+@pytest.mark.parametrize("kind", ["alerts", "digest"])
+def test_get_never_changes_prefs_and_points_to_confirm_page(client, kind):
+    """Mail scanners prefetch links: GET must be side-effect free."""
+    uid = _user()
+    tok = unsubscribe.make_token(uid, kind)
+    r = client.get(f"/api/email/unsubscribe?t={tok}", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == _confirm_url(kind, tok)
+    assert _prefs(uid) == (True, True)
+    with create_db_session() as s:
+        assert not list(s.scalars(select(FacilitatorAction).where(FacilitatorAction.action == "email.unsubscribe")))
+
+
 @pytest.mark.parametrize("kind,expect", [("alerts", (False, True)), ("digest", (True, False))])
-def test_valid_link_flips_only_that_pref_idempotently(client, kind, expect):
+def test_valid_post_flips_only_that_pref_idempotently(client, kind, expect):
     uid = _user()
     tok = unsubscribe.make_token(uid, kind)
     for _ in range(2):
-        r = client.get(f"/api/email/unsubscribe?t={tok}", follow_redirects=False)
-        assert r.status_code == 303
-        assert r.headers["location"] == f"/app/network/unsubscribed/?kind={kind}"
+        r = client.post("/api/email/unsubscribe", json={"t": tok})
+        assert r.status_code == 200 and r.json()["data"] == {"kind": kind, "unsubscribed": True}
         assert _prefs(uid) == expect
     with create_db_session() as s:
         rows = list(s.scalars(select(FacilitatorAction).where(FacilitatorAction.action == "email.unsubscribe")))
         assert rows and all(r.actor == "user" and json.loads(r.detail_json) == {"kind": kind} for r in rows)
 
 
+def test_one_click_post_with_query_token(client):
+    """RFC 8058 style: mail client POSTs to the link with a form body, token in the query."""
+    uid = _user()
+    tok = unsubscribe.make_token(uid, "alerts")
+    r = client.post(f"/api/email/unsubscribe?t={tok}", data={"List-Unsubscribe": "One-Click"})
+    assert r.status_code == 200 and _prefs(uid) == (False, True)
+
+
 def test_both_kinds_independent(client):
     uid = _user()
     for kind in ("alerts", "digest"):
-        client.get(f"/api/email/unsubscribe?t={unsubscribe.make_token(uid, kind)}", follow_redirects=False)
+        client.post("/api/email/unsubscribe", json={"t": unsubscribe.make_token(uid, kind)})
     assert _prefs(uid) == (False, False)
 
 
@@ -103,10 +129,19 @@ def test_invalid_links_redirect_never_error(client, path):
     assert _prefs(uid) == (True, True)
 
 
+@pytest.mark.parametrize("body", [{}, {"t": ""}, {"t": "junk"}, ["x"]])
+def test_invalid_post_is_400_and_changes_nothing(client, body):
+    uid = _user()
+    r = client.post("/api/email/unsubscribe", json=body)
+    assert r.status_code == 400
+    assert _prefs(uid) == (True, True)
+
+
 def test_deleted_user_token_invalid(client):
     tok = unsubscribe.make_token(999999, "alerts")
     r = client.get(f"/api/email/unsubscribe?t={tok}", follow_redirects=False)
     assert r.headers["location"] == "/app/network/unsubscribed/?error=invalid_link"
+    assert client.post("/api/email/unsubscribe", json={"t": tok}).status_code == 400
     with create_db_session() as s:
         assert email_prefs.get(s, 999999).alerts is True
 
@@ -114,5 +149,7 @@ def test_deleted_user_token_invalid(client):
 def test_no_auth_or_csrf_needed_and_url_helper_link_works(client):
     uid = _user()
     link = unsubscribe.url("http://base.test", uid, "alerts")
-    r = client.get(link.replace("http://base.test", ""), follow_redirects=False)
-    assert r.status_code == 303 and _prefs(uid) == (False, True)
+    path = link.replace("http://base.test", "")
+    assert client.get(path, follow_redirects=False).status_code == 303 and _prefs(uid) == (True, True)
+    r = client.post(path)
+    assert r.status_code == 200 and _prefs(uid) == (False, True)

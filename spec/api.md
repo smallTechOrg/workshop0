@@ -812,7 +812,9 @@ On every write that makes a listing effective-`open` that was not effective-`ope
 
 ## Unsubscribe (C17) — `api/network_public.py`
 
-`GET /api/email/unsubscribe?t=<token>` — no auth, no CSRF. The token is `unsubscribe.make_token(user_id, kind)`, `kind ∈ alerts|digest`, signed with `WORKSHOP0_SESSION_SECRET` (`itsdangerous.URLSafeSerializer`, salt `workshop0.unsubscribe`, no expiry, so old emails keep working; rotating the session secret invalidates them). A valid token for an existing user sets that one preference to false (upsert, idempotent; audit `email.unsubscribe`, actor `user`, detail `{kind}` only) and answers **303** to `/app/network/unsubscribed/?kind=<kind>`. A malformed, tampered, wrong-secret or deleted-user token answers 303 to `/app/network/unsubscribed/?error=invalid_link`. It never returns a 4xx/5xx to the link.
+`GET /api/email/unsubscribe?t=<token>` — no auth, no CSRF, **no side effects** (mail scanners prefetch links). The token is `unsubscribe.make_token(user_id, kind)`, `kind ∈ alerts|digest`, signed with `WORKSHOP0_SESSION_SECRET` (`itsdangerous.URLSafeSerializer`, salt `workshop0.unsubscribe`, no expiry, so old emails keep working; rotating the session secret invalidates them). A valid token for an existing user answers **303** to the confirm page `/app/network/unsubscribed/?confirm=<kind>&t=<token>`; a malformed, tampered, wrong-secret or deleted-user token answers 303 to `/app/network/unsubscribed/?error=invalid_link`. The GET never returns a 4xx/5xx to the link.
+
+`POST /api/email/unsubscribe` — no auth, no CSRF (the signed token is the only credential, so RFC 8058 one-click POSTs from mail clients also work). Token from `?t=` or a JSON body `{"t": …}`. A valid token sets that one preference to false (upsert, idempotent; audit `email.unsubscribe`, actor `user`, detail `{kind}` only) and returns 200 `{kind, unsubscribed: true}`; an invalid one returns 400 `invalid_link` and changes nothing. The confirm page shows "Stop receiving …?" with an **Unsubscribe** button that makes this POST, then shows the unsubscribed message.
 
 ## Weekly digest (C17) — `api/network_public.py`
 
