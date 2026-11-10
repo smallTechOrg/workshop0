@@ -344,6 +344,7 @@ class Opportunity(Base):
         Index("ix_opportunity_published_at", "published_at"),
         Index("ix_opportunity_partner_id", "partner_id"),
         UniqueConstraint("slug", name="uq_opportunity_slug"),
+        Index("ix_opportunity_workshop_id", "workshop_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -376,6 +377,10 @@ class Opportunity(Base):
     budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)  # INR|USD
     budget_unit: Mapped[str | None] = mapped_column(String(8), nullable=True)  # hour|day|course|month
     min_level: Mapped[str | None] = mapped_column(String(16), nullable=True)  # intermediate|advanced|expert
+    # Phase 13 (0012): admin-only; the Workshop0 workshop a cofacilitation listing staffs.
+    workshop_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("workshop.id", ondelete="SET NULL"), nullable=True
+    )
     deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     partner_display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     partner_internal_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
@@ -492,6 +497,8 @@ class TrainerProfile(Base):
     visibility: Mapped[str] = mapped_column(
         String(16), nullable=False, default="private", server_default="private"
     )
+    # Phase 13 (0012): public URL key, generated on first visibility=public, frozen after.
+    public_slug: Mapped[str | None] = mapped_column(String(80), nullable=True, unique=True)
     verified: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=sa_false()
     )
@@ -680,3 +687,55 @@ class EmailOutbox(Base):
     dedupe_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SavedSearch(Base):
+    """Phase 13 (0012): a trainer's saved board search; criteria_json is normalised by
+    services/alerts.validate_criteria."""
+
+    __tablename__ = "saved_search"
+    __table_args__ = (Index("ix_saved_search_user_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    criteria_json: Mapped[str] = mapped_column(Text, nullable=False)
+    alerts_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+
+class EmailPref(Base):
+    """Phase 13 (0012): alert/digest switches. A missing row means both on."""
+
+    __tablename__ = "email_pref"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("app_user.id", ondelete="CASCADE"), primary_key=True
+    )
+    alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sa_true())
+    digest: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sa_true())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+
+class WorkshopFacilitator(Base):
+    """Phase 13 (0012): admin link between a workshop and a network trainer."""
+
+    __tablename__ = "workshop_facilitator"
+    __table_args__ = (Index("ix_workshop_facilitator_profile_id", "profile_id"),)
+
+    workshop_id: Mapped[int] = mapped_column(
+        ForeignKey("workshop.id", ondelete="CASCADE"), primary_key=True
+    )
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("trainer_profile.id", ondelete="CASCADE"), primary_key=True
+    )
+    role: Mapped[str] = mapped_column(String(8), nullable=False)  # lead | co | ta
+    linked_by: Mapped[str] = mapped_column(String(254), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)

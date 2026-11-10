@@ -10,7 +10,7 @@ In pytest::
 
 As a process (the e2e gate)::
 
-    uv run python tests/support/fake_smtp.py --port 8025
+    uv run python tests/support/fake_smtp.py --port 8025 [--dump FILE]
 
 Plain SMTP, no TLS and no auth: point the app at it with WORKSHOP0_SMTP_HOST=127.0.0.1,
 WORKSHOP0_SMTP_PORT=<port>, WORKSHOP0_SMTP_STARTTLS=false and any user/password.
@@ -19,12 +19,14 @@ WORKSHOP0_SMTP_PORT=<port>, WORKSHOP0_SMTP_STARTTLS=false and any user/password.
 from __future__ import annotations
 
 import argparse
+import json
 import socket
 import threading
 import time
 from dataclasses import dataclass, field
 from email import message_from_bytes
 from email.message import Message
+from pathlib import Path
 
 from aiosmtpd.controller import Controller
 from aiosmtpd.smtp import SMTP, AuthResult, Envelope, LoginPassword, Session
@@ -48,10 +50,32 @@ class _Handler:
                 self._sink._failures_left -= 1
                 return "451 Requested action aborted: simulated failure"
             raw = envelope.original_content or envelope.content or b""
-            self._sink.captured.append(
-                Captured(envelope.mail_from, list(envelope.rcpt_tos), message_from_bytes(raw), raw)
-            )
+            msg = message_from_bytes(raw)
+            self._sink.captured.append(Captured(envelope.mail_from, list(envelope.rcpt_tos), msg, raw))
+            if self._sink.dump_path:
+                _append_dump(self._sink.dump_path, list(envelope.rcpt_tos), msg)
         return "250 OK"
+
+
+def _body(msg: Message, subtype: str) -> str:
+    for part in msg.walk():
+        if part.get_content_type() == f"text/{subtype}":
+            payload = part.get_payload(decode=True)
+            if payload is not None:
+                return payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+    return ""
+
+
+def _append_dump(path: str, rcpt_tos: list[str], msg: Message) -> None:
+    """Append one JSON object per accepted message: {"to", "subject", "text", "html"}."""
+    record = {
+        "to": rcpt_tos,
+        "subject": str(msg.get("Subject", "")),
+        "text": _body(msg, "plain"),
+        "html": _body(msg, "html"),
+    }
+    with Path(path).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
 
 
 def _accept_any_auth(server, session, envelope, mechanism, auth_data) -> AuthResult:
@@ -62,6 +86,7 @@ def _accept_any_auth(server, session, envelope, mechanism, auth_data) -> AuthRes
 class FakeSMTP:
     host: str = "127.0.0.1"
     port: int = 0
+    dump_path: str | None = None
     captured: list[Captured] = field(default_factory=list)
     _controller: Controller | None = None
     _failures_left: int = 0
@@ -103,16 +128,17 @@ class FakeSMTP:
             self._controller = None
 
 
-def run_in_thread(port: int = 0, host: str = "127.0.0.1") -> FakeSMTP:
-    return FakeSMTP(host=host, port=port).start()
+def run_in_thread(port: int = 0, host: str = "127.0.0.1", dump: str | None = None) -> FakeSMTP:
+    return FakeSMTP(host=host, port=port, dump_path=dump).start()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fake SMTP sink for Workshop0 tests/e2e")
     parser.add_argument("--port", type=int, default=8025)
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--dump", default=None, help="append one JSON line per accepted message")
     args = parser.parse_args()
-    sink = run_in_thread(args.port, args.host)
+    sink = run_in_thread(args.port, args.host, args.dump)
     print(f"fake smtp listening on {sink.host}:{sink.port}", flush=True)
     try:
         while True:

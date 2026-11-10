@@ -30,9 +30,9 @@ def _mask(email: str) -> str:
     return f"{local[:2]}***@{domain}" if domain else f"{local[:2]}***"
 
 
-def schedule_drain(background_tasks: BackgroundTasks) -> None:
-    """Run `drain()` after the response is sent."""
-    background_tasks.add_task(drain)
+def schedule_drain(background_tasks: BackgroundTasks, limit: int = 20) -> None:
+    """Run `drain(limit)` after the response is sent."""
+    background_tasks.add_task(drain, limit)
 
 
 def _limit(name: str, default: int) -> int:
