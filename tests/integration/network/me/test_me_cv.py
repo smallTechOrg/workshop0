@@ -190,6 +190,19 @@ def test_over_5mb_is_file_too_large_and_exactly_5mb_is_read(trainer, blob_root):
     assert _cv_rows() == [] and blob_files(blob_root) == []
 
 
+def test_docx_decompression_bomb_is_file_too_large(trainer, blob_root):
+    _, client = trainer
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("word/media/bomb.bin", b"\0" * (11 * 1024 * 1024))
+    data = buffer.getvalue()
+    assert len(data) < 5 * 1024 * 1024
+    detail = _error(_upload(client, data, "cv.docx", "application/octet-stream"), 413, "file_too_large")
+    assert "smaller" in detail["message"]
+    assert _cv_rows() == [] and blob_files(blob_root) == []
+
+
 def test_missing_file_field_is_validation_error(trainer):
     _, client = trainer
     _error(client.post("/api/me/cv", data={"nope": "x"}), 422, "validation_error")

@@ -19,6 +19,10 @@ import structlog
 
 MIN_TEXT_CHARS = 200
 MAX_EXTRACT_CHARS = 60_000
+# DOCX decompression-bomb guard (checked from the zip directory, before anything is inflated).
+DOCX_MAX_TOTAL_UNCOMPRESSED = 20 * 1024 * 1024
+DOCX_MAX_MEMBER_UNCOMPRESSED = 10 * 1024 * 1024
+DOCX_MAX_MEMBERS = 1000
 
 log = structlog.get_logger("workshop0")
 _SPACES_RE = re.compile(r"[ \t\f\v  -​　]+")
@@ -31,7 +35,7 @@ class CvUnreadable(Exception):
 
     def __init__(self, message: str = "no extractable text", *, reason: str = "too_short") -> None:
         super().__init__(message)
-        self.reason = reason  # corrupt | encrypted | too_short
+        self.reason = reason  # corrupt | encrypted | too_short | too_large
 
 
 def extract_text(data: bytes, kind: Literal["pdf", "docx"]) -> str:
@@ -91,6 +95,7 @@ def _pdf_text(data: bytes) -> str:
 def _docx_text(data: bytes) -> str:
     if not data or not zipfile.is_zipfile(io.BytesIO(data)):
         raise CvUnreadable("not a DOCX file", reason="corrupt")
+    _check_docx_size(data)
     import docx
 
     try:
@@ -105,6 +110,25 @@ def _docx_text(data: bytes) -> str:
         log.info("cv_text.unreadable", kind="docx", error=type(exc).__name__)
         raise CvUnreadable("the DOCX could not be read", reason="corrupt") from exc
     return "\n".join(parts)
+
+
+def _check_docx_size(data: bytes) -> None:
+    """Reject zip bombs by the declared sizes in the central directory. zipfile refuses to
+    inflate a member past its declared `file_size`, so the declared sizes are binding."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            infos = zf.infolist()
+    except Exception as exc:
+        raise CvUnreadable("the DOCX could not be read", reason="corrupt") from exc
+    if len(infos) > DOCX_MAX_MEMBERS:
+        raise CvUnreadable("the DOCX has too many parts", reason="too_large")
+    total = 0
+    for info in infos:
+        if info.file_size > DOCX_MAX_MEMBER_UNCOMPRESSED:
+            raise CvUnreadable("a DOCX part is too large when decompressed", reason="too_large")
+        total += info.file_size
+    if total > DOCX_MAX_TOTAL_UNCOMPRESSED:
+        raise CvUnreadable("the DOCX is too large when decompressed", reason="too_large")
 
 
 _W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"

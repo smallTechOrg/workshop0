@@ -772,7 +772,11 @@ def ingest_file(session: Session, store: BlobStore, user_id: int, upload: CvUplo
 
     try:
         text = extract_text(upload.data, upload.kind)  # type: ignore[arg-type]
-    except CvUnreadable:
+    except CvUnreadable as exc:
+        if exc.reason == "too_large":  # DOCX decompression-bomb guard
+            raise api_error(
+                "file_too_large", "That file is over 5 MB — please upload a smaller CV.", 413
+            ) from None
         raise api_error(
             "cv_unreadable",
             "We couldn't read any text from that file — paste your CV text instead.",

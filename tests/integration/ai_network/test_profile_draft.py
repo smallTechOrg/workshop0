@@ -506,6 +506,37 @@ def test_missing_cv_document_is_a_noop(monkeypatch):
     assert _usage_rows() == []
 
 
+def test_stale_draft_never_overwrites_a_replaced_cv(make_user, monkeypatch):
+    """The trainer replaces the CV (same row id, new sha256/created_at) while the draft for
+    the old CV is still in flight: the late result must not land on the new CV."""
+    cv_id = _make_cv(make_user, CV)
+    new_text = CV.replace("Asha Kumar", "Ravi Menon")
+    spent = _llm(_content(headline="Old CV headline"))
+
+    def slow_call(**_: Any) -> LLMResult:
+        with create_db_session() as session:  # the replacement commits mid-draft
+            cv = session.get(CvDocument, cv_id)
+            cv.text_extract = new_text
+            cv.sha256 = hashlib.sha256(new_text.encode()).hexdigest()
+            cv.created_at = datetime.now(timezone.utc)
+            cv.draft_status = "pending"
+            cv.draft_json = None
+        return spent
+
+    monkeypatch.setattr(anthropic_client, "call_json", slow_call)
+    run_profile_draft(cv_id)
+
+    assert _cv_row(cv_id) == ("pending", None)  # the new CV's own draft owns the row
+    [row] = _usage_rows()  # the stale call's spend is still recorded against the trainer
+    assert row.cv_document_id == cv_id
+
+    # The new CV's own draft then lands normally.
+    monkeypatch.setattr(anthropic_client, "call_json", lambda **_: _llm(_content(headline="New CV headline")))
+    run_profile_draft(cv_id)
+    status, draft = _cv_row(cv_id)
+    assert status == "ready" and draft["headline"] == "New CV headline"
+
+
 def test_only_active_topics_are_offered_and_kept(make_user, monkeypatch):
     with create_db_session() as session:
         session.execute(update(Topic).where(Topic.slug == "python").values(active=False))

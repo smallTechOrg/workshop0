@@ -441,7 +441,7 @@ Any of `{"name", "category", "active"}`; slug never changes. Rename collisions �
 
 # Phase 11 endpoints — Network sign-in, CV-drafted profiles, admin pool (C11–C13)
 
-Specified for Phase 11; shapes are normative for that phase's slices. New error codes: 401 `not_signed_in` (no/expired session on a user endpoint) · 403 `csrf_failed` (cookie-authenticated mutation without `X-Requested-With: workshop0`) · 403 `not_admin` · 409 `profile_exists` · 409 `invite_email_mismatch` · 410 `invite_expired` · 413 `file_too_large` (>5 MB) · 415 `unsupported_file` (not PDF/DOCX) · 422 `cv_unreadable` (no extractable text — "paste your CV text instead") · 429 `rate_limited` (with `Retry-After`) · 503 `signin_not_configured`.
+Specified for Phase 11; shapes are normative for that phase's slices. New error codes: 401 `not_signed_in` (no/expired session on a user endpoint) · 403 `csrf_failed` (cookie-authenticated mutation without `X-Requested-With: workshop0`) · 403 `not_admin` · 409 `profile_exists` · 409 `invite_email_mismatch` · 410 `invite_expired` · 413 `file_too_large` (>5 MB, or a DOCX that decompresses past 20 MB total / 10 MB per part / 1000 parts) · 415 `unsupported_file` (not PDF/DOCX) · 422 `cv_unreadable` (no extractable text — "paste your CV text instead") · 429 `rate_limited` (with `Retry-After`) · 503 `signin_not_configured`.
 
 **Auth (all in `src/workshop0/auth/routes.py`, prefix `/api/auth`):**
 
@@ -467,7 +467,7 @@ Specified for Phase 11; shapes are normative for that phase's slices. New error 
 
 | Endpoint | Behaviour |
 |---|---|
-| `POST /api/me/cv` (multipart `file`) | PDF/DOCX ≤5 MB → stored blob + text extract → `cv_document` (replacing any previous one **in place — same row id**, so drafting spend linked by `ai_usage.cv_document_id` keeps accumulating per trainer; old blob deleted; `draft_json` cleared) with `draft_status="pending"` → profile drafter as a BackgroundTask. Rate limit 10/h/user. Response `{"cv": {"id", "source", "original_filename", "draft_status"}}` |
+| `POST /api/me/cv` (multipart `file`) | PDF/DOCX ≤5 MB → stored blob + text extract → `cv_document` (replacing any previous one **in place — same row id**, so drafting spend linked by `ai_usage.cv_document_id` keeps accumulating per trainer; old blob deleted; `draft_json` cleared) with `draft_status="pending"` → profile drafter as a BackgroundTask (it writes `draft_status`/`draft_json` only if the row's `sha256`+`created_at` still match the CV it drafted from, checked under the row lock — a stale draft never overwrites a replaced CV). Rate limit 10/h/user. Response `{"cv": {"id", "source", "original_filename", "draft_status"}}` |
 | `POST /api/me/cv/text` | `{"text": "…"}` 200–30000 chars (pasted LinkedIn/CV text; no URLs are fetched) → same as above with `source="text"` |
 | `GET /api/me/cv/draft` | `{"draft_status": "pending\|ready\|failed\|skipped", "draft": <ProfileInput>\|null, "autofilled_fields": ["headline", "topics", …]}` — polled by the onboarding screen every 1.5 s, ≤60 s |
 | `POST /api/me/profile` | Creates the profile (live immediately). Body = **ProfileInput** + `"consent": true` (required, else `validation_error` "consent: please agree to continue"). 409 `profile_exists` if one exists. Starts `verified=true` (`verified_by` = the invite's `created_by`) when the user has an accepted invite (`invite_accepted`). `autofilled_fields` is set to the drafted fields (the current `cv_document`'s) whose submitted value still equals the drafted value — the ones the person did not touch. Sends no email in Phase 11 |
