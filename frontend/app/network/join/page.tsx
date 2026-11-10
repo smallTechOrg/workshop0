@@ -39,7 +39,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { GoogleButton } from "@/components/network/auth/GoogleButton";
-import { NetworkShell } from "@/components/network/profile/NetworkShell";
+import { NetworkShell } from "@/components/network/NetworkShell";
 import { CvIntake, type IntakeOutcome } from "@/components/network/profile/CvIntake";
 import { ProfileForm } from "@/components/network/profile/ProfileForm";
 

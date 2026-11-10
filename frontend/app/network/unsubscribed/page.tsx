@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/Card";
-import { NetworkShell } from "@/components/network/profile/NetworkShell";
+import { NetworkShell } from "@/components/network/NetworkShell";
 
 type Kind = "alerts" | "digest";
 

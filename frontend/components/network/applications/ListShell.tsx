@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { NetworkShell } from "@/components/network/profile/NetworkShell";
+import { NetworkShell } from "@/components/network/NetworkShell";
 import { signInPageUrl, useCurrentUser, type CurrentUser } from "@/lib/networkAuth";
 
 /** Gate + chrome shared by My applications and Matched for you. */

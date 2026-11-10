@@ -32,7 +32,7 @@ bash deploy/cloudrun/provision.sh --dry-run    # preview
 bash deploy/cloudrun/provision.sh              # prints CREATED <thing> / EXISTS <thing>; safe to re-run
 ```
 
-It enables the APIs, creates the Artifact Registry repo, service accounts, the keyless GitHub WIF provider, the database and user, the `workshop0-*` secrets with per-secret IAM, a placeholder Cloud Run service, and the public-invoker binding. It never prompts: the `workshop0-dbinit` Cloud Run job creates the database as `workshop0_app`. An existing secret is never overwritten unless you pass `--rotate <name>`.
+It enables the APIs, creates the Artifact Registry repo, service accounts, the keyless GitHub WIF provider, the database and user, the `workshop0-*` secrets with per-secret IAM, a placeholder Cloud Run service, and the public-invoker binding. It never prompts: when the database does not exist yet, the `workshop0-dbinit` Cloud Run job (public `python:3.12-slim` image) creates it as `workshop0_app`; when it already exists, dbinit is skipped with a `dbinit skipped` line (schema is owned by the migrations the deploy workflow runs). An existing secret is never overwritten unless you pass `--rotate <name>`.
 
 ## Trainer network secrets (Phase 11, operator step)
 

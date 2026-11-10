@@ -38,7 +38,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { GoogleButton } from "@/components/network/auth/GoogleButton";
-import { NetworkShell } from "@/components/network/profile/NetworkShell";
+import { NetworkShell } from "@/components/network/NetworkShell";
 import { CompletenessMeter } from "@/components/network/profile/CompletenessMeter";
 import { CvIntake } from "@/components/network/profile/CvIntake";
 import { DeleteAccount } from "@/components/network/profile/DeleteAccount";
