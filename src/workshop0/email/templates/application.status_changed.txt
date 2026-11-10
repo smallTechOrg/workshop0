@@ -1,0 +1,7 @@
+Your application status changed: {{ title }}
+Hi {{ name }},
+
+Your application for "{{ title }}" is now: {{ status_label }}.
+
+See details: {{ applications_url }}
+Listing: {{ url }}

@@ -214,10 +214,13 @@ test('admin signs in with Google, curates the pool and invites a trainer', async
   await expect(admin).toHaveURL(/\/app\/admin\/network\/?(\?.*)?$/);
   await expect(admin.getByTestId('network-ai-spend')).toContainText('Network AI spend');
 
-  // Admin-side labelled stubs on the pool page (C13): matching filters, Email invite.
-  await expect(stubWithLabel(admin, /Matching filters/)).toBeVisible();
-  await expect(stubWithLabel(admin, 'Email invite')).toBeVisible();
-  await expect(stubWithLabel(admin, 'Outbox')).toBeVisible();
+  // Phase 12: real Outbox nav, Email invite button and pool filter bar (no stub pills).
+  const outboxNav = admin.getByTestId('nav-outbox');
+  await expect(outboxNav).toBeVisible();
+  await expect(outboxNav).toHaveAttribute('href', /\/admin\/outbox\/?$/);
+  await expect(outboxNav.getByTestId('stub-badge')).toHaveCount(0);
+  await expect(admin.getByTestId('matching-filters')).toBeVisible();
+  await expect(admin.getByTestId('matching-filters').getByTestId('stub-badge')).toHaveCount(0);
 
   // --- The seeded trainer is listed (search narrows to this run) -------------
   const search = admin.getByRole('searchbox', { name: 'Search trainers' });
@@ -318,7 +321,9 @@ test('admin signs in with Google, curates the pool and invites a trainer', async
   const poolNav = admin.getByTestId('nav-trainer-pool');
   await expect(poolNav).toBeVisible({ timeout: 20_000 });
   await expect(poolNav).toHaveAttribute('href', /\/admin\/network\/?$/);
-  await expect(stubWithLabel(admin, 'Outbox')).toBeVisible();
+  const oppOutbox = admin.getByTestId('nav-outbox');
+  await expect(oppOutbox).toBeVisible();
+  await expect(oppOutbox).toHaveAttribute('href', /\/admin\/outbox\/?$/);
 
   expect(consoleErrors, consoleErrors.join('\n')).toEqual([]);
   await adminCtx.close();
@@ -329,7 +334,9 @@ test('the seeded trainer sees the My profile stubs and the Verified badge', asyn
   await page.goto(`${APP_BASE}/network/me/`);
   await expect(page.getByText(HEADLINE).first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('verified-badge')).toBeVisible();
-  for (const label of ['My applications', 'Matched for you', 'Saved searches & alerts', 'Public directory profile']) {
+  await expect(page.getByTestId('link-applications')).toHaveAttribute('href', /\/network\/applications\/?$/);
+  await expect(page.getByTestId('link-matches')).toHaveAttribute('href', /\/network\/matches\/?$/);
+  for (const label of ['Saved searches & alerts', 'Public directory profile']) {
     await expect(stubWithLabel(page.getByTestId('profile-stubs'), label)).toBeVisible();
   }
   await page.close();

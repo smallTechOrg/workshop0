@@ -9,7 +9,6 @@ import {
   type AdminOpportunityRow,
 } from "@/lib/adminBoard";
 import { Badge } from "@/components/ui/Badge";
-import { StubBadge } from "@/components/ui/StubBadge";
 import { LockIcon } from "@/components/admin/LockIcon";
 import { OpportunityStatusPill } from "@/components/admin/OpportunityStatusPill";
 
@@ -31,9 +30,7 @@ export function OpportunitiesTable({ rows }: { rows: AdminOpportunityRow[] }) {
             <th scope="col" className="px-4 py-3">Deadline</th>
             <th scope="col" className="px-4 py-3">Status</th>
             <th scope="col" className="hidden px-4 py-3 md:table-cell">
-              <span className="inline-flex items-center gap-1.5">
-                Applicants <StubBadge className="normal-case tracking-normal" />
-              </span>
+Applicants
             </th>
             <th scope="col" className="hidden px-4 py-3 md:table-cell">Updated</th>
           </tr>
@@ -105,8 +102,13 @@ export function OpportunitiesTable({ rows }: { rows: AdminOpportunityRow[] }) {
                 <td className="px-4 py-3">
                   <OpportunityStatusPill status={o.status} />
                 </td>
-                <td className="hidden px-4 py-3 text-stone-400 md:table-cell" aria-disabled="true">
-                  —
+                <td className="hidden px-4 py-3 md:table-cell" data-testid="applicants-cell">
+                  <Link
+                    href={`/admin/opportunities/pipeline/?id=${o.id}`}
+                    className="font-medium text-brand-700 tabular-nums hover:underline"
+                  >
+                    {(o as AdminOpportunityRow & { applicant_count?: number }).applicant_count ?? 0}
+                  </Link>
                 </td>
                 <td className="hidden px-4 py-3 whitespace-nowrap text-stone-500 md:table-cell">
                   {timeAgo(o.updated_at, now)}

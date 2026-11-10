@@ -1,0 +1,7 @@
+We received your application: {{ title }}
+Hi {{ name }},
+
+Your application for "{{ title }}" has been received.
+
+Track its status: {{ applications_url }}
+Listing: {{ url }}

@@ -275,7 +275,7 @@ Pretty redirects live in `src/workshop0/api/__init__.py` with the existing ones 
 
 ### Email (Phase 12)
 
-Transactional outbox: `email/outbox.py::enqueue(session, *, to, template, context, dedupe_key=None)` inserts a row **in the caller's transaction** (unique `dedupe_key` → silently no second row). After commit, a BackgroundTask runs `email/sender.py::drain(limit=20)`: claims `queued` rows (`FOR UPDATE SKIP LOCKED` on PostgreSQL), renders `email/templates/<template>.{txt,html}` (subject on the first line of the `.txt`), sends via `smtp.py`, marks `sent`, or increments `attempts` and marks `failed` after 3. Without SMTP settings, rows are marked `recorded` and logged (`email.recorded`, recipient masked). Admin page load of the outbox also triggers a drain (self-healing after restarts — no scheduler).
+Transactional outbox: `email/outbox.py::enqueue(session, *, to, template, context, dedupe_key=None)` inserts a row **in the caller's transaction** (unique `dedupe_key` → silently no second row). After commit, a BackgroundTask runs `email/sender.py::drain(limit=20)`: claims `queued` rows (`FOR UPDATE SKIP LOCKED` on PostgreSQL), renders `email/templates/<template>.{txt,html}` (subject on the first line of the `.txt`), sends via `smtp.py`, marks `sent`, or increments `attempts` and marks `failed` after 3. Without SMTP host/user/password, rows are marked `recorded` (shown as "not sent") and logged (`email.recorded`, recipient masked); production boots and runs this way when the SMTP secret is absent. Messages are multipart (plain text + simple HTML), one footer line, no tracking pixels. Per-recipient (10/h) and global (100/h) rate limits are applied at drain time (excess → `recorded`, `rate_limited`). Links use `WORKSHOP0_BASE_URL`, and listing links the slug URL. The password is never logged. Tests use an in-process `aiosmtpd` fake only. Admin page load of the outbox also triggers a drain (self-healing after restarts — no scheduler).
 
 ### Scheduled work (Phase 13)
 
@@ -393,7 +393,7 @@ The credential table above is **unchanged**. Creation simply stops requiring the
 | `WORKSHOP0_BLOB_BACKEND` | no (P11) | `local` | `local` (`data/blobs/`) or `gcs` |
 | `WORKSHOP0_GCS_BUCKET` | when `gcs` | — | `ai-agent-boilerplate0-workshop0-cvs` in production |
 | `WORKSHOP0_SMTP_HOST` / `_PORT` / `_STARTTLS` | no (P12) | `smtp.gmail.com` / `587` / `1` | SMTP server; tests use a local `aiosmtpd` sink with STARTTLS `0` |
-| `WORKSHOP0_SMTP_USER` / `WORKSHOP0_SMTP_PASSWORD` | no (P12) | — | Gmail address + app password; either empty ⇒ outbox records, never sends |
+| `WORKSHOP0_SMTP_USER` / `WORKSHOP0_SMTP_PASSWORD` | no (P12) | — | Gmail address + app password; either empty ⇒ outbox records, never sends; never logged. Not in Secret Manager until the operator runs `provision.sh --rotate workshop0-smtp-password` and applies the proposed workflow mapping (RUNBOOK) |
 | `WORKSHOP0_SMTP_FROM` | no (P12) | `Workshop0 <SMTP_USER>` | From header |
 | `WORKSHOP0_CRON_KEY` | no (P13) | — | Shared secret for `/api/cron/*`; empty ⇒ cron endpoints return 404 |
 
@@ -478,7 +478,7 @@ Single source of truth for every name (Phase 9). Each entry replaces the same-ki
 | Import bucket (transient) | `ai-agent-boilerplate0-workshop0-import-<rand>` |
 | CV bucket (Phase 11) | `ai-agent-boilerplate0-workshop0-cvs` (`us-central1`, private, uniform access, public-access prevention); `workshop0-run` has `roles/storage.objectAdmin` on it only, plus `roles/iam.serviceAccountTokenCreator` on itself (V4 signed URLs) |
 | Network secrets | `workshop0-google-client-secret` (P11, value from the operator), `workshop0-session-secret` (P11, generated), `workshop0-anthropic-api-key` + `workshop0-anthropic-workspace-id` (P11, values from the operator), `workshop0-smtp-password` (P12, Gmail app password), `workshop0-cron-key` (P13, generated) |
-| GitHub Actions variables (network) | `WORKSHOP0_GOOGLE_CLIENT_ID`, `WORKSHOP0_ADMIN_EMAILS` (P11), `WORKSHOP0_SMTP_USER` (P12) |
+| GitHub Actions variables (network) | `WORKSHOP0_GOOGLE_CLIENT_ID`, `WORKSHOP0_ADMIN_EMAILS` (P11), `WORKSHOP0_SMTP_USER` (P12; proposal only, workflow unchanged in Phase 12) |
 | Cloud Scheduler job (Phase 13) | `workshop0-weekly-digest` (`us-central1`) |
 
 The three permitted survivals of the previous name in the repository are: the git tag `vm-deploy-final` (it contains no legacy word), the operator's local backup directory path and one historical sentence ("Workshop0 was previously called Workshop <previous name>") in `deploy/RUNBOOK.md`, plus the `LEGACY-COMPAT` shim lines described above.

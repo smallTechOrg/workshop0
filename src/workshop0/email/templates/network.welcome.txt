@@ -1,0 +1,6 @@
+Welcome to the Workshop0 trainer network
+Hi {{ name }},
+
+Thanks for joining the Workshop0 trainer network. Your profile is saved and you can edit it any time.
+
+Browse matches and track applications: {{ applications_url }}

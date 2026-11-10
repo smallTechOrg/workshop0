@@ -135,6 +135,15 @@ export interface PoolFilters {
   topic?: string[];
   verified?: "true" | "false";
   tag?: string;
+  /** Phase 12 matching filters. */
+  min_level?: TopicLevel;
+  budget_max?: number;
+  currency?: string;
+  unit?: string;
+  available_start?: string;
+  available_end?: string;
+  location_mode?: "remote" | "onsite" | "hybrid";
+  city?: string;
   page?: number;
   page_size?: number;
 }
@@ -269,6 +278,16 @@ export function poolQuery(f: PoolFilters): string {
   for (const t of f.topic ?? []) if (t) sp.append("topic", t);
   if (f.verified) sp.set("verified", f.verified);
   if (f.tag && f.tag.trim()) sp.set("tag", f.tag.trim().toLowerCase());
+  if (f.min_level) sp.set("min_level", f.min_level);
+  if (f.budget_max !== undefined && f.budget_max >= 0 && f.currency && f.unit) {
+    sp.set("budget_max", String(f.budget_max));
+    sp.set("currency", f.currency);
+    sp.set("unit", f.unit);
+  }
+  if (f.available_start) sp.set("available_start", f.available_start);
+  if (f.available_end) sp.set("available_end", f.available_end);
+  if (f.location_mode) sp.set("location_mode", f.location_mode);
+  if (f.city && f.city.trim()) sp.set("city", f.city.trim());
   if (f.page && f.page > 1) sp.set("page", String(f.page));
   if (f.page_size) sp.set("page_size", String(f.page_size));
   const s = sp.toString();
@@ -502,3 +521,84 @@ export const PURPOSE_LABELS: Record<string, string> = {
   profile_draft: "Profile drafts from CVs",
   opportunity_draft: "Opportunity drafts",
 };
+
+// ---------------------------------------------------------------------------
+// Phase 12 — suggested shortlist, invite to apply, Email invite
+// ---------------------------------------------------------------------------
+
+export interface ShortlistSuggestion {
+  rank: number;
+  trainer: PoolRow;
+  rule_score: number;
+  reason: string;
+  invited: boolean;
+}
+
+export interface Shortlist {
+  /** null when no run exists yet. */
+  run_id: string | null;
+  ranked_by: "ai" | "rules" | null;
+  suggestions: ShortlistSuggestion[];
+  cost_usd: number;
+}
+
+export interface OppInviteResult {
+  profile_id: number;
+  created: boolean;
+  /** Outbox status, or `skipped_no_consent`. */
+  email: string;
+}
+
+const OPP = "/api/admin/opportunities";
+
+export function getShortlist(adminKey: string, opportunityId: number): Promise<Shortlist> {
+  return networkRequest<Shortlist>(adminKey, `${OPP}/${opportunityId}/shortlist`);
+}
+
+export function runShortlist(adminKey: string, opportunityId: number): Promise<Shortlist> {
+  return networkRequest<Shortlist>(adminKey, `${OPP}/${opportunityId}/shortlist`, { method: "POST" });
+}
+
+export async function inviteToApply(
+  adminKey: string,
+  opportunityId: number,
+  profileIds: number[],
+): Promise<OppInviteResult[]> {
+  const d = await networkRequest<{ invites: OppInviteResult[] }>(
+    adminKey,
+    `${OPP}/${opportunityId}/invites`,
+    { method: "POST", body: JSON.stringify({ profile_ids: profileIds }) },
+  );
+  return d.invites;
+}
+
+export interface InviteEmailResult {
+  id: number;
+  status: string;
+}
+
+/** Explicit per-invite click. 409 invite_revoked / invite_used / invite_expired. */
+export async function emailInvite(adminKey: string, inviteId: number): Promise<InviteEmailResult> {
+  const d = await networkRequest<{ outbox: InviteEmailResult }>(
+    adminKey,
+    `${BASE}/invites/${inviteId}/email`,
+    { method: "POST" },
+  );
+  return d.outbox;
+}
+
+/** Outbox status -> admin label (`recorded` means SMTP is not configured). */
+export function outboxLabel(status: string): string {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "sent":
+      return "Sent";
+    case "recorded":
+      return "Not sent (recorded only)";
+    case "failed":
+      return "Failed";
+    default:
+      return status;
+  }
+}

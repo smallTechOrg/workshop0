@@ -97,6 +97,14 @@ export const LOCATION_MODES: { value: LocationMode; label: string }[] = [
   { value: "hybrid", label: "Hybrid" },
 ];
 
+export type MinLevel = "intermediate" | "advanced" | "expert";
+
+export const MIN_LEVELS: { value: MinLevel; label: string }[] = [
+  { value: "intermediate", label: "Intermediate" },
+  { value: "advanced", label: "Advanced" },
+  { value: "expert", label: "Expert" },
+];
+
 export const STATUS_LABELS: Record<OpportunityStatus, string> = {
   draft: "Draft",
   open: "Open",
@@ -136,6 +144,14 @@ export interface AdminOpportunityRow {
   compensation_unit: CompensationUnit | null;
   /** The optional note shown after the amount. */
   compensation_text: string | null;
+  /** Phase 12 — admin-only matching fields (never on public payloads). */
+  budget_min: number | null;
+  budget_max: number | null;
+  budget_currency: Currency | null;
+  budget_unit: CompensationUnit | null;
+  min_level: MinLevel | null;
+  /** Applications not withdrawn (the Applicants column). */
+  applicant_count: number;
   deadline: string;
   partner_display_name: string | null;
   partner_id: number | null;
@@ -216,6 +232,11 @@ export interface OpportunityBody {
   compensation_currency: Currency | null;
   compensation_unit: CompensationUnit | null;
   compensation_text: string | null;
+  budget_min: number | null;
+  budget_max: number | null;
+  budget_currency: Currency | null;
+  budget_unit: CompensationUnit | null;
+  min_level: MinLevel | null;
   deadline: string | null;
   partner_display_name: string | null;
   partner_id: number | null;

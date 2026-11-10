@@ -138,6 +138,26 @@ CVs are stored under `data/blobs/` locally (`WORKSHOP0_BLOB_BACKEND=local`, the 
 
 Partners, paste-to-fill drafting and compensation units are covered under [Opportunity Board (Phase 11b)](#opportunity-board-phase-11b) below.
 
+## Email setup: Gmail app password (Phase 12)
+
+Invite and match emails go out over SMTP. All SMTP settings are optional; with none set the app still runs and the outbox records each message as *not sent*.
+
+1. Use a Google account with 2-Step Verification enabled.
+2. Open Google Account > Security > 2-Step Verification > App passwords and create one named `workshop0`.
+3. Put it in your local `.env` (never commit it, never paste it elsewhere):
+
+```bash
+# in .env
+WORKSHOP0_SMTP_HOST=smtp.gmail.com
+WORKSHOP0_SMTP_PORT=587
+WORKSHOP0_SMTP_STARTTLS=true
+WORKSHOP0_SMTP_USER=you@gmail.com
+WORKSHOP0_SMTP_PASSWORD=<16-character app password>
+WORKSHOP0_SMTP_FROM=
+```
+
+Production: see "Email (SMTP) operator handoff" in `deploy/RUNBOOK.md`.
+
 ## Opportunity Board (Phase 11b)
 
 **Partners.** Admins manage the partner list at `/app/admin/partners/` (also reachable from a listing via **Manage partners**). Adding a name that already exists (ignoring case and extra spaces) is rejected. Deactivated partners leave the editor dropdown but still show on listings that use them. The real partner name and notes are never on a public page or API; the public sees only the default public name (for example "A Pune edtech").

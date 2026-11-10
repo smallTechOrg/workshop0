@@ -25,6 +25,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from src.workshop0.api._common import api_error, as_utc, iso_z, utcnow
 from src.workshop0.db.models import (
+    Application,
     FacilitatorAction,
     Opportunity,
     OpportunityTopic,
@@ -55,6 +56,7 @@ COMPENSATION_MAX = 120
 AMOUNT_MAX = 100_000_000
 CURRENCIES = ("INR", "USD")
 COMPENSATION_UNITS = ("hour", "day", "course", "month")
+MIN_LEVELS = ("intermediate", "advanced", "expert")  # Phase 12 listing min_level
 PARTNER_MAX = 160
 NOTES_MAX = 5_000
 ACTIVITY_LIMIT = 20
@@ -90,6 +92,11 @@ FIELDS = (
     "compensation_currency",
     "compensation_unit",
     "compensation_text",
+    "budget_min",
+    "budget_max",
+    "budget_currency",
+    "budget_unit",
+    "min_level",
     "deadline",
     "partner_display_name",
     "partner_id",
@@ -214,6 +221,11 @@ class OpportunityPatch(BaseModel):
     compensation_currency: str | None = None
     compensation_unit: str | None = None
     compensation_text: str | None = None
+    budget_min: StrictInt | None = None  # Phase 12, admin-only (never public)
+    budget_max: StrictInt | None = None
+    budget_currency: str | None = None
+    budget_unit: str | None = None
+    min_level: str | None = None
     deadline: datetime | None = None
     partner_display_name: str | None = None
     partner_id: StrictInt | None = None
@@ -276,22 +288,27 @@ class OpportunityPatch(BaseModel):
     def _duration(cls, v):
         return _bounded(v, low=1, high=DURATION_MAX, required=False)
 
-    @field_validator("compensation_min", "compensation_max")
+    @field_validator("compensation_min", "compensation_max", "budget_min", "budget_max")
     @classmethod
     def _amount(cls, v):
         if v is not None and not (0 <= v <= AMOUNT_MAX):
             raise ValueError(f"must be between 0 and {AMOUNT_MAX}")
         return v
 
-    @field_validator("compensation_currency")
+    @field_validator("compensation_currency", "budget_currency")
     @classmethod
     def _currency(cls, v):
         return _one_of(v, CURRENCIES)
 
-    @field_validator("compensation_unit")
+    @field_validator("compensation_unit", "budget_unit")
     @classmethod
     def _unit(cls, v):
         return _one_of(v, COMPENSATION_UNITS)
+
+    @field_validator("min_level")
+    @classmethod
+    def _min_level(cls, v):
+        return _one_of(v, MIN_LEVELS)
 
     @field_validator("compensation_text")
     @classmethod
@@ -428,6 +445,7 @@ def admin_row(
     base_url: str,
     now: datetime,
     partner: Partner | None = None,
+    applicant_count: int = 0,
 ) -> dict:
     """AdminOpportunity list row (omits description_md and internal_notes).
 
@@ -453,6 +471,13 @@ def admin_row(
         "compensation_currency": opp.compensation_currency,
         "compensation_unit": opp.compensation_unit,
         "compensation_text": opp.compensation_text,
+        # Phase 12: admin-only matching fields + the Applicants column value.
+        "budget_min": opp.budget_min,
+        "budget_max": opp.budget_max,
+        "budget_currency": opp.budget_currency,
+        "budget_unit": opp.budget_unit,
+        "min_level": opp.min_level,
+        "applicant_count": applicant_count,
         "deadline": iso_z(opp.deadline),
         "partner_display_name": opp.partner_display_name,
         "partner_id": opp.partner_id,
@@ -474,8 +499,9 @@ def admin_full(
     base_url: str,
     now: datetime,
     partner: Partner | None = None,
+    applicant_count: int = 0,
 ) -> dict:
-    row = admin_row(opp, topics, base_url, now, partner)
+    row = admin_row(opp, topics, base_url, now, partner, applicant_count)
     row["description_md"] = opp.description_md
     row["internal_notes"] = opp.internal_notes
     return row
@@ -484,7 +510,23 @@ def admin_full(
 def _full(session: Session, opp: Opportunity, base_url: str) -> dict:
     topics = topics_by_opportunity(session, [opp.id])[opp.id]
     partner = session.get(Partner, opp.partner_id) if opp.partner_id is not None else None
-    return admin_full(opp, topics, base_url, utcnow(), partner)
+    count = applicant_counts(session, [opp.id]).get(opp.id, 0)
+    return admin_full(opp, topics, base_url, utcnow(), partner, count)
+
+
+def applicant_counts(session: Session, opportunity_ids: list[int]) -> dict[int, int]:
+    """Applications not `withdrawn`, per listing (the Applicants column)."""
+    if not opportunity_ids:
+        return {}
+    rows = session.execute(
+        select(Application.opportunity_id, func.count(Application.id))
+        .where(
+            Application.opportunity_id.in_(opportunity_ids),
+            Application.status != "withdrawn",
+        )
+        .group_by(Application.opportunity_id)
+    ).all()
+    return {oid: int(n) for oid, n in rows}
 
 
 def _partners_for(session: Session, rows: list[Opportunity]) -> dict[int, Partner]:
@@ -652,9 +694,11 @@ def list_admin(
     )
     topics = topics_by_opportunity(session, [o.id for o in rows])
     partners = _partners_for(session, rows)
+    counts = applicant_counts(session, [o.id for o in rows])
     return {
         "opportunities": [
-            admin_row(o, topics[o.id], base_url, now, partners.get(o.partner_id)) for o in rows
+            admin_row(o, topics[o.id], base_url, now, partners.get(o.partner_id), counts.get(o.id, 0))
+            for o in rows
         ],
         "page": page,
         "page_size": page_size,
@@ -747,6 +791,22 @@ def _validate_compensation(merged: dict) -> None:
         raise validation_error("compensation_unit: required with an amount")
 
 
+def _validate_budget(merged: dict) -> None:
+    """Phase 12 admin-only budget: same shape rules as the public compensation."""
+    low, high = merged["budget_min"], merged["budget_max"]
+    currency, unit = merged["budget_currency"], merged["budget_unit"]
+    if low is not None and high is not None and high < low:
+        raise validation_error("budget_max: must be at least budget_min")
+    if low is None and high is None:
+        if currency is not None or unit is not None:
+            raise validation_error("budget_min: enter an amount, or clear the currency and unit")
+        return
+    if currency is None:
+        raise validation_error("budget_currency: required with an amount")
+    if unit is None:
+        raise validation_error("budget_unit: required with an amount")
+
+
 def _resolve_partner(
     session: Session,
     body: OpportunityPatch,
@@ -794,6 +854,7 @@ def _validate_merged(
             LOCATIONS_REQUIRED_MESSAGE if locations_sent else CITY_REQUIRED_MESSAGE
         )
     _validate_compensation(merged)
+    _validate_budget(merged)
     if merged["starts_on"] and merged["ends_on"] and merged["ends_on"] < merged["starts_on"]:
         raise validation_error("ends_on: must be on or after starts_on")
     # Publish rule (data-model.md): a write whose result is stored `open` and which

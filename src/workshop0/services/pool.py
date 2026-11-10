@@ -90,6 +90,7 @@ class TrainerFilters:
     topics: list[str] = field(default_factory=list)
     verified: bool | None = None
     tag: str | None = None
+    profile_ids: set[int] | None = None  # Phase 12 rule filters, resolved by services/matching
 
 
 def normalize_tag(value: str) -> str:
@@ -165,6 +166,8 @@ def _conditions(filters: TrainerFilters) -> list:
                 .where(Topic.slug.in_(slugs))
             )
         )
+    if filters.profile_ids is not None:
+        conditions.append(TrainerProfile.id.in_(sorted(filters.profile_ids)))
     if filters.verified is not None:
         conditions.append(TrainerProfile.verified.is_(filters.verified))
     tag = normalize_tag(filters.tag or "")
@@ -344,6 +347,21 @@ def list_trainers(session: Session, filters: TrainerFilters, *, page: int, page_
         "total": total,
         "total_pages": math.ceil(total / page_size) if total else 0,
     }
+
+
+def trainer_rows(session: Session, profile_ids: list[int]) -> dict[int, dict]:
+    """Admin list rows (the `<row>` shape of `list_trainers`) keyed by profile id."""
+    if not profile_ids:
+        return {}
+    rows = session.execute(
+        select(TrainerProfile, AppUser)
+        .join(AppUser, AppUser.id == TrainerProfile.user_id)
+        .where(TrainerProfile.id.in_(profile_ids))
+    ).all()
+    ids = [p.id for p, _ in rows]
+    topics = _topics_by_profile(session, ids)
+    tags = _tags_by_profile(session, ids)
+    return {p.id: _row(p, u, topics[p.id], tags[p.id]) for p, u in rows}
 
 
 def _get_or_404(session: Session, profile_id: int) -> tuple[TrainerProfile, AppUser]:

@@ -161,6 +161,10 @@ def _isolated_env(monkeypatch, test_database_url, _schema, _truncate_engine, _re
     monkeypatch.setenv("WORKSHOP0_ADMIN_KEY", TEST_ADMIN_KEY)
     monkeypatch.setenv("WORKSHOP0_BASE_URL", "")
     monkeypatch.setenv("WORKSHOP0_LOG_LEVEL", "WARNING")
+    # `.env` may hold REAL SMTP creds; env vars beat `.env` in pydantic-settings, so blank them.
+    # Autouse runs before `smtp_env`, which then overrides these to point at the fake sink.
+    for name in ("HOST", "USER", "PASSWORD", "FROM"):
+        monkeypatch.setenv(f"WORKSHOP0_SMTP_{name}", "")
     _reset_singletons()
     yield
     _reset_singletons()
@@ -503,3 +507,28 @@ def network_ai_disabled(monkeypatch):
     from src.workshop0.ai import anthropic_client
 
     anthropic_client.reset_client()
+
+
+@pytest.fixture
+def fake_smtp():
+    """A live in-process aiosmtpd sink on an ephemeral port (Phase 12)."""
+    from tests.support.fake_smtp import run_in_thread
+
+    sink = run_in_thread()
+    try:
+        yield sink
+    finally:
+        sink.stop()
+
+
+@pytest.fixture
+def smtp_env(monkeypatch, fake_smtp):
+    """Point the app's SMTP settings at the fake sink (host/port/user/password set, no TLS)."""
+    monkeypatch.setenv("WORKSHOP0_SMTP_HOST", fake_smtp.host)
+    monkeypatch.setenv("WORKSHOP0_SMTP_PORT", str(fake_smtp.port))
+    monkeypatch.setenv("WORKSHOP0_SMTP_STARTTLS", "false")
+    monkeypatch.setenv("WORKSHOP0_SMTP_USER", "sender@workshop0.test")
+    monkeypatch.setenv("WORKSHOP0_SMTP_PASSWORD", "fake-test-password")
+    monkeypatch.setenv("WORKSHOP0_SMTP_FROM", "Workshop0 <sender@workshop0.test>")
+    _reset_singletons()
+    return fake_smtp

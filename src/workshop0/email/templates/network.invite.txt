@@ -1,0 +1,6 @@
+You are invited to join the Workshop0 trainer network
+Hi {{ name }},
+
+You have been invited to join the Workshop0 trainer network. This invite expires on {{ expires_at }}.
+
+Accept your invite: {{ invite_url }}

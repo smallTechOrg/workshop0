@@ -1,0 +1,8 @@
+You are invited to apply: {{ title }}
+Hi {{ name }},
+
+We think you would be a good fit for "{{ title }}" with {{ partner }}.
+Compensation: {{ compensation }}
+Location: {{ cities }}
+
+View the listing and apply: {{ url }}

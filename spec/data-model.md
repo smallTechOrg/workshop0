@@ -413,7 +413,7 @@ bucket String(120) + window_start DateTime → composite PK; count Integer not n
 | blackout_json | Text default `'[]'` | ≤20 ranges `{"start": "2026-12-20", "end": "2027-01-02"}` |
 | visibility | String(16) default `'private'` | `private` \| `public` — activated in Phase 13 (C18) |
 | verified | Boolean default false · verified_at DateTime null · verified_by String(254) null | Admin "Verified" badge; invite-created trainers start verified |
-| consent_at | DateTime **not null** · consent_version String(16) not null | Consent to share the profile with partners for matching; current version `2026-11` |
+| consent_at | DateTime **not null** · consent_version String(16) not null | Consent to share the profile with partners for matching; current version `2026-11`. The `consent_at` checks in the email gate are defensive only (the column is NOT NULL) |
 | autofilled_fields_json | Text default `'[]'` | Field keys pre-filled from the CV and not yet reviewed (drives "From your CV — please check"). Set at create (`POST /api/me/profile`) to the drafted fields the person left unchanged on the review screen; cleared to `[]` by the first `PATCH /api/me/profile` |
 | created_at / updated_at | DateTime | |
 
@@ -596,7 +596,7 @@ The second and later cities are lost on downgrade. That is accepted and document
 - **application**: id PK · opportunity_id FK CASCADE · profile_id FK trainer_profile CASCADE · status String(16) ∈ `applied` \| `shortlisted` \| `selected` \| `not_selected` \| `withdrawn` · note Text null (≤1000, plain text) · source String(16) `self` \| `invited` · status_changed_at · created_at · updated_at. **Unique(opportunity_id, profile_id)**; ix(opportunity_id, status), ix(profile_id).
 - **opportunity_invite** (admin "invite to apply"): id PK · opportunity_id FK CASCADE · profile_id FK CASCADE · created_by · created_at · Unique(opportunity_id, profile_id).
 - **match_suggestion** (one row per ranked trainer per shortlist run): id PK · opportunity_id FK CASCADE · profile_id FK CASCADE · run_id String(22) · rank Integer · rule_score Numeric(6,3) · reason String(300) null (null when ranked by rules only) · ranked_by String(8) `ai` \| `rules` · created_at. ix(opportunity_id, run_id, rank). Only the latest run is shown.
-- **email_outbox**: id PK · to_email String(254) · template String(48) · context_json Text · subject String(200) null (rendered at send) · status String(16) ∈ `queued` \| `sent` \| `failed` \| `recorded` · attempts Integer default 0 · last_error String(500) null · dedupe_key String(120) **unique** null · created_at · sent_at null. ix(status, created_at). `recorded` = SMTP not configured; the message is kept for the admin outbox view and never retried.
+- **email_outbox**: id PK · to_email String(254) · template String(48) · context_json Text · subject String(200) null (rendered at send) · status String(16) ∈ `queued` \| `sent` \| `failed` \| `recorded` · attempts Integer default 0 · last_error String(500) null · dedupe_key String(120) **unique** null · created_at · sent_at null. ix(status, created_at). `recorded` = not sent (SMTP not configured, or per-recipient/global rate limit hit with `last_error="rate_limited"`); the message is kept for the admin outbox view and never retried automatically. `last_error` never contains credentials.
 
 ## Phase 13 — migration `0012_alerts_directory_tiein` (`down_revision = "0011"`)
 

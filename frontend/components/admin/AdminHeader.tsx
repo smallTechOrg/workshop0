@@ -3,10 +3,9 @@
 import Link from "next/link";
 import { cn } from "@/lib/format";
 import { Button } from "@/components/ui/Button";
-import { StubAction } from "@/components/ui/StubBadge";
 import { useAdmin } from "@/components/admin/AdminGate";
 
-type Section = "opportunities" | "topics" | "partners";
+type Section = "opportunities" | "topics" | "partners" | "outbox";
 
 /** Shared header for the admin board pages (opportunities, editor, topics). */
 export function AdminHeader({ current }: { current: Section }) {
@@ -58,7 +57,14 @@ export function AdminHeader({ current }: { current: Section }) {
         <Link href="/admin/network/" data-testid="nav-trainer-pool" className={linkCls(false)}>
           Trainer pool
         </Link>
-        <StubAction label="Outbox" />
+        <Link
+          href="/admin/outbox/"
+          data-testid="nav-outbox"
+          className={linkCls(current === "outbox")}
+          aria-current={current === "outbox" ? "page" : undefined}
+        >
+          Outbox
+        </Link>
         <Button variant="ghost" size="sm" onClick={signOut}>
           Sign out
         </Button>

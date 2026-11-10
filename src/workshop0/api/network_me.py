@@ -11,14 +11,15 @@ from __future__ import annotations
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Request, Response, UploadFile
 from sqlalchemy.orm import Session
 
-from src.workshop0.api._common import ok
+from src.workshop0.api._common import ok, request_base_url
 from src.workshop0.auth.deps import CurrentUser, require_user
 from src.workshop0.db.session import create_db_session, get_session
 from src.workshop0.auth.routes import clean_invite_token
-from src.workshop0.services import invites, profiles
+from src.workshop0.email import sender
+from src.workshop0.services import applications, invites, profiles
 from src.workshop0.services.profiles import ProfileCreate, ProfilePatch
 from src.workshop0.services.ratelimit import enforce, hit
 
@@ -183,3 +184,53 @@ def accept_invite(
     raw = body.get("token") if isinstance(body, dict) else None
     token = clean_invite_token(raw) if isinstance(raw, str) else None
     return ok(invites.accept_for_user(session, token, user))
+
+
+# --------------------------------------------------------------------------- Phase 12
+
+
+@router.post("/applications")
+def apply_to_opportunity(
+    body: applications.ApplyBody,
+    request: Request,
+    background: BackgroundTasks,
+    user: CurrentUser = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    enforce(session, f"apply:user:{user.id}", applications.APPLY_LIMIT, applications.APPLY_WINDOW_S)
+    payload = applications.apply(session, user.id, body, base_url=request_base_url(request))
+    session.commit()
+    sender.schedule_drain(background)
+    return ok({"application": payload})
+
+
+@router.get("/applications")
+def my_applications(
+    request: Request,
+    user: CurrentUser = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    return ok(applications.list_mine(session, user.id, base_url=request_base_url(request)))
+
+
+@router.post("/applications/{application_id}/withdraw")
+def withdraw_application(
+    application_id: int,
+    request: Request,
+    user: CurrentUser = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    payload = applications.withdraw(
+        session, user.id, application_id, base_url=request_base_url(request)
+    )
+    session.commit()
+    return ok({"application": payload})
+
+
+@router.get("/matches")
+def matched_for_you(
+    request: Request,
+    user: CurrentUser = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    return ok(applications.matches(session, user.id, base_url=request_base_url(request)))

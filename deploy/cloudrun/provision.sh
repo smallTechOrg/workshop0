@@ -35,7 +35,8 @@ DBINIT_IMAGE="gcr.io/google.com/cloudsdktool/google-cloud-cli:slim"
 CV_BUCKET="${CV_BUCKET:-${PROJECT_ID}-workshop0-cvs}"
 SECRETS=(workshop0-database-url workshop0-openrouter-api-key workshop0-admin-key
          workshop0-session-secret workshop0-google-client-secret
-         workshop0-anthropic-api-key workshop0-anthropic-workspace-id)
+         workshop0-anthropic-api-key workshop0-anthropic-workspace-id
+         workshop0-smtp-password)
 
 DRY=0
 ROTATE=""
@@ -212,6 +213,7 @@ val_session()    { openssl rand -hex 32; }   # generated; goes straight into the
 val_google()     { source_value WORKSHOP0_GOOGLE_CLIENT_SECRET; }
 val_anthropic_key()       { source_value ANTHROPIC_API_KEY; }
 val_anthropic_workspace() { source_value ANTHROPIC_WORKSPACE_ID; }
+val_smtp_password()       { source_value WORKSHOP0_SMTP_PASSWORD; }
 
 # Optional operator-supplied secret: an absent source value prints SKIPPED, never dies.
 # Only a create or an explicit --rotate needs the value; an existing secret is left as is.
@@ -236,6 +238,7 @@ put_secret workshop0-session-secret val_session
 put_optional_secret workshop0-google-client-secret WORKSHOP0_GOOGLE_CLIENT_SECRET val_google
 put_optional_secret workshop0-anthropic-api-key ANTHROPIC_API_KEY val_anthropic_key
 put_optional_secret workshop0-anthropic-workspace-id ANTHROPIC_WORKSPACE_ID val_anthropic_workspace
+put_optional_secret workshop0-smtp-password WORKSHOP0_SMTP_PASSWORD val_smtp_password
 PW=""
 
 # 7. IAM -------------------------------------------------------------------
@@ -252,6 +255,7 @@ optional_secret_key() {
     workshop0-google-client-secret)   echo WORKSHOP0_GOOGLE_CLIENT_SECRET ;;
     workshop0-anthropic-api-key)      echo ANTHROPIC_API_KEY ;;
     workshop0-anthropic-workspace-id) echo ANTHROPIC_WORKSPACE_ID ;;
+    workshop0-smtp-password)          echo WORKSHOP0_SMTP_PASSWORD ;;
     *) echo "" ;;
   esac
 }
