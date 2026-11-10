@@ -17,6 +17,11 @@ def build_message(settings: Settings, to: str, rendered: Rendered) -> EmailMessa
     msg["Subject"] = rendered.subject
     msg["Date"] = formatdate(localtime=False)
     msg["Message-ID"] = make_msgid(domain="workshop0")
+    if rendered.unsubscribe_url:
+        # One-click unsubscribe (Gmail/Yahoo bulk-sender rules): the client POSTs
+        # `List-Unsubscribe=One-Click` to this URL, which our POST endpoint accepts.
+        msg["List-Unsubscribe"] = f"<{rendered.unsubscribe_url}>"
+        msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     msg.set_content(rendered.text)
     msg.add_alternative(rendered.html, subtype="html")
     return msg
