@@ -137,6 +137,9 @@ jobs:
       BASE_URL_VAR: ${{ vars.WORKSHOP0_BASE_URL }}
       GOOGLE_CLIENT_ID_VAR: ${{ vars.WORKSHOP0_GOOGLE_CLIENT_ID }}
       ADMIN_EMAILS_VAR: ${{ vars.WORKSHOP0_ADMIN_EMAILS }}
+      SMTP_HOST_VAR: ${{ vars.WORKSHOP0_SMTP_HOST || 'smtp.gmail.com' }}
+      SMTP_USER_VAR: ${{ vars.WORKSHOP0_SMTP_USER }}
+      SMTP_FROM_VAR: ${{ vars.WORKSHOP0_SMTP_FROM }}
       OIDC_ISSUER: ${{ vars.WORKSHOP0_OIDC_ISSUER || 'https://accounts.google.com' }}
       GCS_BUCKET: ${{ vars.WORKSHOP0_GCS_BUCKET || 'ai-agent-boilerplate0-workshop0-cvs' }}
     steps:
@@ -247,6 +250,17 @@ jobs:
             echo "::warning::Anthropic pair not mapped (api-key enabled=${AK}, workspace-id enabled=${AW}): network AI drafting stays 'skipped'."
           fi
 
+          # Phase 12 email: map the SMTP password only when it has an enabled version AND a
+          # sender is configured; otherwise production keeps recording mail as 'not sent'.
+          if has_enabled workshop0-smtp-password && [ -n "${SMTP_USER_VAR:-}" ]; then
+            SECRETS="${SECRETS},WORKSHOP0_SMTP_PASSWORD=workshop0-smtp-password:latest"
+            echo "SMTP_ENABLED=true" >> "$GITHUB_ENV"
+            echo "workshop0-smtp-password: mapped"
+          else
+            echo "SMTP_ENABLED=false" >> "$GITHUB_ENV"
+            echo "workshop0-smtp-password: not mapped (secret absent or WORKSHOP0_SMTP_USER unset): email stays 'not sent'"
+          fi
+
           # Only secret NAMES/refs go to GITHUB_ENV, never values.
           echo "RUN_SECRETS=${SECRETS}" >> "$GITHUB_ENV"
 
@@ -280,7 +294,8 @@ jobs:
           echo "NEW_REVISION=${SERVICE}-${SUFFIX}" >> "$GITHUB_ENV"
 
           # '|' is the --set-env-vars delimiter: admin emails contain '@' and ','.
-          for v in "${BASE_URL_VAR:-}" "${GOOGLE_CLIENT_ID_VAR:-}" "${ADMIN_EMAILS_VAR:-}" "$OIDC_ISSUER" "$GCS_BUCKET"; do
+          for v in "${BASE_URL_VAR:-}" "${GOOGLE_CLIENT_ID_VAR:-}" "${ADMIN_EMAILS_VAR:-}" "$OIDC_ISSUER" "$GCS_BUCKET" \
+                   "${SMTP_HOST_VAR:-}" "${SMTP_USER_VAR:-}" "${SMTP_FROM_VAR:-}"; do
             case "$v" in *"|"*) echo "a repository variable contains '|', which is the env delimiter" >&2; exit 1;; esac
           done
           ENVVARS="WORKSHOP0_MIGRATE_ON_BOOT=0"
@@ -294,6 +309,13 @@ jobs:
           fi
           if [ -n "${ADMIN_EMAILS_VAR:-}" ]; then
             ENVVARS="${ENVVARS}|WORKSHOP0_ADMIN_EMAILS=${ADMIN_EMAILS_VAR}"
+          fi
+          if [ "${SMTP_ENABLED:-false}" = "true" ]; then
+            ENVVARS="${ENVVARS}|WORKSHOP0_SMTP_HOST=${SMTP_HOST_VAR}|WORKSHOP0_SMTP_PORT=587|WORKSHOP0_SMTP_STARTTLS=true"
+            ENVVARS="${ENVVARS}|WORKSHOP0_SMTP_USER=${SMTP_USER_VAR}"
+            if [ -n "${SMTP_FROM_VAR:-}" ]; then
+              ENVVARS="${ENVVARS}|WORKSHOP0_SMTP_FROM=${SMTP_FROM_VAR}"
+            fi
           fi
 
           ARGS=(
