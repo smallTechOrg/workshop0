@@ -81,7 +81,13 @@ def test_patch_set_clear_and_noop_audit(client, admin_headers, topic_ids, worksh
     assert client.patch(url, json={"workshop_id": 999999}, headers=admin_headers).status_code == 422
 
 
-def test_workshop_id_never_in_public_payloads_or_seo(client, admin_headers, topic_ids, workshop):
+def test_workshop_id_never_in_public_payloads_or_seo(client, admin_headers, topic_ids, workshop, monkeypatch, tmp_path):
+    import src.workshop0.api.seo as seo_api
+
+    # The backend CI job has no built frontend; give the SEO route a minimal template.
+    view = tmp_path / "view.html"
+    view.write_text("<!DOCTYPE html><html><head><title>x</title></head><body></body></html>", encoding="utf-8")
+    monkeypatch.setattr(seo_api, "VIEW_HTML", view)
     opp = client.post("/api/admin/opportunities", headers=admin_headers,
                       json=_body(topic_ids, workshop_id=workshop["id"], status="open")).json()["data"]["opportunity"]
     needle_id = f'"workshop_id"'
