@@ -426,7 +426,13 @@ def draft_profile(cv_text: str, topics: list[TopicRef]) -> DraftResult:
     return DraftResult(draft=draft, autofilled_fields=autofilled_fields_of(draft), llm=result)
 
 
-def _load_inputs(cv_document_id: int) -> tuple[str, list[TopicRef]] | None:
+def _cv_version(cv: Any) -> tuple[str | None, Any]:
+    """Identity of the CV content a draft is made from. Replacing a CV keeps the row id but
+    rewrites `sha256` and `created_at`, so a stale draft can be told apart from a fresh one."""
+    return (cv.sha256, cv.created_at)
+
+
+def _load_inputs(cv_document_id: int) -> tuple[str, list[TopicRef], tuple[str | None, Any]] | None:
     from src.workshop0.db.models import CvDocument, Topic
     from src.workshop0.db.session import create_db_session
 
@@ -437,7 +443,11 @@ def _load_inputs(cv_document_id: int) -> tuple[str, list[TopicRef]] | None:
         rows = session.scalars(
             select(Topic).where(Topic.active.is_(True)).order_by(Topic.position, Topic.id)
         ).all()
-        return cv.text_extract or "", [TopicRef(t.slug, t.name, t.category) for t in rows]
+        return (
+            cv.text_extract or "",
+            [TopicRef(t.slug, t.name, t.category) for t in rows],
+            _cv_version(cv),
+        )
 
 
 def _store(
@@ -446,6 +456,7 @@ def _store(
     status: str,
     draft: dict[str, Any] | None = None,
     llm: LLMResult | None = None,
+    version: tuple[str | None, Any] | None = None,
 ) -> None:
     from src.workshop0.ai.usage import record_usage
     from src.workshop0.db.models import CvDocument
@@ -453,7 +464,11 @@ def _store(
 
     with create_db_session() as session:
         cv = session.get(CvDocument, cv_document_id, with_for_update=True)
-        if cv is not None:
+        if cv is not None and version is not None and _cv_version(cv) != version:
+            # The CV was replaced while this draft was in flight: the newer CV's own task
+            # owns draft_status/draft_json. Checked under the row lock, so no lost update.
+            log.info("ai.profile_draft_stale", cv_document_id=cv_document_id)
+        elif cv is not None:
             cv.draft_status = status
             cv.draft_json = json.dumps(draft, ensure_ascii=False) if draft is not None else None
         if llm is not None:
@@ -485,30 +500,31 @@ def run_profile_draft(cv_document_id: int) -> None:
     raises (a background task has no caller to report to); no DB connection is held across the
     LLM call.
     """
+    version = None
     try:
         inputs = _load_inputs(cv_document_id)
         if inputs is None:
             log.warning("ai.profile_draft_missing_cv", cv_document_id=cv_document_id)
             return
-        cv_text, topics = inputs
+        cv_text, topics, version = inputs
         try:
             result = draft_profile(cv_text, topics)
         except LLMUnavailable:
-            _store(cv_document_id, status="skipped")
+            _store(cv_document_id, status="skipped", version=version)
             log.info("ai.profile_draft_skipped", cv_document_id=cv_document_id, reason="unavailable")
             return
         except LLMError as exc:
             _log_failure(cv_document_id, exc.cause, exc)
-            _store(cv_document_id, status="failed")
+            _store(cv_document_id, status="failed", version=version)
             return
         except DraftRejected as exc:
             _log_failure(cv_document_id, "guardrail_rejected", exc)
-            _store(cv_document_id, status="failed", llm=exc.llm)
+            _store(cv_document_id, status="failed", llm=exc.llm, version=version)
             return
-        _store(cv_document_id, status="ready", draft=result.draft, llm=result.llm)
+        _store(cv_document_id, status="ready", draft=result.draft, llm=result.llm, version=version)
     except Exception as exc:  # noqa: BLE001 — never leave a CV stuck in `pending`
         _log_failure(cv_document_id, "internal_error", exc)
         try:
-            _store(cv_document_id, status="failed")
+            _store(cv_document_id, status="failed", version=version)
         except Exception:  # noqa: BLE001
             log.exception("ai.profile_draft_store_failed", cv_document_id=cv_document_id)

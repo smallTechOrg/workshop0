@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import zipfile
 from pathlib import Path
 
 import docx
@@ -14,6 +15,7 @@ import pytest
 from pypdf import PdfReader, PdfWriter
 
 from src.workshop0.services.cv_text import (
+    DOCX_MAX_MEMBERS,
     MAX_EXTRACT_CHARS,
     MIN_TEXT_CHARS,
     CvUnreadable,
@@ -240,3 +242,42 @@ def test_a_zip_that_is_not_a_docx_is_corrupt():
 def test_unsupported_kind_is_a_programming_error():
     with pytest.raises(ValueError):
         extract_text(b"%PDF-1.4", "txt")  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------- DOCX bomb guard
+
+
+def _bomb(members: dict[str, int]) -> bytes:
+    """A real DOCX with extra highly-compressible members of the given uncompressed sizes."""
+    buffer = io.BytesIO(_docx_bytes(["Trainer " * 40]))
+    with zipfile.ZipFile(buffer, "a", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, size in members.items():
+            archive.writestr(name, b"\0" * size)
+    return buffer.getvalue()
+
+
+def test_docx_with_a_member_over_10mb_decompressed_is_too_large():
+    data = _bomb({"word/media/bomb.bin": 10 * 1024 * 1024 + 1})
+    assert len(data) < 100_000  # tiny on the wire, huge inflated
+    with pytest.raises(CvUnreadable) as info:
+        extract_text(data, "docx")
+    assert info.value.reason == "too_large"
+
+
+def test_docx_over_20mb_total_decompressed_is_too_large():
+    data = _bomb({f"word/media/p{i}.bin": 7 * 1024 * 1024 for i in range(3)})
+    with pytest.raises(CvUnreadable) as info:
+        extract_text(data, "docx")
+    assert info.value.reason == "too_large"
+
+
+def test_docx_with_too_many_members_is_too_large():
+    data = _bomb({f"word/extra/part{i}.xml": 1 for i in range(DOCX_MAX_MEMBERS)})
+    with pytest.raises(CvUnreadable) as info:
+        extract_text(data, "docx")
+    assert info.value.reason == "too_large"
+
+
+def test_docx_with_large_but_allowed_members_still_extracts():
+    data = _bomb({"word/media/a.bin": 9 * 1024 * 1024, "word/media/b.bin": 9 * 1024 * 1024})
+    assert extract_text(data, "docx").startswith("Trainer")
