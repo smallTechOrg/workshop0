@@ -77,6 +77,35 @@ gh workflow run deploy-cloudrun.yml --ref main
 
 > Phase 11b: placeholder, nothing to provision yet.
 
+## Email (SMTP) operator handoff (Phase 12)
+
+Nothing here has been executed by the build. Until the operator completes it, production boots with no SMTP settings and the outbox records every message as *not sent*.
+
+1. Create a Gmail app password (see README, "Email setup"). Never echo or paste it.
+2. Export it and store it as a secret (the value goes via stdin only; an absent value prints `SKIPPED`):
+
+```bash
+# from the repo root
+export WORKSHOP0_SMTP_PASSWORD='...'   # from your password manager
+bash deploy/cloudrun/provision.sh --dry-run
+bash deploy/cloudrun/provision.sh --rotate workshop0-smtp-password
+```
+
+`--rotate workshop0-smtp-password` creates the secret if absent, or adds a new version. The same command rotates it later.
+
+3. The workflow is unchanged. To make Cloud Run use the secret, apply this PROPOSED (not applied) change to the "Resolve optional runtime secrets" step of `.github/workflows/deploy-cloudrun.yml`, just before the `RUN_SECRETS` line is written to `GITHUB_ENV`. It maps the secret only when it has an enabled version, and sets the non-secret SMTP settings as env vars:
+
+```diff
++          if has_enabled workshop0-smtp-password; then
++            SECRETS="${SECRETS},WORKSHOP0_SMTP_PASSWORD=workshop0-smtp-password:latest"
++            echo "workshop0-smtp-password: mapped"
++          else
++            echo "workshop0-smtp-password: absent (email stays 'not sent')"
++          fi
+```
+
+Also set `WORKSHOP0_SMTP_HOST=smtp.gmail.com`, `WORKSHOP0_SMTP_USER=<sender>` (and optionally `WORKSHOP0_SMTP_FROM`) on the service, for example via `--update-env-vars` in the deploy step, or as GitHub repository variables passed through.
+
 ## Two LLM providers
 
 | | Workshop help-desk (Phase 4) | Trainer network (Phases 11-12) |

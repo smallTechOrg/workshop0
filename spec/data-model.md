@@ -413,7 +413,7 @@ bucket String(120) + window_start DateTime → composite PK; count Integer not n
 | blackout_json | Text default `'[]'` | ≤20 ranges `{"start": "2026-12-20", "end": "2027-01-02"}` |
 | visibility | String(16) default `'private'` | `private` \| `public` — activated in Phase 13 (C18) |
 | verified | Boolean default false · verified_at DateTime null · verified_by String(254) null | Admin "Verified" badge; invite-created trainers start verified |
-| consent_at | DateTime **not null** · consent_version String(16) not null | Consent to share the profile with partners for matching; current version `2026-11` |
+| consent_at | DateTime **not null** · consent_version String(16) not null | Consent to share the profile with partners for matching; current version `2026-11`. The `consent_at` checks in the email gate are defensive only (the column is NOT NULL) |
 | autofilled_fields_json | Text default `'[]'` | Field keys pre-filled from the CV and not yet reviewed (drives "From your CV — please check"). Set at create (`POST /api/me/profile`) to the drafted fields the person left unchanged on the review screen; cleared to `[]` by the first `PATCH /api/me/profile` |
 | created_at / updated_at | DateTime | |
 

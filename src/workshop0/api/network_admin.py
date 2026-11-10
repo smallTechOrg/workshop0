@@ -8,13 +8,17 @@ Thin HTTP layer: queries, validation, audit and logging live in services/pool.py
 services/invites.py.
 """
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from datetime import date
+
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
-from src.workshop0.api._common import api_error, ok, request_base_url
+from src.workshop0.api._common import api_error, ok, request_base_url, utcnow
 from src.workshop0.auth.deps import AdminActor, require_admin
 from src.workshop0.db.session import get_session
-from src.workshop0.services import invites, pool
+from src.workshop0.db.models import NetworkInvite
+from src.workshop0.email import sender
+from src.workshop0.services import invites, matching, pool
 from src.workshop0.services.invites import InviteCreate
 from src.workshop0.services.opportunities import parse_path_id
 from src.workshop0.services.pool import NoteCreate, TagsReplace, TrainerFilters
@@ -25,13 +29,65 @@ router = APIRouter(prefix="/api/admin/network", dependencies=[Depends(require_ad
 CV_MISSING_MESSAGE = "This trainer's CV file is missing from storage."
 
 
+def _bad(message: str):
+    return api_error("validation_error", message, 422)
+
+
+def _iso_date(name: str, raw: str | None) -> date | None:
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return date.fromisoformat(raw.strip())
+    except ValueError:
+        raise _bad(f"{name}: use a YYYY-MM-DD date") from None
+
+
 def _filters(
     q: str | None = Query(default=None, max_length=200),
     topic: list[str] = Query(default=[]),
     verified: bool | None = Query(default=None),
     tag: str | None = Query(default=None, max_length=40),
+    min_level: str | None = Query(default=None),
+    budget_max: int | None = Query(default=None, ge=0),
+    currency: str | None = Query(default=None),
+    unit: str | None = Query(default=None),
+    available_start: str | None = Query(default=None),
+    available_end: str | None = Query(default=None),
+    location_mode: str | None = Query(default=None),
+    city: str | None = Query(default=None, max_length=80),
+    session: Session = Depends(get_session),
 ) -> TrainerFilters:
-    return TrainerFilters(q=q, topics=list(topic), verified=verified, tag=tag)
+    """Phase-12 rule filters are resolved to an id set by services/matching (None = not used)."""
+    min_level = (min_level or "").strip().lower() or None
+    currency = (currency or "").strip().upper() or None
+    unit = (unit or "").strip().lower() or None
+    location_mode = (location_mode or "").strip().lower() or None
+    city = (city or "").strip() or None
+    start, end = _iso_date("available_start", available_start), _iso_date("available_end", available_end)
+    if min_level is not None and min_level not in matching.LEVEL_RANK:
+        raise _bad("min_level: must be intermediate, advanced or expert")
+    if location_mode is not None and location_mode not in matching.LOCATION_MODES:
+        raise _bad("location_mode: must be remote, onsite or hybrid")
+    if budget_max is not None:
+        if currency not in matching.BUDGET_CURRENCIES or unit not in matching.BUDGET_UNITS:
+            raise _bad("budget_max: also send currency (INR|USD) and unit (hour|day|course|month)")
+    if start and end and end < start:
+        raise _bad("available_end: must not be before available_start")
+    ids = None
+    if any([min_level, budget_max is not None, start, end, location_mode, city]):
+        ids = matching.pool_filter_ids(
+            session,
+            topics=list(topic),
+            min_level=min_level,
+            budget_max=budget_max,
+            currency=currency,
+            unit=unit,
+            available_start=start,
+            available_end=end,
+            location_mode=location_mode,
+            city=city,
+        )
+    return TrainerFilters(q=q, topics=list(topic), verified=verified, tag=tag, profile_ids=ids)
 
 
 def _profile_id(raw: str) -> int:
@@ -176,6 +232,35 @@ def revoke_invite(
         base_url=request_base_url(request),
     )
     return ok({"invite": invite})
+
+
+@router.post("/invites/{invite_id}/email")
+def email_invite(
+    invite_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+) -> dict:
+    """Explicit per-invite click: enqueue one `network.invite` mail (never automatic or bulk).
+    The dedupe + `invite.email` audit row (once per outbox row) live in `email.sender`."""
+    invite = session.get(NetworkInvite, parse_path_id(invite_id, "No invite with that id."))
+    if invite is None:
+        raise api_error("not_found", "No invite with that id.", 404)
+    sibling = bool(invites._accepted_emails(session, {invite.email}))
+    status = invites.invite_status(invite, utcnow(), sibling_accepted=sibling)
+    refusal = {
+        "revoked": ("invite_revoked", "This invite was revoked, so it can't be emailed."),
+        "accepted": ("invite_used", "This invite was already used, so it can't be emailed."),
+        "superseded": ("invite_used", "This person already joined through another invite."),
+        "expired": ("invite_expired", "This invite has expired - refresh it before emailing."),
+    }.get(status)
+    if refusal is not None:
+        raise api_error(refusal[0], refusal[1], 409)
+    row = sender.enqueue_invite_email(session, invite, request_base_url(request))
+    session.commit()
+    sender.schedule_drain(background_tasks)
+    session.refresh(row)
+    return ok({"outbox": {"id": row.id, "status": row.status}})
 
 
 @router.get("/ai-spend")

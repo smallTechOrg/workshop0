@@ -9,6 +9,14 @@ export interface PoolFilterValues {
   topic: string[];
   verified: "" | "true" | "false";
   tag: string;
+  min_level: "" | "intermediate" | "advanced" | "expert";
+  budget_max: string;
+  currency: "" | "INR" | "USD";
+  unit: "" | "hour" | "day" | "course" | "month";
+  available_start: string;
+  available_end: string;
+  location_mode: "" | "remote" | "onsite" | "hybrid";
+  city: string;
 }
 
 const inputCls =
@@ -135,8 +143,14 @@ export function PoolFiltersBar({
 }) {
   const q = useDebounced(values.q, (v) => onChange({ q: v }));
   const tag = useDebounced(values.tag, (v) => onChange({ tag: v }));
+  const budget = useDebounced(values.budget_max, (v) => onChange({ budget_max: v.replace(/\D/g, "") }));
+  const city = useDebounced(values.city, (v) => onChange({ city: v }));
+  const budgetIncomplete = values.budget_max !== "" && (!values.currency || !values.unit);
+  const datesInvalid =
+    values.available_start !== "" && values.available_end !== "" && values.available_end < values.available_start;
 
   return (
+    <div className="space-y-2">
     <div className="flex flex-wrap items-center gap-2">
       <input
         type="search"
@@ -173,6 +187,107 @@ export function PoolFiltersBar({
         maxLength={40}
         className={cn(inputCls, "w-32")}
       />
+    </div>
+    <fieldset
+      className="flex flex-wrap items-end gap-2 rounded-lg border border-stone-200 bg-stone-50/60 p-2"
+      data-testid="matching-filters"
+    >
+      <legend className="px-1 text-xs font-medium text-stone-500">Matching filters</legend>
+      <select
+        aria-label="Minimum level"
+        value={values.min_level}
+        onChange={(e) => onChange({ min_level: e.target.value as PoolFilterValues["min_level"] })}
+        className={inputCls}
+      >
+        <option value="">Any level</option>
+        <option value="intermediate">Intermediate+</option>
+        <option value="advanced">Advanced+</option>
+        <option value="expert">Expert</option>
+      </select>
+      <input
+        type="text"
+        inputMode="numeric"
+        aria-label="Budget maximum"
+        placeholder="Budget (max rate)"
+        value={budget.draft}
+        onChange={(e) => budget.setDraft(e.target.value.replace(/\D/g, ""))}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") budget.flush();
+        }}
+        maxLength={9}
+        className={cn(inputCls, "w-36")}
+      />
+      <select
+        aria-label="Budget currency"
+        value={values.currency}
+        onChange={(e) => onChange({ currency: e.target.value as PoolFilterValues["currency"] })}
+        className={inputCls}
+      >
+        <option value="">Currency</option>
+        <option value="INR">INR</option>
+        <option value="USD">USD</option>
+      </select>
+      <select
+        aria-label="Budget unit"
+        value={values.unit}
+        onChange={(e) => onChange({ unit: e.target.value as PoolFilterValues["unit"] })}
+        className={inputCls}
+      >
+        <option value="">Unit</option>
+        <option value="hour">per hour</option>
+        <option value="day">per day</option>
+        <option value="course">per course</option>
+        <option value="month">per month</option>
+      </select>
+      <label className="text-xs text-stone-500">
+        Available from
+        <input
+          type="date"
+          value={values.available_start}
+          onChange={(e) => onChange({ available_start: e.target.value })}
+          className={cn(inputCls, "ml-1")}
+        />
+      </label>
+      <label className="text-xs text-stone-500">
+        to
+        <input
+          type="date"
+          value={values.available_end}
+          onChange={(e) => onChange({ available_end: e.target.value })}
+          className={cn(inputCls, "ml-1")}
+        />
+      </label>
+      <select
+        aria-label="Location mode"
+        value={values.location_mode}
+        onChange={(e) => onChange({ location_mode: e.target.value as PoolFilterValues["location_mode"] })}
+        className={inputCls}
+      >
+        <option value="">Any location</option>
+        <option value="remote">Remote</option>
+        <option value="onsite">Onsite</option>
+        <option value="hybrid">Hybrid</option>
+      </select>
+      <input
+        type="text"
+        aria-label="Filter by city"
+        placeholder="City"
+        value={city.draft}
+        onChange={(e) => city.setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") city.flush();
+        }}
+        maxLength={80}
+        className={cn(inputCls, "w-32")}
+      />
+      {(budgetIncomplete || datesInvalid) && (
+        <p className="w-full text-xs text-amber-700" role="status">
+          {budgetIncomplete
+            ? "Pick a currency and unit to apply the budget filter."
+            : "The end date is before the start date, so the date filter is not applied."}
+        </p>
+      )}
+    </fieldset>
     </div>
   );
 }

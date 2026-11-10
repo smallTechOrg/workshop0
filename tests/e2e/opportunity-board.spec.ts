@@ -665,20 +665,12 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
       await expect.poll(() => code.locator('span[class*="hljs-"]').count()).toBeGreaterThan(0);
       await expect(detail).not.toContainText('```');
 
-      // Labelled, non-interactive stubs.
+      // Phase 12: signed-out visitors get a real sign-in-to-apply link; join CTA stays.
       await expect(page.getByTestId('join-network-cta')).toBeVisible();
-      for (const id of ['apply-stub']) {
-        const stub = page.getByTestId(id);
-        await expect(stub).toBeVisible();
-        await expect(stub).toContainText('Coming in a later phase');
-        const interactive = await stub.evaluate(
-          (el) =>
-            el.closest('a[href]') !== null ||
-            ((el.tagName === 'BUTTON' || el.closest('button') !== null) &&
-              !(el.closest('button') as HTMLButtonElement).disabled),
-        );
-        expect(interactive, `${id} must be non-interactive`).toBe(false);
-      }
+      const applySignin = page.getByTestId('apply-signin');
+      await expect(applySignin).toBeVisible();
+      await expect(applySignin).toContainText('Sign in to apply');
+      await expect(applySignin).toHaveAttribute('href', /.+/);
       await expect(page.getByTestId('closed-banner')).toHaveCount(0);
       await expectNoLeak(page);
       await expectNoLeakInPublicApi(page.request, opportunityId);
@@ -701,7 +693,7 @@ test.describe.serial('Phase 10 — Opportunity Board, end to end', () => {
       await page.goto(`${ORIGIN}/opportunities/${opportunityId}`);
       await expect(page.getByTestId('opportunity-detail')).toBeVisible();
       await expect(page.getByTestId('closed-banner')).toBeVisible();
-      await expect(page.getByTestId('apply-stub')).toHaveCount(0);
+      await expect(page.getByTestId('apply-signin')).toHaveCount(0);
       await expectNoLeak(page);
 
       await page.goto(BOARD_URL);

@@ -137,12 +137,13 @@ test.describe('network onboarding — sign in, CV-drafted profile, delete', () =
     await ctx?.close();
   });
 
-  test('board: Join our network is real; Sign in to apply stays a labelled stub', async () => {
+  test('board: Join our network is real; Sign in to apply is a real link', async () => {
     await page.goto(`${ORIGIN}/opportunities/${listingId}`);
-    const applyStub = page.getByTestId('apply-stub');
-    await expect(applyStub).toBeVisible();
-    await expect(applyStub).toContainText('Sign in to apply');
-    await expect(applyStub).toContainText(STUB_PILL);
+    const applySignin = page.getByTestId('apply-signin');
+    await expect(applySignin).toBeVisible();
+    await expect(applySignin).toContainText('Sign in to apply');
+    await expect(applySignin).toHaveAttribute('href', /.+/);
+    await expect(applySignin).not.toContainText(STUB_PILL);
 
     await page.goto(BOARD_URL);
     await expect(page.getByTestId('board-page')).toBeVisible();
@@ -243,9 +244,10 @@ test.describe('network onboarding — sign in, CV-drafted profile, delete', () =
     }
     await expect(page.getByTestId('profile-headline-text')).toHaveText(headline);
 
+    // Phase 12: applications and matches are real links, not stubs.
+    await expect(page.getByTestId('link-applications')).toHaveAttribute('href', /\/network\/applications\/?$/);
+    await expect(page.getByTestId('link-matches')).toHaveAttribute('href', /\/network\/matches\/?$/);
     for (const label of [
-      'My applications',
-      'Matched for you',
       'Saved searches & alerts',
       'Public directory profile',
     ]) {

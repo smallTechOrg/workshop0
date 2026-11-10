@@ -6,6 +6,8 @@ import { formatDate, timeAgo, useNowTick } from "@/lib/format";
 import {
   adminRevokeInvite,
   createInvite,
+  emailInvite,
+  outboxLabel,
   isAuthError,
   listInvites,
   type InviteStatus,
@@ -16,7 +18,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { StubAction } from "@/components/ui/StubBadge";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAdmin } from "@/components/admin/AdminGate";
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -66,7 +68,7 @@ function InviteLink({ url }: { url: string }) {
 
 /**
  * Invites panel — create a single-use 14-day `/invite/<token>` link for one
- * email and copy it. Sending it by email is a Phase-12 stub.
+ * email and copy it, or email it with an explicit per-row click (never automatic).
  */
 export function InvitesPanel() {
   const { adminKey, onUnauthorized } = useAdmin();
@@ -85,6 +87,10 @@ export function InvitesPanel() {
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [revokingId, setRevokingId] = useState<number | null>(null);
   const [rowError, setRowError] = useState<{ id: number; message: string } | null>(null);
+
+  const [emailTarget, setEmailTarget] = useState<NetworkInvite | null>(null);
+  const [emailing, setEmailing] = useState(false);
+  const [emailResult, setEmailResult] = useState<Record<number, string>>({});
 
   const [invites, setInvites] = useState<NetworkInvite[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -168,6 +174,31 @@ export function InvitesPanel() {
     }
   };
 
+  const sendEmail = async () => {
+    const inv = emailTarget;
+    if (!inv) return;
+    setEmailing(true);
+    setRowError(null);
+    try {
+      const res = await emailInvite(adminKey, inv.id);
+      setEmailResult((cur) => ({ ...cur, [inv.id]: outboxLabel(res.status) }));
+      setEmailTarget(null);
+    } catch (err) {
+      if (isAuthError(err)) {
+        onUnauthorized();
+        return;
+      }
+      setRowError({
+        id: inv.id,
+        message: err instanceof ApiError ? err.message : "Couldn't email the invite.",
+      });
+      setEmailTarget(null);
+      void loadList();
+    } finally {
+      setEmailing(false);
+    }
+  };
+
   return (
     <section aria-labelledby={headingId}>
       <Card className="p-4">
@@ -224,7 +255,6 @@ export function InvitesPanel() {
             <Button type="submit" size="sm" loading={creating}>
               Create invite
             </Button>
-            <StubAction label="Email invite" />
           </div>
         </form>
 
@@ -283,6 +313,24 @@ export function InvitesPanel() {
                       </div>
                       <div className="flex items-center gap-1.5">
                         <Badge tone={st.tone}>{st.label}</Badge>
+                        {inv.status !== "pending" && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled
+                            data-testid="invite-email"
+                            aria-label={`Email invite to ${inv.email}`}
+                            title={
+                              inv.status === "expired"
+                                ? "Expired - nothing to email"
+                                : inv.status === "revoked"
+                                  ? "Revoked invites can't be emailed"
+                                  : "Already used - can't be emailed"
+                            }
+                          >
+                            Email invite
+                          </Button>
+                        )}
                         {inv.status === "pending" && (
                           <>
                             <CopyButton
@@ -291,6 +339,18 @@ export function InvitesPanel() {
                               title="Copy invite link"
                               aria-label={`Copy invite link for ${inv.email}`}
                             />
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              data-testid="invite-email"
+                              aria-label={`Email invite to ${inv.email}`}
+                              onClick={() => {
+                                setRowError(null);
+                                setEmailTarget(inv);
+                              }}
+                            >
+                              Email invite
+                            </Button>
                             {confirmId !== inv.id && (
                               <Button
                                 variant="secondary"
@@ -335,6 +395,11 @@ export function InvitesPanel() {
                         </Button>
                       </div>
                     )}
+                    {emailResult[inv.id] && (
+                      <p className="mt-1 text-xs text-stone-600" role="status" data-testid="invite-email-result">
+                        Email: {emailResult[inv.id]}
+                      </p>
+                    )}
                     {rowError && rowError.id === inv.id && (
                       <p className="mt-1 text-xs text-red-700" role="alert">
                         {rowError.message}
@@ -347,6 +412,20 @@ export function InvitesPanel() {
           )}
         </div>
       </Card>
+      <ConfirmDialog
+        open={emailTarget !== null}
+        title="Email this invite?"
+        body={
+          <>
+            Send the invite link to <strong>{emailTarget?.email}</strong>? It is one email, sent only
+            when you click. Without SMTP configured it is recorded as not sent.
+          </>
+        }
+        confirmLabel="Send email"
+        busy={emailing}
+        onConfirm={() => void sendEmail()}
+        onCancel={() => setEmailTarget(null)}
+      />
     </section>
   );
 }

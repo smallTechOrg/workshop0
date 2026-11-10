@@ -579,7 +579,34 @@ def _comparable(name: str, value: Any) -> Any:
     return value
 
 
-def create_profile(session: Session, user_id: int, body: ProfileCreate) -> dict:
+def _enqueue_welcome(
+    session: Session, profile: TrainerProfile, user: AppUser, base_url: str | None
+) -> None:
+    """`network.welcome` on profile create (consent was just recorded). Never blocks creation."""
+    from src.workshop0.config.settings import get_settings
+    from src.workshop0.email.outbox import enqueue
+
+    if not getattr(user, "email", None):
+        return
+    base = (base_url or get_settings().resolved_base_url or "http://localhost:8001").rstrip("/")
+    try:
+        enqueue(
+            session,
+            to=user.email,
+            template="network.welcome",
+            context={
+                "name": user.display_name or "",
+                "applications_url": f"{base}/app/network/applications/",
+            },
+            dedupe_key=f"welcome:{profile.id}",
+        )
+    except Exception:  # an email problem must never fail profile creation
+        log.warning("email.enqueue_failed", template="network.welcome")
+
+
+def create_profile(
+    session: Session, user_id: int, body: ProfileCreate, *, base_url: str | None = None
+) -> dict:
     if body.consent is not True:
         raise validation_error("consent: please agree to continue")
     if get_profile(session, user_id) is not None:
@@ -626,6 +653,7 @@ def create_profile(session: Session, user_id: int, body: ProfileCreate) -> dict:
         subject_id=profile.id,
     )
     session.flush()
+    _enqueue_welcome(session, profile, user, base_url)
     log.info(
         "profile.created",
         profile_id=profile.id,

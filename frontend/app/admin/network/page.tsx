@@ -22,9 +22,17 @@ import { PoolTable } from "@/components/admin/network/PoolTable";
 import { PoolFiltersBar, type PoolFilterValues } from "@/components/admin/network/PoolFiltersBar";
 import { InvitesPanel } from "@/components/admin/network/InvitesPanel";
 import { SpendCard } from "@/components/admin/network/SpendCard";
-import { MatchingFiltersStub, SuggestedTrainersStub } from "@/components/admin/network/PoolStubs";
+import { Card } from "@/components/ui/Card";
 
 const PAGE_SIZE = 25;
+
+function pick<T extends string>(v: string | null, allowed: T[]): T | "" {
+  return v && (allowed as string[]).includes(v) ? (v as T) : "";
+}
+
+function isoDate(v: string | null): string {
+  return v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : "";
+}
 
 function readFilters(params: URLSearchParams): PoolFilterValues & { page: number } {
   const verified = params.get("verified");
@@ -33,6 +41,14 @@ function readFilters(params: URLSearchParams): PoolFilterValues & { page: number
     topic: params.getAll("topic").filter(Boolean),
     verified: verified === "true" || verified === "false" ? verified : "",
     tag: params.get("tag") ?? "",
+    min_level: pick(params.get("min_level"), ["intermediate", "advanced", "expert"]),
+    budget_max: (params.get("budget_max") ?? "").replace(/\D/g, ""),
+    currency: pick(params.get("currency"), ["INR", "USD"]),
+    unit: pick(params.get("unit"), ["hour", "day", "course", "month"]),
+    available_start: isoDate(params.get("available_start")),
+    available_end: isoDate(params.get("available_end")),
+    location_mode: pick(params.get("location_mode"), ["remote", "onsite", "hybrid"]),
+    city: params.get("city") ?? "",
     page: Math.max(1, Number.parseInt(params.get("page") ?? "1", 10) || 1),
   };
 }
@@ -43,6 +59,14 @@ function toQuery(v: PoolFilterValues & { page: number }): string {
   for (const t of v.topic) sp.append("topic", t);
   if (v.verified) sp.set("verified", v.verified);
   if (v.tag.trim()) sp.set("tag", v.tag.trim());
+  if (v.min_level) sp.set("min_level", v.min_level);
+  if (v.budget_max) sp.set("budget_max", v.budget_max);
+  if (v.currency) sp.set("currency", v.currency);
+  if (v.unit) sp.set("unit", v.unit);
+  if (v.available_start) sp.set("available_start", v.available_start);
+  if (v.available_end) sp.set("available_end", v.available_end);
+  if (v.location_mode) sp.set("location_mode", v.location_mode);
+  if (v.city.trim()) sp.set("city", v.city.trim());
   if (v.page > 1) sp.set("page", String(v.page));
   const s = sp.toString();
   return s ? `?${s}` : "";
@@ -78,6 +102,15 @@ function Pool() {
       topic: values.topic,
       verified: values.verified || undefined,
       tag: values.tag,
+      min_level: values.min_level || undefined,
+      // Budget needs currency + unit together (server 422 otherwise).
+      budget_max: values.budget_max && values.currency && values.unit ? Number(values.budget_max) : undefined,
+      currency: values.budget_max && values.currency && values.unit ? values.currency : undefined,
+      unit: values.budget_max && values.currency && values.unit ? values.unit : undefined,
+      available_start: values.available_start && values.available_end && values.available_end < values.available_start ? undefined : values.available_start || undefined,
+      available_end: values.available_start && values.available_end && values.available_end < values.available_start ? undefined : values.available_end || undefined,
+      location_mode: values.location_mode || undefined,
+      city: values.city,
       page: values.page,
       page_size: PAGE_SIZE,
     }),
@@ -145,7 +178,9 @@ function Pool() {
     }
   };
 
-  const hasFilters = Boolean(values.q.trim() || values.topic.length || values.verified || values.tag.trim());
+  const hasFilters = Boolean(values.q.trim() || values.topic.length || values.verified || values.tag.trim() ||
+      values.min_level || values.budget_max || values.currency || values.unit || values.available_start ||
+      values.available_end || values.location_mode || values.city.trim());
   const totalPages = data?.total_pages ?? 0;
 
   return (
@@ -168,7 +203,6 @@ function Pool() {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-4">
           <PoolFiltersBar values={values} topics={topics} onChange={setFilters} />
-          <MatchingFiltersStub />
 
           {error ? (
             <EmptyState
@@ -246,7 +280,13 @@ function Pool() {
         <aside className="space-y-4">
           <SpendCard />
           <InvitesPanel />
-          <SuggestedTrainersStub />
+          <Card className="p-4" data-testid="suggest-hint">
+            <h2 className="text-sm font-semibold text-stone-900">Suggested trainers</h2>
+            <p className="mt-1 text-xs text-stone-500">
+              Open a saved listing in the opportunity editor and choose Suggest trainers to get a
+              ranked shortlist with reasons.
+            </p>
+          </Card>
         </aside>
       </div>
     </main>

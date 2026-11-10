@@ -1,14 +1,13 @@
 "use client";
 
 import { CopyButton } from "@/components/ui/CopyButton";
-import { StubAction } from "@/components/ui/StubBadge";
+import { ApplyPanel } from "@/components/board/ApplyPanel";
 import { longDeadline, type PublicOpportunityDetail } from "@/lib/board";
 import { UrgencyPill } from "@/components/board/OpportunityCard";
 import { JoinNetworkCta } from "@/components/board/JoinNetworkCta";
 
 /**
- * The listing page's side card. Open → deadline + "Sign in to apply" (labelled
- * stub until Phase 12) + Copy link. Expired/closed → a neutral closed banner
+ * The listing page's side card. Open → deadline + the real apply panel + Copy link. Expired/closed → a neutral closed banner
  * and no apply control.
  */
 export function ListingSidebar({
@@ -32,12 +31,7 @@ export function ListingSidebar({
               <UrgencyPill deadline={o.deadline} now={now} />
             </div>
             <div className="mt-4 space-y-2">
-              <div data-testid="apply-stub" className="[&>span]:w-full [&>span]:flex-wrap [&>span]:justify-between [&>span]:whitespace-nowrap">
-                <StubAction label="Sign in to apply" />
-              </div>
-              <p className="text-xs text-stone-500">
-                Applying arrives with trainer sign-in. Until then, share this listing.
-              </p>
+              <ApplyPanel opportunityId={o.id} slug={o.slug} />
             </div>
             <div className="mt-4 flex items-center gap-2 border-t border-stone-100 pt-4">
               <CopyButton

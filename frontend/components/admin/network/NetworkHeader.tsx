@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
-import { StubAction } from "@/components/ui/StubBadge";
 import { useAdmin } from "@/components/admin/AdminGate";
 
 const linkCls =
@@ -38,7 +37,9 @@ export function NetworkHeader() {
         >
           Trainer network
         </Link>
-        <StubAction label="Outbox" />
+        <Link href="/admin/outbox/" data-testid="nav-outbox" className={linkCls}>
+          Outbox
+        </Link>
         <Button variant="ghost" size="sm" onClick={signOut}>
           Sign out
         </Button>

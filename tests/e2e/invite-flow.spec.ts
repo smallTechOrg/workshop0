@@ -245,9 +245,10 @@ test.describe('invite flow fixes (Phase 11d)', () => {
     // One actionable row for the email, not two.
     await expect(inviteRow(admin, REUSE_EMAIL)).toHaveCount(1, { timeout: 20_000 });
     await expect(inviteRow(admin, REUSE_EMAIL)).toContainText(/created .* · expires /);
-    const text = (await invitesPanel(admin).getByTestId('invite-list').innerText()) ?? '';
+    // Scope to this run's row: other specs' invitee emails (e.g. "invitee-sent-…") share the list.
+    const text = (await inviteRow(admin, REUSE_EMAIL).innerText()) ?? '';
     expect(text).toContain('created');
-    expect(text).not.toMatch(/\bsent\b/);
+    expect(text.replace(REUSE_EMAIL, '')).not.toMatch(/\bsent\b/);
   });
 
   test('no uncaught page errors', async () => {

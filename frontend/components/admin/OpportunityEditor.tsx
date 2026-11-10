@@ -7,6 +7,8 @@ import type { DraftResponse, DraftedField } from "@/lib/adminDraft";
 import { COMPENSATION_UNITS, CURRENCIES, type CompensationUnit, type Currency } from "@/lib/compensation";
 import { cn, useNowTick } from "@/lib/format";
 import {
+  MIN_LEVELS,
+  type MinLevel,
   LOCATION_MODES,
   OPPORTUNITY_TYPES,
   adminCreateOpportunity,
@@ -24,7 +26,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Markdown } from "@/components/ui/Markdown";
-import { StubCard } from "@/components/ui/StubBadge";
+import { SuggestedTrainersPanel } from "@/components/admin/matching/SuggestedTrainersPanel";
 import { useToast } from "@/components/ui/Toast";
 import { useAdmin } from "@/components/admin/AdminGate";
 import { ActivityList } from "@/components/admin/ActivityList";
@@ -59,6 +61,12 @@ interface FormState {
   compensation_currency: "" | Currency;
   compensation_unit: "" | CompensationUnit;
   compensation_text: string;
+  /** Phase 12 admin-only matching fields. */
+  budget_min: string;
+  budget_max: string;
+  budget_currency: "" | Currency;
+  budget_unit: "" | CompensationUnit;
+  min_level: "" | MinLevel;
   /** `<input type="datetime-local">` value, in the admin's local time zone. */
   deadline_local: string;
   partner_display_name: string;
@@ -84,6 +92,11 @@ const BODY_KEYS: BodyKey[] = [
   "compensation_currency",
   "compensation_unit",
   "compensation_text",
+  "budget_min",
+  "budget_max",
+  "budget_currency",
+  "budget_unit",
+  "min_level",
   "deadline",
   "partner_display_name",
   "partner_id",
@@ -137,6 +150,11 @@ function emptyForm(): FormState {
     compensation_currency: "",
     compensation_unit: "",
     compensation_text: "",
+    budget_min: "",
+    budget_max: "",
+    budget_currency: "",
+    budget_unit: "",
+    min_level: "",
     deadline_local: defaultDeadline(),
     partner_display_name: "",
     partner: null,
@@ -161,6 +179,11 @@ function formFrom(o: AdminOpportunity): FormState {
     compensation_currency: o.compensation_currency ?? "",
     compensation_unit: o.compensation_unit ?? "",
     compensation_text: o.compensation_text ?? "",
+    budget_min: o.budget_min != null ? String(o.budget_min) : "",
+    budget_max: o.budget_max != null ? String(o.budget_max) : "",
+    budget_currency: o.budget_currency ?? "",
+    budget_unit: o.budget_unit ?? "",
+    min_level: o.min_level ?? "",
     deadline_local: isoToLocalInput(o.deadline),
     partner_display_name: o.partner_display_name ?? "",
     partner: o.partner ?? null,
@@ -173,6 +196,25 @@ function amount(s: string): number | null {
   const t = s.trim();
   if (t === "" || !/^\d+$/.test(t)) return null;
   return Number(t);
+}
+
+/** Inline budget errors (admin-only matching budget; same shape rules as compensation). */
+function budgetErrors(f: FormState): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of ["budget_min", "budget_max"] as const) {
+    const v = f[k].trim();
+    if (v !== "" && !/^\d+$/.test(v)) out[k] = "Whole numbers only";
+  }
+  const mn = amount(f.budget_min);
+  const mx = amount(f.budget_max);
+  if (mn !== null && mx !== null && mx < mn && !out.budget_max) out.budget_max = "Maximum must be at least the minimum";
+  if (f.budget_min.trim() !== "" || f.budget_max.trim() !== "") {
+    if (!f.budget_currency) out.budget_currency = "Choose a currency for the budget";
+    if (!f.budget_unit) out.budget_unit = "Choose a unit (per hour, day, …)";
+  } else if (f.budget_currency || f.budget_unit) {
+    out.budget_min = "Enter an amount, or clear the currency and unit";
+  }
+  return out;
 }
 
 /** Inline compensation errors (keyed by API field), mirroring api.md's rules. */
@@ -222,6 +264,11 @@ function toBody(f: FormState): Omit<OpportunityBody, "status"> {
     compensation_currency: f.compensation_currency || null,
     compensation_unit: f.compensation_unit || null,
     compensation_text: opt(f.compensation_text),
+    budget_min: amount(f.budget_min),
+    budget_max: amount(f.budget_max),
+    budget_currency: f.budget_currency || null,
+    budget_unit: f.budget_unit || null,
+    min_level: f.min_level || null,
     deadline: localInputToIso(f.deadline_local),
     partner_display_name: opt(f.partner_display_name),
     partner_id: f.partner?.id ?? null,
@@ -265,6 +312,11 @@ const FORM_KEY: Record<BodyKey, keyof FormState> = {
   compensation_currency: "compensation_currency",
   compensation_unit: "compensation_unit",
   compensation_text: "compensation_text",
+  budget_min: "budget_min",
+  budget_max: "budget_max",
+  budget_currency: "budget_currency",
+  budget_unit: "budget_unit",
+  min_level: "min_level",
   deadline: "deadline_local",
   partner_display_name: "partner_display_name",
   partner_id: "partner",
@@ -287,6 +339,11 @@ const FIELD_LABEL: Record<BodyKey, string> = {
   compensation_currency: "Compensation currency",
   compensation_unit: "Compensation unit",
   compensation_text: "Compensation note",
+  budget_min: "Budget minimum",
+  budget_max: "Budget maximum",
+  budget_currency: "Budget currency",
+  budget_unit: "Budget unit",
+  min_level: "Minimum level",
   deadline: "Application deadline",
   partner_display_name: "Public partner name",
   partner_id: "Partner",
@@ -805,7 +862,7 @@ export function OpportunityEditor({
     return [b("reopen", "Reopen", "opp-reopen", "primary"), b("save", "Save", "opp-save", "secondary")];
   })();
 
-  const err = { ...compErrs, ...fieldErrors };
+  const err = { ...compErrs, ...(compShow ? budgetErrors(form) : {}), ...fieldErrors };
   const chip = (f: DraftedField) => <DraftedChip field={f} show={drafted.has(f)} />;
 
   return (
@@ -1133,6 +1190,91 @@ export function OpportunityEditor({
               </Field>
             </fieldset>
 
+            <fieldset
+              data-testid="opp-budget"
+              className="space-y-3 rounded-lg border border-stone-200 bg-stone-50/50 p-4"
+            >
+              <legend className="flex items-center gap-1.5 px-1 text-sm font-medium text-stone-700">
+                Matching (admin only) <LockIcon />
+              </legend>
+              <p className="text-xs text-stone-500">
+                Never shown publicly. Used to suggest trainers whose rate fits and whose topic level is
+                high enough.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-4">
+                <Field id="opp-budget-min" label="Budget min" error={err.budget_min} errorField="budget_min">
+                  <input
+                    id="opp-budget-min"
+                    data-testid="budget-min"
+                    inputMode="numeric"
+                    value={form.budget_min}
+                    onChange={(e) => set("budget_min", e.target.value)}
+                    aria-invalid={Boolean(err.budget_min)}
+                    className={inputCls(Boolean(err.budget_min))}
+                  />
+                </Field>
+                <Field id="opp-budget-max" label="Budget max" error={err.budget_max} errorField="budget_max">
+                  <input
+                    id="opp-budget-max"
+                    data-testid="budget-max"
+                    inputMode="numeric"
+                    value={form.budget_max}
+                    onChange={(e) => set("budget_max", e.target.value)}
+                    aria-invalid={Boolean(err.budget_max)}
+                    className={inputCls(Boolean(err.budget_max))}
+                  />
+                </Field>
+                <Field id="opp-budget-currency" label="Currency" error={err.budget_currency} errorField="budget_currency">
+                  <select
+                    id="opp-budget-currency"
+                    data-testid="budget-currency"
+                    value={form.budget_currency}
+                    onChange={(e) => set("budget_currency", e.target.value as "" | Currency)}
+                    className={inputCls(Boolean(err.budget_currency))}
+                  >
+                    <option value="">—</option>
+                    {CURRENCIES.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.symbol} {c.value}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field id="opp-budget-unit" label="Unit" error={err.budget_unit} errorField="budget_unit">
+                  <select
+                    id="opp-budget-unit"
+                    data-testid="budget-unit"
+                    value={form.budget_unit}
+                    onChange={(e) => set("budget_unit", e.target.value as "" | CompensationUnit)}
+                    className={inputCls(Boolean(err.budget_unit))}
+                  >
+                    <option value="">—</option>
+                    {COMPENSATION_UNITS.map((u) => (
+                      <option key={u.value} value={u.value}>
+                        {u.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+              <Field id="opp-min-level" label="Minimum topic level" error={err.min_level} errorField="min_level">
+                <select
+                  id="opp-min-level"
+                  data-testid="min-level"
+                  value={form.min_level}
+                  onChange={(e) => set("min_level", e.target.value as "" | MinLevel)}
+                  className={cn(inputCls(Boolean(err.min_level)), "sm:max-w-xs")}
+                >
+                  <option value="">No minimum</option>
+                  {MIN_LEVELS.map((l) => (
+                    <option key={l.value} value={l.value}>
+                      {l.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </fieldset>
+
             <Field
               id="opp-deadline"
               label="Application deadline"
@@ -1333,10 +1475,14 @@ export function OpportunityEditor({
           />
         </div>
 
-        <StubCard
-          title="Suggested trainers"
-          description="A shortlist of matching trainers from the network will appear here."
-        />
+        {opportunity ? (
+          <SuggestedTrainersPanel opportunityId={opportunity.id} />
+        ) : (
+          <Card className="p-4">
+            <h2 className="text-sm font-semibold text-stone-900">Suggested trainers</h2>
+            <p className="mt-1 text-xs text-stone-500">Save the listing first, then suggest trainers.</p>
+          </Card>
+        )}
       </aside>
     </form>
     </UnsavedFieldsContext.Provider>

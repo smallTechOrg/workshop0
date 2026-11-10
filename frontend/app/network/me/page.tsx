@@ -209,17 +209,29 @@ function ComingSoon() {
   return (
     <section aria-labelledby="coming-soon-title" data-testid="profile-stubs">
       <h2 id="coming-soon-title" className="mb-3 font-semibold text-stone-900">
-        Coming soon
+        More from the network
       </h2>
       <div className="grid gap-3 sm:grid-cols-2">
-        <StubCard
-          title="My applications"
-          description="Apply to listings with one click and follow each application's status."
-        />
-        <StubCard
-          title="Matched for you"
-          description="Opportunities that fit your topics, level and availability."
-        />
+        <a
+          href="/app/network/applications/"
+          data-testid="link-applications"
+          className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm hover:border-brand-300"
+        >
+          <h3 className="text-sm font-semibold text-stone-900">My applications</h3>
+          <p className="mt-1.5 text-sm text-stone-600">
+            Follow the status of every application and withdraw if plans change.
+          </p>
+        </a>
+        <a
+          href="/app/network/matches/"
+          data-testid="link-matches"
+          className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm hover:border-brand-300"
+        >
+          <h3 className="text-sm font-semibold text-stone-900">Matched for you</h3>
+          <p className="mt-1.5 text-sm text-stone-600">
+            Opportunities that fit your topics, level and availability.
+          </p>
+        </a>
         <StubCard
           title="Saved searches & alerts"
           description="Save a board search and get an email when a new listing matches."

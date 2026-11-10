@@ -302,6 +302,13 @@ export default function AdminHomePage() {
           >
             Trainer network
           </Link>
+          <Link
+            href="/admin/outbox/"
+            data-testid="nav-outbox"
+            className="inline-flex items-center rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-sm font-medium text-stone-800 shadow-sm transition-colors hover:bg-stone-50"
+          >
+            Outbox
+          </Link>
           <span
             aria-disabled="true"
             className="inline-flex items-center gap-2 rounded-lg border border-dashed border-stone-300 bg-stone-50 px-3 py-1.5 text-sm font-medium text-stone-400 select-none"

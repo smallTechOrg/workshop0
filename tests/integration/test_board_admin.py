@@ -14,6 +14,7 @@ ADMIN_FULL_KEYS = {
     "partner_display_name", "partner_internal_name", "internal_notes", "status",
     "partner_id", "partner", "compensation_min", "compensation_max", "compensation_currency",
     "compensation_unit",
+    "budget_min", "budget_max", "budget_currency", "budget_unit", "min_level", "applicant_count",  # Phase 12
     "stored_status", "public_url", "slug", "published_at", "closed_at", "created_at", "updated_at",
 }
 

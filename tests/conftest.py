@@ -161,6 +161,10 @@ def _isolated_env(monkeypatch, test_database_url, _schema, _truncate_engine, _re
     monkeypatch.setenv("WORKSHOP0_ADMIN_KEY", TEST_ADMIN_KEY)
     monkeypatch.setenv("WORKSHOP0_BASE_URL", "")
     monkeypatch.setenv("WORKSHOP0_LOG_LEVEL", "WARNING")
+    # `.env` may hold REAL SMTP creds; env vars beat `.env` in pydantic-settings, so blank them.
+    # Autouse runs before `smtp_env`, which then overrides these to point at the fake sink.
+    for name in ("HOST", "USER", "PASSWORD", "FROM"):
+        monkeypatch.setenv(f"WORKSHOP0_SMTP_{name}", "")
     _reset_singletons()
     yield
     _reset_singletons()
