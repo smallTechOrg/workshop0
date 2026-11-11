@@ -325,7 +325,7 @@ jobs:
             --port 8080
             --cpu 1 --memory 512Mi --concurrency 40 --timeout 60
             --max-instances 3
-            --cpu-boost --cpu-throttling
+            --no-cpu-boost --cpu-throttling
             --network=default --subnet=default --vpc-egress=private-ranges-only
             --set-env-vars "^|^${ENVVARS}"
             --set-secrets "$RUN_SECRETS"

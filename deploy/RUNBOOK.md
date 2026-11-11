@@ -189,7 +189,7 @@ gcloud run services describe workshop0 --region us-central1 --project ai-agent-b
 - **After a manual rollback or the automatic rollback guard**, traffic is pinned to a named revision and a plain `services update` would create a 0%-traffic revision. Re-enable latest-routing first: `gcloud run services update-traffic workshop0 --region us-central1 --project ai-agent-boilerplate0 --to-latest` (the next successful deploy does this too).
 - **Rehearse with the actual participant count** (join that many browsers or run the e2e/poll-burst checks) before a large workshop.
 
-**Cold start:** with `min-instances=0` the first request after idle takes a few seconds while an instance boots (CPU boost is on). That is expected, not a bug; workshop mode removes it.
+**Cold start:** with `min-instances=0` the first request after idle takes a few seconds while an instance boots. That is expected, not a bug; workshop mode removes it.
 
 ## Connection-budget rule
 
