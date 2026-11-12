@@ -9,7 +9,7 @@
  * `"use client"` island. All outbound links are plain `<a href>`, never
  * `next/link`, because this HTML is also served from `/`. Plain links also
  * mean every click is a full page load, so the analytics tag loaded here
- * (`<Analytics />`, this page only) never follows a visitor into the app.
+ * (`<Analytics />`) never follows a visitor into the private parts of the app.
  *
  * The page shows no live counts, listings or directory cards: at launch the
  * board may be empty, and joining the network works with zero content.
@@ -18,7 +18,7 @@
  */
 
 import type { Metadata } from "next";
-import { Analytics } from "@/components/landing/Analytics";
+import { Analytics } from "@/components/ui/Analytics";
 import { YourWorkshops } from "@/components/landing/YourWorkshops";
 
 export const metadata: Metadata = {

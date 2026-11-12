@@ -104,7 +104,7 @@ export function ApplyPanel({ opportunityId, slug }: { opportunityId: number; slu
         <a
           href={signInToApplyHref(slug)}
           data-testid="apply-signin"
-          className="inline-flex w-full items-center justify-center rounded-lg bg-brand-600 px-4 py-2 font-medium text-white shadow-sm hover:bg-brand-700"
+          className="ga-cta inline-flex w-full items-center justify-center rounded-lg bg-brand-600 px-4 py-2 font-medium text-white shadow-sm hover:bg-brand-700"
         >
           Sign in to apply
         </a>
@@ -118,7 +118,7 @@ export function ApplyPanel({ opportunityId, slug }: { opportunityId: number; slu
         <p className="text-sm text-stone-700">Create your trainer profile to apply.</p>
         <a
           href="/app/network/join/"
-          className="inline-flex w-full items-center justify-center rounded-lg bg-brand-600 px-4 py-2 font-medium text-white shadow-sm hover:bg-brand-700"
+          className="ga-cta inline-flex w-full items-center justify-center rounded-lg bg-brand-600 px-4 py-2 font-medium text-white shadow-sm hover:bg-brand-700"
         >
           Create your profile
         </a>
@@ -190,7 +190,7 @@ export function ApplyPanel({ opportunityId, slug }: { opportunityId: number; slu
       <p className="text-right text-xs text-stone-400">
         {note.length}/{NOTE_MAX}
       </p>
-      <Button type="submit" loading={busy} className="w-full" data-testid="apply-submit">
+      <Button type="submit" loading={busy} className="ga-cta w-full" data-testid="apply-submit">
         Apply
       </Button>
       {error && (

@@ -21,7 +21,7 @@ export function JoinNetworkCta({
       href={JOIN_NETWORK_HREF}
       data-testid="join-network-cta"
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2 font-medium text-white shadow-sm transition-colors hover:bg-brand-700 active:bg-brand-800",
+        "ga-cta inline-flex items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2 font-medium text-white shadow-sm transition-colors hover:bg-brand-700 active:bg-brand-800",
         "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600",
         variant === "card" && "w-full text-sm",
       )}
