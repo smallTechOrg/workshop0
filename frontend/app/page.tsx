@@ -1,11 +1,16 @@
 /**
- * Public marketing landing page — spec/capabilities.md C5.
+ * Public marketing landing page — spec/capabilities.md C5 (repositioned for
+ * AI trainers, Nov 2026: the Trainer Network leads, the workshop tool is a
+ * bonus toolkit further down).
  *
  * Served at `/` (FastAPI `FileResponse` over `frontend/out/index.html`) and, as
  * a harmless alias, at `/app/`. It is a STATIC server component: no router
  * hooks, no data fetching. The one dynamic bit — "Your workshops" — is a small
  * `"use client"` island. All outbound links are plain `<a href>`, never
  * `next/link`, because this HTML is also served from `/`.
+ *
+ * The page shows no live counts, listings or directory cards: at launch the
+ * board may be empty, and joining the network works with zero content.
  *
  * There is deliberately NO link to the admin console anywhere on this page.
  */
@@ -14,167 +19,229 @@ import type { Metadata } from "next";
 import { YourWorkshops } from "@/components/landing/YourWorkshops";
 
 export const metadata: Metadata = {
-  title: "Workshop0 — run a hands-on workshop without losing the room",
+  title: "Workshop0 — the Trainer Network for Gen AI & agentic AI trainers",
   description:
-    "Free, self-hosted workshop tracker. Compose markdown milestones, share one join link, and watch 300+ participants move in real time. No signup, no accounts.",
+    "Join smallTech's Trainer Network: drop your CV, get matched to workshops, engagements and roles in Generative AI, agentic AI and modern tech, and apply in one click. Plus a free toolkit for running hands-on sessions.",
 };
 
+/** Sign-in, then onboarding — the same target as the board's "Join our network" (C12). */
+const JOIN_HREF = "/app/signin/?next=%2Fapp%2Fnetwork%2Fjoin%2F";
+const BOARD_HREF = "/app/opportunities/";
 const CREATE_HREF = "/app/create/";
 
 // --------------------------------------------------------------------------
 // Content (data-driven so the markup stays readable)
 // --------------------------------------------------------------------------
 
-const FEATURES: {
-  icon: string;
-  title: string;
-  body: string;
-}[] = [
+/** Real names from the curated taxonomy (spec/data-model.md §topic). */
+const TOPIC_GROUPS: { icon: string; title: string; blurb: string; topics: string[] }[] = [
+  {
+    icon: "✨",
+    title: "Generative AI",
+    blurb: "LLM apps, prompting and the models underneath.",
+    topics: ["Generative AI & LLMs", "Prompt Engineering", "Deep Learning", "Machine Learning"],
+  },
+  {
+    icon: "🤖",
+    title: "Agentic AI",
+    blurb: "Agents, tools and the pipelines that ship them.",
+    topics: ["Agentic AI (LangChain / LangGraph)", "MLOps", "Data Engineering", "Python"],
+  },
+  {
+    icon: "🛠️",
+    title: "Tech",
+    blurb: "Cloud, DevOps, web and engineering practice.",
+    topics: ["AWS", "Kubernetes", "System Design", "APIs & Microservices"],
+  },
+];
+
+const OPPORTUNITY_TYPES = [
+  "Workshop / training",
+  "Longer engagement",
+  "Job / contract role",
+  "Workshop0 co-facilitator / TA",
+];
+
+const NETWORK_STEPS: { title: string; body: string }[] = [
+  {
+    title: "Sign in with Google",
+    body: "One button. No forms to fill before you know whether the network is for you.",
+  },
+  {
+    title: "Drop your CV, review one screen",
+    body: "Upload a PDF or DOCX, a LinkedIn PDF, or paste the text. We pre-fill your profile — headline, topics, experience — and you check it on a single page.",
+  },
+  {
+    title: "Get matched to real work",
+    body: "smallTech matches workshops, longer engagements and roles from its partner network to the topics you teach and your level — and can invite you to apply.",
+  },
+  {
+    title: "Apply in one click, see where you stand",
+    body: "Send an application with an optional note and follow it from Applied to Shortlisted to Selected. No chasing, no guessing.",
+  },
+  {
+    title: "Let the work come to you",
+    body: "Save a search and get one email when a matching opportunity opens, plus an optional weekly digest of what you missed.",
+  },
+];
+
+const TRUST: { icon: string; title: string; body: string }[] = [
+  {
+    icon: "🔒",
+    title: "Your rates stay private",
+    body: "Rates are visible to smallTech only — never to other trainers or on any public page.",
+  },
+  {
+    icon: "👁️",
+    title: "Public only if you say so",
+    body: "A public directory profile is opt-in, and never shows your email, rates or CV.",
+  },
+  {
+    icon: "✅",
+    title: "Verified trainers stand out",
+    body: "smallTech vets trainers and adds a Verified badge to their profile.",
+  },
+  {
+    icon: "🗑️",
+    title: "Leave any time",
+    body: "Delete your account from your profile and your profile and CV are gone immediately.",
+  },
+];
+
+const TOOLKIT_FEATURES: { icon: string; title: string; body: string }[] = [
   {
     icon: "📊",
     title: "A live dashboard across 300+ participants",
-    body: "Every participant, their progress and their current milestone, refreshed every couple of seconds. Median progress, the completion distribution and per-milestone counts tell you whether to slow down or push on.",
+    body: "See every participant's progress and current step, refreshed every couple of seconds, with stuck and bottleneck alerts.",
   },
   {
     icon: "📝",
-    title: "Content-rich markdown & code milestones",
-    body: "Each milestone carries real instructions — headings, lists, links, tables and syntax-highlighted fenced code blocks. Write it once in the composer; the room reads it in their own browser at their own pace.",
+    title: "Markdown & code milestones",
+    body: "Each step carries real instructions — headings, links, tables and syntax-highlighted code the room reads at its own pace.",
   },
   {
     icon: "🚪",
     title: "Name-only joining, nothing to install",
-    body: "Participants open one link and type their first name. No account, no download, no app. A cookie auto-resumes them if they refresh or close the tab, and everyone gets a personal link that carries their progress to another device.",
+    body: "Participants open one link and type their first name. They auto-resume on refresh and get a personal link for another device.",
   },
   {
     icon: "🆘",
-    title: "A real-time help desk",
-    body: "A stuck participant raises a hand from the milestone they are on. It lands in your queue with their name and that milestone's context, you answer in markdown in-page, and the answer appears on their screen — no hands up, no shouting across the room.",
-  },
-  {
-    icon: "📣",
-    title: "Broadcast, pause and advance — room controls",
-    body: "Pin an announcement to every screen, pause the room while you demo at the front, or advance everyone (or a chosen few) past a milestone that broke. Every one of those actions is undoable for 30 seconds.",
-  },
-  {
-    icon: "🚨",
-    title: "Proactive stuck & bottleneck alerts",
-    body: "Workshop0 watches the shape of the room for you: who has not moved for too long, which milestone is quietly swallowing everyone, and whether your pace is on track against the plan.",
-  },
-  {
-    icon: "🧾",
-    title: "A full audit trail",
-    body: "Every facilitator action — broadcasts, advances, pauses, edits, help answers — is recorded with who, what and when, and browsable in a tab on the dashboard. Nothing about the session is a mystery afterwards.",
-  },
-  {
-    icon: "⬇️",
-    title: "CSV export of everything",
-    body: "One click gives you every participant, their join answers, their completion times and their milestone-by-milestone progress — ready for your follow-up mail-out, your grading sheet or your retro.",
+    title: "Help desk & room controls",
+    body: "Answer raised hands in-page with the milestone context, broadcast a fix, pause the room or advance everyone past a broken step.",
   },
 ];
 
-const STEPS: { title: string; body: string }[] = [
+const TOOLKIT_STEPS: { title: string; body: string }[] = [
   {
     title: "Compose your milestones",
-    body: "Name the workshop, write each step in markdown with the exact commands and code, and set an optional time budget per step.",
+    body: "Write each step in markdown with the exact commands and code.",
   },
   {
     title: "Share one join link",
-    body: "Put the link (or its QR code) on the projector. That single link is everything the room needs.",
+    body: "Put the link or its QR code on the projector — that is all the room needs.",
   },
   {
     title: "The room joins by name",
-    body: "Participants type a first name and are straight into the first milestone. No accounts to create, no seats to assign.",
+    body: "No accounts to create, no seats to assign.",
   },
   {
-    title: "Watch the dashboard move",
-    body: "Tick counts climb live. You can see instantly who has raced ahead, who is stuck, and where the whole room has bunched up.",
-  },
-  {
-    title: "Answer help without breaking the flow",
-    body: "Questions arrive with their milestone context. Answer in-page, broadcast the fix if three people hit it, or advance everyone past a bad step.",
+    title: "Watch the dashboard, answer help",
+    body: "See who is ahead and who is stuck, and help without breaking the flow.",
   },
   {
     title: "Export the results",
-    body: "When it ends, download the CSV. The workshop stays browsable as a read-only archive at the same link.",
+    body: "Download the CSV; the workshop stays browsable as a read-only archive.",
   },
 ];
 
 const FAQS: { q: string; a: React.ReactNode }[] = [
   {
-    q: "Do I need an account?",
+    q: "Who is the Trainer Network for?",
     a: (
       <>
-        No. There is no signup, no password and no login anywhere in
-        Workshop0. When you create a workshop you are given a private facilitator
-        link — <strong>that link is the credential</strong>. Anyone holding it can run
-        that workshop; anyone without it cannot see it.
+        Freelance and in-house trainers who teach Generative AI, agentic AI and
+        modern tech — and, more broadly, mentors and engineers who run workshops,
+        bootcamps or courses. You pick your topics and level from a curated list of
+        40.
       </>
     ),
   },
   {
-    q: "What happens if I lose my dashboard link?",
+    q: "Where do the opportunities come from?",
     a: (
       <>
-        You lose your way back in. There is no account to recover and no password
-        reset, so <strong>save the dashboard link the moment it is shown to you</strong> —
-        bookmark it, paste it into your notes, mail it to yourself. The reveal screen
-        gives you a copy button and says the same thing.
+        smallTech curates every listing from its partner network — workshops and
+        trainings, longer engagements, job and contract roles, and co-facilitator
+        or TA spots on Workshop0&rsquo;s own workshops. Partners never use the
+        platform; smallTech shares shortlisted profiles with them directly.
       </>
     ),
   },
   {
-    q: "Then what is the “Your workshops” list?",
+    q: "Who sees my profile and my rates?",
     a: (
       <>
-        A convenience, not an account. Your browser remembers the workshops you made
-        here so you can jump back in from this page. Clear your browser data, switch
-        browsers or use a private window and the list is gone — the workshop itself is
-        untouched and still reachable at its link.
+        Your profile is private to smallTech by default.{" "}
+        <strong>Your rates are only ever visible to smallTech.</strong> If you turn on a
+        public directory profile, it shows your name, headline, topics and links —
+        never your email, rates or CV.
       </>
     ),
   },
   {
-    q: "What do participants need?",
+    q: "What does joining cost?",
+    a: <>Nothing. Sign in with Google, drop your CV and you are in.</>,
+  },
+  {
+    q: "Do I need an account to run a workshop?",
     a: (
       <>
-        A browser and the join link. Nothing to install, no account, no extension.
-        It works on a laptop or a phone, and their progress survives a refresh, a
-        closed tab or a move to another device via their personal link.
+        No. The workshop toolkit has no signup and no login. When you create a
+        workshop you get a private dashboard link — <strong>that link is the
+        credential</strong>. <strong>Save it the moment it is shown to you</strong>: there
+        is no account to recover and no password reset. Participants need only a
+        browser and the join link.
       </>
     ),
   },
   {
-    q: "Is it really free? Where does my data live?",
-    a: (
-      <>
-        Yes — Workshop0 is free and open, and it is self-hosted: the workshop
-        data lives in this instance's own database, on the machine serving this page.
-        No third party gets your participants' names.
-      </>
-    ),
-  },
-  {
-    q: "Why do you ask for my email at the end?",
+    q: "Why do you ask for my email when I create a workshop?",
     a: (
       <>
         Purely so the person running this instance can contact you about your
-        workshop if they have to, and as a light deterrent against abuse.{" "}
+        workshop if they have to.{" "}
         <strong>No mail is ever sent to you</strong> — not a confirmation, not a
         newsletter — and it is never shared. Your dashboard link is shown on screen,
         not mailed.
       </>
     ),
   },
-  {
-    q: "How many people can join one workshop?",
-    a: (
-      <>
-        It is built and tested for rooms of 300+ concurrent participants on modest
-        hardware. A typical lab of 20–60 will not make it break a sweat.
-      </>
-    ),
-  },
 ];
+
+// --------------------------------------------------------------------------
+// Small pieces
+// --------------------------------------------------------------------------
+
+function ArrowIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor" className="size-5">
+      <path
+        fillRule="evenodd"
+        d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
+function Eyebrow({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-sm font-semibold tracking-wide text-brand-600 uppercase">{children}</p>
+  );
+}
+
+const PRIMARY_BTN =
+  "inline-flex items-center gap-2 rounded-xl bg-brand-600 px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-brand-600/20 transition-colors hover:bg-brand-700 active:bg-brand-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600";
 
 // --------------------------------------------------------------------------
 // Page
@@ -182,7 +249,7 @@ const FAQS: { q: string; a: React.ReactNode }[] = [
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-stone-50 text-stone-900">
+    <div className="min-h-screen overflow-x-hidden bg-stone-50 text-stone-900">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 focus:rounded-lg focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:shadow"
@@ -214,15 +281,27 @@ export default function LandingPage() {
               by smallTech
             </a>
           </span>
-          <nav aria-label="Page sections" className="hidden items-center gap-6 text-sm text-stone-600 sm:flex">
-            <a href="#features" className="hover:text-stone-900">
-              Features
+          <nav
+            aria-label="Page sections"
+            className="hidden items-center gap-6 text-sm text-stone-600 md:flex"
+          >
+            <a href="#topics" className="hover:text-stone-900">
+              Topics
             </a>
-            <a href="#how-it-works" className="hover:text-stone-900">
+            <a href="#network" className="hover:text-stone-900">
               How it works
+            </a>
+            <a href="#toolkit" className="hover:text-stone-900">
+              Workshop toolkit
             </a>
             <a href="#faq" className="hover:text-stone-900">
               FAQ
+            </a>
+            <a
+              href={BOARD_HREF}
+              className="font-medium text-brand-700 hover:text-brand-800"
+            >
+              Opportunities
             </a>
           </nav>
         </div>
@@ -243,43 +322,233 @@ export default function LandingPage() {
             <div>
               <p className="inline-flex items-center gap-2 rounded-full border border-brand-200 bg-white/80 px-3 py-1 text-xs font-medium text-brand-700">
                 <span aria-hidden="true">●</span>
-                Free · self-hosted · no signup
+                For Gen AI, agentic AI &amp; tech trainers
               </p>
               <h1
                 id="hero-heading"
                 className="mt-5 text-4xl leading-[1.1] font-semibold tracking-tight text-stone-900 sm:text-5xl lg:text-6xl"
               >
-                Run a hands-on workshop{" "}
-                <span className="text-brand-600">without losing the room.</span>
+                You teach AI.{" "}
+                <span className="text-brand-600">We find you the rooms that need you.</span>
               </h1>
               <p className="mt-5 max-w-xl text-lg leading-relaxed text-stone-600">
-                Workshop0 turns your agenda into live milestones your
-                participants tick off in their browser — so you can see, in real time,
-                exactly who is flying, who is stuck and which step is quietly
-                swallowing everybody.
+                The smallTech Trainer Network matches trainers in Generative AI,
+                agentic AI and modern tech with workshops, longer engagements and
+                roles from our partner network. Drop your CV, check one screen, and
+                you are in.
               </p>
 
               <div className="mt-8 flex flex-wrap items-center gap-4">
-                <a
-                  data-testid="landing-cta"
-                  href={CREATE_HREF}
-                  className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-brand-600/20 transition-colors hover:bg-brand-700 active:bg-brand-800"
-                >
-                  Create your workshop — free, no signup
-                  <svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor" className="size-5">
-                    <path fillRule="evenodd" d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z" clipRule="evenodd" />
-                  </svg>
+                <a data-testid="landing-cta" href={JOIN_HREF} className={PRIMARY_BTN}>
+                  Join the Trainer Network
+                  <ArrowIcon />
                 </a>
                 <a
-                  href="#how-it-works"
+                  data-testid="landing-browse-link"
+                  href={BOARD_HREF}
                   className="text-sm font-medium text-stone-600 underline underline-offset-4 hover:text-stone-900"
                 >
-                  See how it works
+                  Browse opportunities
                 </a>
               </div>
 
               <p className="mt-4 text-sm text-stone-500">
-                Takes about two minutes. Nothing to install — for you or for the room.
+                Free to join · sign in with Google · about two minutes. Your rates
+                stay private to smallTech.
+              </p>
+            </div>
+
+            {/* Indicative trainer-profile vignette (static illustration, not live data) */}
+            <div aria-hidden="true" className="lg:justify-self-end">
+              <div className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-5 shadow-xl shadow-stone-900/5">
+                <div className="flex items-center gap-3">
+                  <span className="flex size-11 items-center justify-center rounded-full bg-brand-100 text-base font-semibold text-brand-700">
+                    A
+                  </span>
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-2 text-sm font-semibold text-stone-800">
+                      Your profile
+                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                        Verified
+                      </span>
+                    </p>
+                    <p className="truncate text-xs text-stone-500">
+                      Agentic AI trainer · Bengaluru · Remote OK
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {[
+                    ["Agentic AI (LangChain / LangGraph)", "Expert"],
+                    ["Generative AI & LLMs", "Advanced"],
+                    ["Python", "Expert"],
+                  ].map(([t, l]) => (
+                    <span
+                      key={t}
+                      className="rounded-full border border-brand-100 bg-brand-50 px-2.5 py-1 text-xs text-brand-800"
+                    >
+                      {t} · <span className="font-medium">{l}</span>
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-5 space-y-2.5">
+                  <p className="text-xs font-medium tracking-wide text-stone-400 uppercase">
+                    Suggested for you
+                  </p>
+                  {[
+                    ["Workshop / training", "Agents in production — 2-day lab", "Invited"],
+                    ["Longer engagement", "GenAI curriculum design", "Applied"],
+                  ].map(([type, title, status]) => (
+                    <div
+                      key={title}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs text-stone-500">{type}</p>
+                        <p className="truncate text-sm font-medium text-stone-800">{title}</p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800">
+                        {status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ------------------------------------------------------- topics */}
+        <section
+          id="topics"
+          data-testid="landing-topics"
+          aria-labelledby="topics-heading"
+          className="mx-auto max-w-6xl scroll-mt-16 px-4 py-20 sm:px-6"
+        >
+          <Eyebrow>What our trainers teach</Eyebrow>
+          <h2
+            id="topics-heading"
+            className="mt-2 max-w-2xl text-3xl font-semibold tracking-tight text-stone-900 sm:text-4xl"
+          >
+            Built for people who teach Gen AI, agentic AI and modern tech.
+          </h2>
+          <p className="mt-3 max-w-2xl text-stone-600">
+            Opportunities and profiles speak one vocabulary — a curated list of 40
+            topics, each with a level from Intermediate to Expert — so matches are
+            about what you actually teach.
+          </p>
+
+          <ul className="mt-12 grid gap-6 md:grid-cols-3">
+            {TOPIC_GROUPS.map((g) => (
+              <li key={g.title} className="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
+                <span
+                  aria-hidden="true"
+                  className="flex size-11 items-center justify-center rounded-xl border border-brand-100 bg-brand-50 text-xl"
+                >
+                  {g.icon}
+                </span>
+                <h3 className="mt-4 text-lg font-semibold text-stone-900">{g.title}</h3>
+                <p className="mt-1 text-sm text-stone-600">{g.blurb}</p>
+                <ul className="mt-4 flex flex-wrap gap-2">
+                  {g.topics.map((t) => (
+                    <li
+                      key={t}
+                      className="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-medium text-stone-700"
+                    >
+                      {t}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        {/* ------------------------------------------- how the network works */}
+        <section
+          id="network"
+          data-testid="landing-network"
+          aria-labelledby="network-heading"
+          className="scroll-mt-16 border-y border-stone-200 bg-white"
+        >
+          <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
+            <Eyebrow>How the network works</Eyebrow>
+            <h2
+              id="network-heading"
+              className="mt-2 max-w-2xl text-3xl font-semibold tracking-tight text-stone-900 sm:text-4xl"
+            >
+              From CV to your next engagement, without the cold emails.
+            </h2>
+            <p className="mt-3 max-w-2xl text-stone-600">
+              Every opportunity is curated by smallTech:{" "}
+              {OPPORTUNITY_TYPES.join(" · ")}.
+            </p>
+
+            <ol className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-5">
+              {NETWORK_STEPS.map((s, i) => (
+                <li key={s.title} className="rounded-xl border border-stone-200 bg-stone-50/70 p-5">
+                  <span className="flex size-9 items-center justify-center rounded-full bg-brand-600 text-sm font-semibold text-white">
+                    {i + 1}
+                  </span>
+                  <h3 className="mt-4 text-base font-semibold text-stone-900">{s.title}</h3>
+                  <p className="mt-1.5 text-sm leading-relaxed text-stone-600">{s.body}</p>
+                </li>
+              ))}
+            </ol>
+
+            <ul
+              data-testid="landing-trust"
+              className="mt-12 grid gap-x-10 gap-y-8 rounded-2xl border border-brand-200 bg-brand-50/60 p-6 sm:grid-cols-2 sm:p-8"
+            >
+              {TRUST.map((t) => (
+                <li key={t.title} className="flex gap-3">
+                  <span aria-hidden="true" className="text-xl">
+                    {t.icon}
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-semibold text-stone-900">{t.title}</h3>
+                    <p className="mt-1 text-sm leading-relaxed text-stone-600">{t.body}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-10 flex flex-wrap items-center gap-4">
+              <a href={JOIN_HREF} className={PRIMARY_BTN}>
+                Join the Trainer Network
+                <ArrowIcon />
+              </a>
+              <a
+                href={BOARD_HREF}
+                className="text-sm font-medium text-stone-600 underline underline-offset-4 hover:text-stone-900"
+              >
+                See what&rsquo;s open on the board
+              </a>
+            </div>
+          </div>
+        </section>
+
+        {/* ---------------------------------------------- bonus: toolkit */}
+        <section
+          id="toolkit"
+          data-testid="landing-features"
+          aria-labelledby="toolkit-heading"
+          className="mx-auto max-w-6xl scroll-mt-16 px-4 py-20 sm:px-6"
+        >
+          <div className="grid gap-12 lg:grid-cols-2 lg:items-center">
+            <div>
+              <Eyebrow>Bonus · free for everyone</Eyebrow>
+              <h2
+                id="toolkit-heading"
+                className="mt-2 max-w-xl text-3xl font-semibold tracking-tight text-stone-900 sm:text-4xl"
+              >
+                A free toolkit for running your hands-on sessions.
+              </h2>
+              <p className="mt-3 max-w-xl text-stone-600">
+                Workshop0 turns your agenda into live milestones your participants
+                tick off in their browser — so you can see, in real time, who is
+                flying, who is stuck and which step is swallowing the room. No
+                signup, for you or for them.
               </p>
             </div>
 
@@ -331,31 +600,9 @@ export default function LandingPage() {
               </div>
             </div>
           </div>
-        </section>
 
-        {/* ----------------------------------------------------- features */}
-        <section
-          id="features"
-          data-testid="landing-features"
-          aria-labelledby="features-heading"
-          className="mx-auto max-w-6xl scroll-mt-16 px-4 py-20 sm:px-6"
-        >
-          <p className="text-sm font-semibold tracking-wide text-brand-600 uppercase">
-            What you get
-          </p>
-          <h2
-            id="features-heading"
-            className="mt-2 max-w-2xl text-3xl font-semibold tracking-tight text-stone-900 sm:text-4xl"
-          >
-            Everything you need to run the room, and nothing you don't.
-          </h2>
-          <p className="mt-3 max-w-2xl text-stone-600">
-            One tool, built for the awkward middle of a workshop — when half the room
-            is ahead, a quarter is stuck, and you cannot tell which is which.
-          </p>
-
-          <ul className="mt-12 grid gap-x-10 gap-y-10 sm:grid-cols-2">
-            {FEATURES.map((f) => (
+          <ul className="mt-14 grid gap-x-10 gap-y-10 sm:grid-cols-2">
+            {TOOLKIT_FEATURES.map((f) => (
               <li key={f.title} className="flex gap-4">
                 <span
                   aria-hidden="true"
@@ -365,60 +612,40 @@ export default function LandingPage() {
                 </span>
                 <div>
                   <h3 className="text-base font-semibold text-stone-900">{f.title}</h3>
-                  <p className="mt-1.5 text-sm leading-relaxed text-stone-600">
-                    {f.body}
-                  </p>
+                  <p className="mt-1.5 text-sm leading-relaxed text-stone-600">{f.body}</p>
                 </div>
               </li>
             ))}
           </ul>
-        </section>
 
-        {/* -------------------------------------------------- how it works */}
-        <section
-          id="how-it-works"
-          data-testid="landing-how-it-works"
-          aria-labelledby="how-heading"
-          className="scroll-mt-16 border-y border-stone-200 bg-white"
-        >
-          <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
-            <p className="text-sm font-semibold tracking-wide text-brand-600 uppercase">
-              How it works
-            </p>
-            <h2
-              id="how-heading"
-              className="mt-2 max-w-2xl text-3xl font-semibold tracking-tight text-stone-900 sm:text-4xl"
-            >
-              The facilitator → participant loop, end to end.
-            </h2>
-
-            <ol className="mt-12 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
-              {STEPS.map((s, i) => (
-                <li key={s.title} className="relative rounded-xl border border-stone-200 bg-stone-50/70 p-6">
-                  <span className="flex size-9 items-center justify-center rounded-full bg-brand-600 text-sm font-semibold text-white">
+          <div
+            data-testid="landing-how-it-works"
+            className="mt-14 rounded-2xl border border-stone-200 bg-white p-6 shadow-sm sm:p-8"
+          >
+            <h3 className="text-lg font-semibold text-stone-900">How the toolkit works</h3>
+            <ol className="mt-6 grid gap-6 sm:grid-cols-2 lg:grid-cols-5">
+              {TOOLKIT_STEPS.map((s, i) => (
+                <li key={s.title}>
+                  <span className="flex size-8 items-center justify-center rounded-full border border-brand-200 bg-brand-50 text-sm font-semibold text-brand-700">
                     {i + 1}
                   </span>
-                  <h3 className="mt-4 text-base font-semibold text-stone-900">
-                    {s.title}
-                  </h3>
-                  <p className="mt-1.5 text-sm leading-relaxed text-stone-600">
-                    {s.body}
-                  </p>
+                  <p className="mt-3 text-sm font-semibold text-stone-900">{s.title}</p>
+                  <p className="mt-1 text-sm leading-relaxed text-stone-600">{s.body}</p>
                 </li>
               ))}
             </ol>
-
-            <div className="mt-12 flex flex-wrap items-center gap-4 rounded-xl border border-brand-200 bg-brand-50 px-6 py-5">
-              <p className="text-sm text-stone-700">
-                That is the whole loop. Your first workshop takes about two minutes to
-                compose.
-              </p>
+            <div className="mt-8 flex flex-wrap items-center gap-4 border-t border-stone-200 pt-6">
               <a
+                data-testid="landing-workshop-cta"
                 href={CREATE_HREF}
-                className="ml-auto text-sm font-semibold text-brand-700 underline underline-offset-4 hover:text-brand-800"
+                className="inline-flex items-center gap-2 rounded-xl border border-brand-600 px-5 py-3 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
               >
-                Start composing →
+                Create a workshop — free, no signup
+                <ArrowIcon />
               </a>
+              <p className="text-sm text-stone-500">
+                Takes about two minutes. Nothing to install.
+              </p>
             </div>
           </div>
         </section>
@@ -433,19 +660,13 @@ export default function LandingPage() {
           aria-labelledby="faq-heading"
           className="mx-auto max-w-3xl scroll-mt-16 px-4 py-20 sm:px-6"
         >
-          <p className="text-sm font-semibold tracking-wide text-brand-600 uppercase">
-            Straight answers
-          </p>
+          <Eyebrow>Straight answers</Eyebrow>
           <h2
             id="faq-heading"
             className="mt-2 text-3xl font-semibold tracking-tight text-stone-900 sm:text-4xl"
           >
             Frequently asked questions
           </h2>
-          <p className="mt-3 text-stone-600">
-            Including the limits — they are real, and better known before you start
-            than after.
-          </p>
 
           <dl className="mt-10 divide-y divide-stone-200 border-y border-stone-200">
             {FAQS.map((f) => (
@@ -458,16 +679,15 @@ export default function LandingPage() {
 
           <div className="mt-12 rounded-2xl border border-stone-200 bg-white p-8 text-center shadow-sm">
             <h2 className="text-2xl font-semibold tracking-tight text-stone-900">
-              Ready when you are.
+              Your next room is out there.
             </h2>
             <p className="mx-auto mt-2 max-w-md text-sm text-stone-600">
-              Compose your milestones, share the link, watch the room move.
+              Drop your CV, check one screen, and get matched to work in Gen AI,
+              agentic AI and tech.
             </p>
-            <a
-              href={CREATE_HREF}
-              className="mt-6 inline-flex items-center gap-2 rounded-xl bg-brand-600 px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-brand-600/20 transition-colors hover:bg-brand-700"
-            >
-              Create your workshop — free, no signup
+            <a href={JOIN_HREF} className={`mt-6 ${PRIMARY_BTN}`}>
+              Join the Trainer Network
+              <ArrowIcon />
             </a>
           </div>
         </section>
@@ -477,12 +697,12 @@ export default function LandingPage() {
       <footer className="border-t border-stone-200 bg-white">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-8 text-sm text-stone-500 sm:px-6">
           <p>
-            <span aria-hidden="true">⛵</span> Workshop0 — free and
-            self-hosted, run by whoever operates this instance.
+            <span aria-hidden="true">⛵</span> Workshop0 — home of the smallTech
+            Trainer Network.
           </p>
           <p className="flex flex-wrap items-center gap-4">
             <a
-              href="/app/opportunities/"
+              href={BOARD_HREF}
               className="underline underline-offset-4 hover:text-stone-800"
             >
               Opportunities for trainers
@@ -512,11 +732,7 @@ export default function LandingPage() {
               rel="noopener noreferrer"
               className="group flex items-center gap-2 hover:text-stone-800"
             >
-              <svg
-                viewBox="0 0 16 16"
-                aria-hidden="true"
-                className="h-5 w-5 fill-current"
-              >
+              <svg viewBox="0 0 16 16" aria-hidden="true" className="h-5 w-5 fill-current">
                 <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
               </svg>
               <span className="underline underline-offset-4">Source on GitHub</span>
