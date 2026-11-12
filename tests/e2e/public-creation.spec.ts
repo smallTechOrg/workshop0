@@ -112,11 +112,11 @@ test.describe.serial('Phase 6 — keyless public creation, end to end', () => {
     await Promise.all([creatorCtx, priyaCtx, adminCtx].filter(Boolean).map((ctx) => ctx.close()));
   });
 
-  test('a stranger reaches the composer from the landing CTA and composes 3 milestones', async () => {
+  test('a stranger reaches the composer from the landing toolkit CTA and composes 3 milestones', async () => {
     await creator.goto(LANDING_URL);
     await expect(creator.getByTestId('landing-hero')).toBeVisible();
 
-    await creator.getByTestId('landing-cta').click();
+    await creator.getByTestId('landing-workshop-cta').click();
     await expect(creator.getByTestId('create-page')).toBeVisible({ timeout: 15_000 });
     expect(new URL(creator.url()).pathname).toBe('/app/create/');
     // No key gate anywhere on the public create flow.

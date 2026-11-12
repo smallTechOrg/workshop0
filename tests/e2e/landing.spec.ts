@@ -12,9 +12,11 @@ import {
  * Phase 6 — C5 public marketing landing page (capabilities.md §C5,
  * api.md §`GET /`, architecture.md §Serving the landing page at `/`).
  *
- * `/` is a real 200 HTML page, not a 307 into the app. It carries the hero +
- * single CTA, the feature blocks, the how-it-works walkthrough and the FAQ,
- * and it links to the admin console NOWHERE. "Your workshops" is absent on a
+ * `/` is a real 200 HTML page, not a 307 into the app. Since the Nov 2026
+ * repositioning it leads with the Trainer Network for AI trainers (hero with a
+ * single "Join the Trainer Network" CTA, topics, network steps), then the
+ * workshop toolkit as a bonus (features, how-it-works, its own create CTA) and
+ * the FAQ, and it links to the admin console NOWHERE. "Your workshops" is absent on a
  * fresh browser and appears — with working quick links — only after that same
  * browser has publicly created a workshop (localStorage, not auth).
  */
@@ -58,31 +60,76 @@ test.describe('Phase 6 — public landing page at /', () => {
     expect(res?.status()).toBe(200);
     expect(new URL(page.url()).pathname, '/ must not redirect').toBe('/');
 
-    await expect(page.getByTestId('landing-hero')).toBeVisible();
-    await expect(page.getByTestId('landing-features')).toBeVisible();
-    await expect(page.getByTestId('landing-how-it-works')).toBeVisible();
-    await expect(page.getByTestId('landing-faq')).toBeVisible();
+    for (const id of [
+      'landing-hero',
+      'landing-topics',
+      'landing-network',
+      'landing-features',
+      'landing-how-it-works',
+      'landing-faq',
+    ]) {
+      await expect(page.getByTestId(id), id).toBeVisible();
+    }
 
-    // Exactly one primary CTA (C5 §1: "No second competing CTA").
+    // Exactly one primary CTA (C5 §1), and it is the network join.
     const cta = page.getByTestId('landing-cta');
     await expect(cta).toHaveCount(1);
     await expect(cta).toBeVisible();
-    await expect(cta).toContainText(/create your workshop/i);
+    await expect(cta).toHaveText(/join the trainer network/i);
+    const href = (await cta.getAttribute('href')) ?? '';
+    const target = new URL(href, ORIGIN);
+    expect(target.pathname).toBe('/app/signin/');
+    expect(target.searchParams.get('next')).toBe('/app/network/join/');
+
+    // Secondary: a plain link to the board, and the toolkit's own create CTA.
+    await expect(page.getByTestId('landing-browse-link')).toHaveAttribute('href', '/app/opportunities/');
+    await expect(page.getByTestId('landing-workshop-cta')).toHaveAttribute('href', '/app/create/');
+
+    // Positioned for AI trainers: the topic groups name real taxonomy topics.
+    const topics = page.getByTestId('landing-topics');
+    await expect(topics).toContainText('Generative AI & LLMs');
+    await expect(topics).toContainText('Agentic AI (LangChain / LangGraph)');
+    await expect(topics).toContainText(/tech/i);
 
     // Styled render, not a bare-HTML fallback (same bar as smoke.spec.ts).
     expect(await page.evaluate(() => document.styleSheets.length)).toBeGreaterThan(0);
     const fontFamily = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
     expect(fontFamily.toLowerCase()).not.toContain('times');
 
-    // Content bar: the FAQ states the honest limits, how-it-works is a walkthrough.
-    await expect(page.getByTestId('landing-faq')).toContainText(/no account|no login/i);
+    // Content bar: the FAQ states the honest limits, how-it-works is a walkthrough,
+    // and the trust strip keeps rates private.
+    await expect(page.getByTestId('landing-faq')).toContainText(/no signup and no login|no account/i);
     await expect(page.getByTestId('landing-how-it-works')).toContainText(/join link/i);
+    await expect(page.getByTestId('landing-trust')).toContainText(/smallTech only/i);
   });
 
-  test('the CTA navigates a keyless browser to the public create flow', async ({ page }) => {
+  test('no horizontal scroll at 360px or 1440px', async ({ page }) => {
+    watch(page);
+    for (const width of [360, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(LANDING_URL);
+      await expect(page.getByTestId('landing-hero')).toBeVisible();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `horizontal overflow at ${width}px`).toBeLessThanOrEqual(0);
+    }
+  });
+
+  test('the primary CTA takes a stranger to sign-in, bound for onboarding', async ({ page }) => {
     watch(page);
     await page.goto(LANDING_URL);
     await page.getByTestId('landing-cta').click();
+    await page.waitForURL(/\/app\/signin\//, { timeout: 15_000 });
+    const url = new URL(page.url());
+    expect(url.pathname).toBe('/app/signin/');
+    expect(url.searchParams.get('next')).toBe('/app/network/join/');
+  });
+
+  test('the toolkit CTA navigates a keyless browser to the public create flow', async ({ page }) => {
+    watch(page);
+    await page.goto(LANDING_URL);
+    await page.getByTestId('landing-workshop-cta').click();
     await expect(page.getByTestId('create-page')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('composer')).toBeVisible();
     expect(new URL(page.url()).pathname).toBe('/app/create/');
