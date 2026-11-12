@@ -89,7 +89,7 @@ export function OpportunityCard({
         {/* Plain <a>: the slug URL lives outside the /app basePath (Phase 11e). */}
         <a
           href={listingHref(o.slug, boardQs)}
-          className="outline-none after:absolute after:inset-0 after:rounded-xl group-hover:text-brand-700"
+          className="ga-cta outline-none after:absolute after:inset-0 after:rounded-xl group-hover:text-brand-700"
         >
           {o.title}
         </a>

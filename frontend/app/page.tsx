@@ -7,7 +7,9 @@
  * a harmless alias, at `/app/`. It is a STATIC server component: no router
  * hooks, no data fetching. The one dynamic bit — "Your workshops" — is a small
  * `"use client"` island. All outbound links are plain `<a href>`, never
- * `next/link`, because this HTML is also served from `/`.
+ * `next/link`, because this HTML is also served from `/`. Plain links also
+ * mean every click is a full page load, so the analytics tag loaded here
+ * (`<Analytics />`) never follows a visitor into the private parts of the app.
  *
  * The page shows no live counts, listings or directory cards: at launch the
  * board may be empty, and joining the network works with zero content.
@@ -16,6 +18,7 @@
  */
 
 import type { Metadata } from "next";
+import { Analytics } from "@/components/ui/Analytics";
 import { YourWorkshops } from "@/components/landing/YourWorkshops";
 
 export const metadata: Metadata = {
@@ -240,8 +243,9 @@ function Eyebrow({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** `ga-cta` marks a call to action for the shared analytics script (cta_click). */
 const PRIMARY_BTN =
-  "inline-flex items-center gap-2 rounded-xl bg-brand-600 px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-brand-600/20 transition-colors hover:bg-brand-700 active:bg-brand-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600";
+  "ga-cta inline-flex items-center gap-2 rounded-xl bg-brand-600 px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-brand-600/20 transition-colors hover:bg-brand-700 active:bg-brand-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600";
 
 // --------------------------------------------------------------------------
 // Page
@@ -250,6 +254,7 @@ const PRIMARY_BTN =
 export default function LandingPage() {
   return (
     <div className="min-h-screen overflow-x-hidden bg-stone-50 text-stone-900">
+      <Analytics />
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 focus:rounded-lg focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:shadow"
@@ -638,7 +643,7 @@ export default function LandingPage() {
               <a
                 data-testid="landing-workshop-cta"
                 href={CREATE_HREF}
-                className="inline-flex items-center gap-2 rounded-xl border border-brand-600 px-5 py-3 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+                className="ga-cta inline-flex items-center gap-2 rounded-xl border border-brand-600 px-5 py-3 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
               >
                 Create a workshop — free, no signup
                 <ArrowIcon />
