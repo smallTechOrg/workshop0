@@ -1,6 +1,10 @@
 "use client";
 
-/** Public trainer directory — `/app/network/directory/` (also reached via `/trainers`). */
+/**
+ * Public trainer directory — `/app/network/directory/` (also reached via `/trainers`).
+ * Rendered by the server page `app/network/directory/page.tsx`, which owns the
+ * static head metadata (title, description, canonical, Open Graph — api.md §Phase 13b).
+ */
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -26,10 +30,6 @@ function DirectoryInner() {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [topics, setTopics] = useState<PublicTopic[]>([]);
   const [attempt, setAttempt] = useState(0);
-
-  useEffect(() => {
-    document.title = "Trainers — Workshop0";
-  }, []);
 
   useEffect(() => {
     let live = true;
@@ -130,7 +130,7 @@ function DirectoryInner() {
   );
 }
 
-export default function DirectoryPage() {
+export function DirectoryPage() {
   return (
     <Suspense fallback={null}>
       <DirectoryInner />

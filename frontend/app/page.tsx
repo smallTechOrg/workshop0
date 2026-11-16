@@ -20,11 +20,45 @@
 import type { Metadata } from "next";
 import { Analytics } from "@/components/ui/Analytics";
 import { YourWorkshops } from "@/components/landing/YourWorkshops";
+import {
+  PUBLISHER_NAME,
+  PUBLISHER_URL,
+  SITE_NAME,
+  SITE_URL,
+  absoluteUrl,
+  jsonLdScript,
+  publicPageMetadata,
+} from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = publicPageMetadata({
   title: "Workshop0 — the Trainer Network for Gen AI & agentic AI trainers",
   description:
     "Join smallTech's Trainer Network: drop your CV, get matched to workshops, engagements and roles in Generative AI, agentic AI and modern tech, and apply in one click. Plus a free toolkit for running hands-on sessions.",
+  path: "/",
+});
+
+/** Organization + WebSite structured data (api.md §Phase 13b). */
+const STRUCTURED_DATA = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": `${PUBLISHER_URL}/#organization`,
+      name: PUBLISHER_NAME,
+      url: PUBLISHER_URL,
+      logo: absoluteUrl("/app/smalltech-logo.png"),
+    },
+    {
+      "@type": "WebSite",
+      "@id": `${SITE_URL}/#website`,
+      name: SITE_NAME,
+      url: absoluteUrl("/"),
+      description:
+        "The smallTech Trainer Network and Opportunity Board for Generative AI, agentic AI and tech trainers, plus a free workshop toolkit.",
+      inLanguage: "en",
+      publisher: { "@id": `${PUBLISHER_URL}/#organization` },
+    },
+  ],
 };
 
 /** Sign-in, then onboarding — the same target as the board's "Join our network" (C12). */
@@ -254,6 +288,10 @@ const PRIMARY_BTN =
 export default function LandingPage() {
   return (
     <div className="min-h-screen overflow-x-hidden bg-stone-50 text-stone-900">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: jsonLdScript(STRUCTURED_DATA) }}
+      />
       <Analytics />
       <a
         href="#main"

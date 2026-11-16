@@ -1,7 +1,9 @@
 "use client";
 
 /**
- * Public opportunity board — spec/capabilities.md C10.
+ * Public opportunity board — spec/capabilities.md C10. Rendered by the server
+ * page `app/opportunities/page.tsx`, which owns the static head metadata
+ * (title, description, canonical, Open Graph — api.md §Phase 13b).
  *
  * Filter state lives in the URL (`?type=&topic=&topic=&sort=&page=`) so a
  * filtered view is shareable and survives reload; the URL is the single source
@@ -94,10 +96,6 @@ function BoardInner() {
   const [list, setList] = useState<ListState>({ kind: "loading" });
   const [listAttempt, setListAttempt] = useState(0);
   const resultsRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    document.title = "Opportunities for trainers — Workshop0";
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -285,7 +283,7 @@ function BoardFallback() {
   );
 }
 
-export default function OpportunitiesBoardPage() {
+export function BoardPage() {
   return (
     <BoardShell>
       <Suspense fallback={<BoardFallback />}>
