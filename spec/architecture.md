@@ -235,7 +235,7 @@ Two constraints the frontend slice must honour so this is safe (a generator must
 |---|---|---|---|
 | `/opportunities` → 307 `/app/opportunities/` | Public board | none | 10 |
 | `/opportunities/{key}` — server-rendered HTML (numeric id → 301 to the slug); was 307 `/app/opportunities/view/?id={id}` | Public listing | none | 10, 11e |
-| `/sitemap.xml`, `/robots.txt` | Crawler files (listings; from 13 also `/trainers` and listed trainers) | none | 11e, 13 |
+| `/sitemap.xml`, `/robots.txt` | Crawler files (listings; from 13 also listed trainers; from 13b the index entries are the final 200 URLs `/`, `/app/opportunities/`, `/app/network/directory/`, never the 307 pretty links) | none | 11e, 13, 13b |
 | `/app/admin/opportunities/`, `/app/admin/opportunities/edit/`, `/app/admin/topics/` | Admin board tooling | admin key (P11+: or admin session) | 10 |
 | `/app/admin/partners/` | Partner list | admin | 11b |
 | `/app/signin/`, `/app/network/`, `/app/network/join/`, `/app/network/me/` | Sign-in, network home, onboarding, my profile | session | 11 |
