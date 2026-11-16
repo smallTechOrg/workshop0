@@ -1149,7 +1149,7 @@ kill %2 %1
 
 **Non-goals (explicit):**
 - no admin slug editing, slug history or alias table;
-- no `og:image`, and no server-side rendering of the listing body (the body still renders client-side; only the head is injected);
+- no `og:image` (**lifted in Phase 13b**: a generic share image), and no server-side rendering of the listing body (the body still renders client-side; only the head is injected);
 - no SEO tags for the board page or the landing page beyond the sitemap entry (**lifted in Phase 13b**);
 - no change to the board's filters, no new setting and no new dependency;
 - no change to the JSON shape beyond the added `slug` and the new `public_url` value.
@@ -1580,16 +1580,17 @@ git diff --quiet origin/main -- .github/workflows/deploy-cloudrun.yml           
 
 *A small sub-phase after Phase 13 with its own human test, recorded like 11e. Linear SMA-26: "Update the sitemap for all websites (to working sub-pages/links)"; the goal is organic search for `workshop0.smalltech.in`. It lifts the 11e non-goal "no SEO tags for the board page or the landing page beyond the sitemap entry". No migration, no new setting, no new dependency, no JSON change.*
 
-**Goal:** every `/sitemap.xml` URL answers 200 itself (Google does not index sitemap URLs that redirect: "Page with redirect"), the landing page is in the sitemap, private client pages are kept out of crawlers, and the three indexable static pages (landing, board, directory) carry their own title, description, canonical, Open Graph and Twitter tags, with Organization/WebSite structured data on the landing page.
+**Goal:** every `/sitemap.xml` URL answers 200 itself (Google does not index sitemap URLs that redirect: "Page with redirect"), the landing page is in the sitemap, private client pages are kept out of crawlers, and the three indexable static pages (landing, board, directory) carry their own title, description, canonical, Open Graph and Twitter tags, with Organization/WebSite structured data on the landing page. Shared links show a large 1200×630 preview image (landing, board, directory, and a generic one for listing and trainer pages).
 
 **Capabilities extended (no new numbers):** C5 (landing), C10 (board) and C18 (directory) gain the head metadata; C10/C18's sitemap and robots bullets are updated. Contract: [api.md](api.md) §Phase 13b.
 
 **Changes:**
 - `src/workshop0/services/seo.py`: `SITEMAP_INDEX_PATHS = ("/", "/app/opportunities/", "/app/network/directory/")` replaces the `/opportunities` and `/trainers` index entries in `render_sitemap`; `ROBOTS_LINES` gains `/app/network/join/`, `/app/network/applications/`, `/app/network/matches/`, `/app/signin/`, `/app/create/`, `/app/join/`, `/j/`, `/invite/`. The `/opportunities` and `/trainers` 307s are unchanged.
 - `frontend/lib/site.ts` (new): `SITE_URL`, `publicPageMetadata`, `jsonLdScript`. `app/layout.tsx`: `metadataBase` and the new default description (no canonical/OG there). `app/page.tsx`: metadata via `publicPageMetadata` + Organization/WebSite JSON-LD. `app/opportunities/page.tsx` and `app/network/directory/page.tsx` become server pages exporting `metadata`; their client bodies move unchanged (minus the `document.title` effect) to `components/board/BoardPage.tsx` and `components/directory/DirectoryPage.tsx`.
-- Tests: `tests/unit/test_seo_render.py` (sitemap entry list, robots private/public rules), `tests/integration/test_seo_routes.py` (exact robots text, the three index entries, no redirecting URL in the sitemap, configured base URL), `tests/integration/seo_trainers/test_seo_trainers_pages.py` (sitemap entry list).
+- **Share images:** `scripts/og/template.html` + `scripts/og/render.js` (Playwright) generate `frontend/public/og/{landing,opportunities,directory,default}.png` (1200×630). `publicPageMetadata` takes an `image` (`file`, `alt`) and emits `og:image` (+ width, height, alt), `twitter:card=summary_large_image` and `twitter:image` (+ alt) with absolute `{SITE_URL}/app/og/{file}` URLs. `services/seo.py` adds the `default.png` tags to the listing and trainer blocks and switches them to `summary_large_image` (api.md §Phase 13b → Share images).
+- Tests: `tests/unit/test_seo_render.py` (sitemap entry list, robots private/public rules, share-image tags of the listing and trainer blocks), `tests/integration/test_seo_routes.py` (exact robots text, the three index entries, no redirecting URL in the sitemap, configured base URL, share-image tags on a served listing), `tests/integration/seo_trainers/test_seo_trainers_pages.py` (sitemap entry list, share-image tags on a served trainer page).
 
-**Non-goals:** no `og:image` (no share-sized asset exists), no server-side rendering of the board or directory bodies, no change to the redirects, no `lastmod` on the index pages, no new sitemap entries for other pages.
+**Non-goals:** no per-listing or per-trainer generated images (one generic image serves all of them), no image generation at build or request time, no server-side rendering of the board or directory bodies, no change to the redirects, no `lastmod` on the index pages, no new sitemap entries for other pages.
 
 **Gate (repo root):**
 ```bash
@@ -1601,6 +1602,10 @@ grep -q '<link rel="canonical" href="https://workshop0.smalltech.in/app/opportun
 grep -q '<link rel="canonical" href="https://workshop0.smalltech.in/app/network/directory/"/>' frontend/out/network/directory/index.html
 grep -q '"@type":"Organization"' frontend/out/index.html
 ! grep -q 'og:' frontend/out/opportunities/view/index.html frontend/out/network/trainer/index.html
+grep -q '<meta property="og:image" content="https://workshop0.smalltech.in/app/og/landing.png"/>' frontend/out/index.html
+grep -q '<meta property="og:image" content="https://workshop0.smalltech.in/app/og/opportunities.png"/>' frontend/out/opportunities/index.html
+grep -q '<meta name="twitter:image" content="https://workshop0.smalltech.in/app/og/directory.png"/>' frontend/out/network/directory/index.html
+grep -q '<meta name="twitter:card" content="summary_large_image"/>' frontend/out/index.html
 ```
 
 **How the user tests it (repo root):**
@@ -1608,7 +1613,8 @@ grep -q '"@type":"Organization"' frontend/out/index.html
 2. **http://localhost:8001/sitemap.xml** → the first three entries are `http://localhost:8001/`, `…/app/opportunities/` and `…/app/network/directory/`, then the open listings and listed trainers; there is no `…/opportunities</loc>` or `…/trainers</loc>`. Open each of the first three: none redirects.
 3. **http://localhost:8001/robots.txt** → also disallows `/app/signin/`, `/app/create/`, `/app/join/`, `/j/`, `/invite/` and the private network pages.
 4. View source of `/`, `/app/opportunities/` and `/app/network/directory/` → each has its own `<title>`, description, `canonical` on `https://workshop0.smalltech.in/…`, `og:*` and `twitter:*`; `/` also has one `application/ld+json` block with Organization (smallTech) and WebSite.
-5. **Production:** no operator step. After deploy, resubmit `https://workshop0.smalltech.in/sitemap.xml` in Google Search Console; the "Page with redirect" entries for `/opportunities` and `/trainers` clear on the next crawl.
+5. **Share images:** open **http://localhost:8001/app/og/landing.png** (and `opportunities.png`, `directory.png`, `default.png`) → a 1200×630 card. View source of an open listing `/opportunities/{slug}` or a listed trainer `/trainers/{slug}` → `og:image` is `http://localhost:8001/app/og/default.png` and `twitter:card` is `summary_large_image`. After deploy, paste `https://workshop0.smalltech.in/` into a link-preview checker (e.g. LinkedIn Post Inspector or opengraph.xyz) → the large landing image shows.
+6. **Production:** no operator step. After deploy, resubmit `https://workshop0.smalltech.in/sitemap.xml` in Google Search Console; the "Page with redirect" entries for `/opportunities` and `/trainers` clear on the next crawl.
 
 **Labelled stubs (not bugs):** none.
 
