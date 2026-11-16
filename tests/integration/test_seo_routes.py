@@ -237,6 +237,10 @@ def test_configured_base_url_is_used_everywhere(client, create_opportunity, monk
     html = client.get(f"/opportunities/{opp['slug']}").text
     assert f'<link rel="canonical" href="{url}">' in html
     assert f'<meta property="og:url" content="{url}">' in html
+    image = "https://workshop0.smalltech.in/app/og/default.png"
+    assert f'<meta property="og:image" content="{image}">' in html
+    assert f'<meta name="twitter:image" content="{image}">' in html
+    assert '<meta name="twitter:card" content="summary_large_image">' in html
     sitemap = client.get("/sitemap.xml").text
     assert f"<loc>{url}</loc>" in sitemap
     for path in ("/", "/app/opportunities/", "/app/network/directory/"):

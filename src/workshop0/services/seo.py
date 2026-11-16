@@ -56,6 +56,32 @@ ROBOTS_LINES = (
     "Disallow: /app/p/",
 )
 
+# The generic share image of the server-rendered listing and trainer pages
+# (api.md §Phase 13b → Share images): a static asset from frontend/public/og/,
+# never built from listing or trainer data.
+DEFAULT_SHARE_IMAGE_PATH = "/app/og/default.png"
+DEFAULT_SHARE_IMAGE_ALT = (
+    "Workshop0 by smallTech — the Trainer Network for Gen AI & agentic AI trainers"
+)
+
+
+def share_image_lines(base_url: str) -> tuple[list[str], list[str]]:
+    """(Open Graph lines, Twitter image lines) for the generic share image."""
+    url = _esc(f"{base_url}{DEFAULT_SHARE_IMAGE_PATH}")
+    alt = _esc(DEFAULT_SHARE_IMAGE_ALT)
+    og = [
+        f'<meta property="og:image" content="{url}">',
+        '<meta property="og:image:width" content="1200">',
+        '<meta property="og:image:height" content="630">',
+        f'<meta property="og:image:alt" content="{alt}">',
+    ]
+    twitter = [
+        f'<meta name="twitter:image" content="{url}">',
+        f'<meta name="twitter:image:alt" content="{alt}">',
+    ]
+    return og, twitter
+
+
 # The static index pages listed first in the sitemap (api.md §Phase 13b): their
 # final 200 URLs, never the 307 pretty links `/opportunities` and `/trainers`.
 SITEMAP_INDEX_PATHS = ("/", "/app/opportunities/", "/app/network/directory/")
@@ -159,6 +185,7 @@ def build_head_block(listing: dict | None, base_url: str) -> str:
     title = _esc(listing["title"])
     description = _esc(cut_description(listing.get("summary") or ""))
     is_open = listing.get("status") == "open"
+    og_image, twitter_image = share_image_lines(base_url)
     lines = [f"<title>{title} — {SITE_NAME}</title>"]
     if not is_open:
         lines.append(NOINDEX)
@@ -170,9 +197,11 @@ def build_head_block(listing: dict | None, base_url: str) -> str:
         f'<meta property="og:title" content="{title}">',
         f'<meta property="og:description" content="{description}">',
         f'<meta property="og:url" content="{_esc(url)}">',
-        '<meta name="twitter:card" content="summary">',
+        *og_image,
+        '<meta name="twitter:card" content="summary_large_image">',
         f'<meta name="twitter:title" content="{title}">',
         f'<meta name="twitter:description" content="{description}">',
+        *twitter_image,
     ]
     if is_open:
         lines.append(
@@ -230,6 +259,7 @@ def build_trainer_head_block(trainer: dict | None, base_url: str) -> str:
     title = _esc(f"{trainer['display_name']} — {headline} — {SITE_NAME}")
     og_title = _esc(trainer["display_name"])
     description = _esc(cut_description(f"{headline} {trainer.get('bio_md') or ''}"))
+    og_image, twitter_image = share_image_lines(base_url)
     lines = [
         f"<title>{title}</title>",
         f'<meta name="description" content="{description}">',
@@ -239,9 +269,11 @@ def build_trainer_head_block(trainer: dict | None, base_url: str) -> str:
         f'<meta property="og:title" content="{title}">',
         f'<meta property="og:description" content="{description}">',
         f'<meta property="og:url" content="{_esc(url)}">',
-        '<meta name="twitter:card" content="summary">',
+        *og_image,
+        '<meta name="twitter:card" content="summary_large_image">',
         f'<meta name="twitter:title" content="{title}">',
         f'<meta name="twitter:description" content="{description}">',
+        *twitter_image,
         '<script type="application/ld+json">'
         + json_for_script(build_person(trainer, url))
         + "</script>",

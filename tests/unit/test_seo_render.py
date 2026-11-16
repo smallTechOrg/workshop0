@@ -60,8 +60,60 @@ def test_title_and_description_are_replaced_exactly_once():
     assert "Default site description" not in page
     assert '<link rel="canonical" href="https://example.test/opportunities/genai-workshop-bengaluru-a3f9">' in page
     assert '<meta property="og:url" content="https://example.test/opportunities/genai-workshop-bengaluru-a3f9">' in page
-    assert '<meta name="twitter:card" content="summary">' in page
+    assert '<meta name="twitter:card" content="summary_large_image">' in page
     assert "noindex" not in page
+
+
+SHARE_IMAGE_LINES = (
+    '<meta property="og:url" content="{url}">\n'
+    '<meta property="og:image" content="https://example.test/app/og/default.png">\n'
+    '<meta property="og:image:width" content="1200">\n'
+    '<meta property="og:image:height" content="630">\n'
+    '<meta property="og:image:alt" content="Workshop0 by smallTech — the Trainer Network for Gen AI &amp; agentic AI trainers">\n'
+    '<meta name="twitter:card" content="summary_large_image">\n'
+    '<meta name="twitter:title" content="{title}">\n'
+    '<meta name="twitter:description" content="{description}">\n'
+    '<meta name="twitter:image" content="https://example.test/app/og/default.png">\n'
+    '<meta name="twitter:image:alt" content="Workshop0 by smallTech — the Trainer Network for Gen AI &amp; agentic AI trainers">'
+)
+
+
+def test_listing_block_carries_the_generic_share_image():
+    """api.md §Phase 13b → Share images: same static image for every listing."""
+    for status in ("open", "closed", "expired"):
+        page = render(listing(status=status))
+        assert SHARE_IMAGE_LINES.format(
+            url="https://example.test/opportunities/genai-workshop-bengaluru-a3f9",
+            title="GenAI Workshop",
+            description="Hands-on LLM workshop for PMs.",
+        ) in page
+        assert page.count("og:image\"") == 1 and page.count("twitter:image\"") == 1
+        assert '"summary"' not in page
+
+
+def test_trainer_block_carries_the_generic_share_image_never_the_avatar():
+    trainer = {
+        "slug": "asha-rao-3f9c",
+        "display_name": "Asha Rao",
+        "headline": "GenAI trainer",
+        "bio_md": "Teaches agents.",
+        "avatar_url": "https://example.test/avatars/secret.png",
+        "topics": [],
+        "links": {},
+        "city": None,
+    }
+    page = seo.render_trainer_html(TEMPLATE, trainer, BASE)
+    assert SHARE_IMAGE_LINES.format(
+        url="https://example.test/trainers/asha-rao-3f9c",
+        title="Asha Rao — GenAI trainer — Workshop0",
+        description="GenAI trainer Teaches agents.",
+    ) in page
+    assert "avatars" not in page
+
+
+def test_not_found_blocks_have_no_share_image():
+    assert "og:image" not in render(None)
+    assert "og:image" not in seo.render_trainer_html(TEMPLATE, None, BASE)
 
 
 def test_block_sits_between_markers_just_before_head_close():
