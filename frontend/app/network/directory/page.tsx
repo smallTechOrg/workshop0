@@ -16,6 +16,10 @@ export const metadata: Metadata = publicPageMetadata({
   description:
     "Browse trainers in Generative AI, agentic AI, data and modern tech from the smallTech Trainer Network. Filter by topic and open a profile to see their topics, experience and past workshops.",
   path: "/app/network/directory/",
+  image: {
+    file: "directory.png",
+    alt: "Workshop0 trainer directory — find AI & tech trainers",
+  },
 });
 
 export default function TrainerDirectoryPage() {

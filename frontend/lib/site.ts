@@ -21,18 +21,25 @@ export function absoluteUrl(path: string): string {
   return `${SITE_URL}${path}`;
 }
 
+/** Path prefix of the share images in `public/og/` (served under basePath `/app`). */
+const OG_IMAGE_PATH = "/app/og/";
+
+/** A 1200×630 share image from `public/og/` (api.md §Phase 13b → Share images). */
+export type ShareImage = { file: string; alt: string };
+
 /**
  * Title, description, canonical, Open Graph and Twitter card for one public
- * page. There is no `og:image`: no share-sized image asset exists (the
- * smallTech logo is 121×128, below the preview minimums), so the card is
- * `summary`.
+ * page, with its 1200×630 share image (absolute URL) and a
+ * `summary_large_image` Twitter card.
  */
 export function publicPageMetadata(page: {
   title: string;
   description: string;
   path: string;
+  image: ShareImage;
 }): Metadata {
   const url = absoluteUrl(page.path);
+  const imageUrl = absoluteUrl(`${OG_IMAGE_PATH}${page.image.file}`);
   return {
     title: page.title,
     description: page.description,
@@ -44,11 +51,13 @@ export function publicPageMetadata(page: {
       title: page.title,
       description: page.description,
       url,
+      images: [{ url: imageUrl, width: 1200, height: 630, alt: page.image.alt }],
     },
     twitter: {
-      card: "summary",
+      card: "summary_large_image",
       title: page.title,
       description: page.description,
+      images: [{ url: imageUrl, alt: page.image.alt }],
     },
   };
 }

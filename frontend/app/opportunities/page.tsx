@@ -16,6 +16,10 @@ export const metadata: Metadata = publicPageMetadata({
   description:
     "Open workshops, corporate trainings, co-facilitation gigs and roles for trainers in Generative AI, agentic AI and modern tech, curated by smallTech from its partner network. Filter by type and topic and apply in one click.",
   path: "/app/opportunities/",
+  image: {
+    file: "opportunities.png",
+    alt: "Workshop0 Opportunity Board — opportunities for AI & tech trainers",
+  },
 });
 
 export default function OpportunitiesBoardPage() {

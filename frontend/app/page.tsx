@@ -35,6 +35,10 @@ export const metadata: Metadata = publicPageMetadata({
   description:
     "Join smallTech's Trainer Network: drop your CV, get matched to workshops, engagements and roles in Generative AI, agentic AI and modern tech, and apply in one click. Plus a free toolkit for running hands-on sessions.",
   path: "/",
+  image: {
+    file: "landing.png",
+    alt: "Workshop0 by smallTech — You teach AI. We find you the rooms that need you.",
+  },
 });
 
 /** Organization + WebSite structured data (api.md §Phase 13b). */
