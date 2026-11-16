@@ -1,0 +1,128 @@
+<!doctype html>
+<!--
+  Share-image template (api.md §Phase 13b → Share images). Rendered at 1200×630
+  by scripts/og/render.js; the variant is the URL hash (#landing, #opportunities,
+  #directory, #default). Brand colours are the `--color-brand-*` tokens of
+  frontend/app/globals.css; the font is Inter (the site font), loaded from the
+  system font store.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --brand-50: #eef2ff; --brand-100: #e0e7ff; --brand-200: #c7d2fe;
+    --brand-600: #4f46e5; --brand-700: #4338ca; --brand-900: #312e81;
+    --stone-50: #fafaf9; --stone-200: #e7e5e4; --stone-500: #78716c;
+    --stone-600: #57534e; --stone-900: #1c1917;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    font-family: "Inter", sans-serif;
+    color: var(--stone-900);
+    background: linear-gradient(180deg, var(--brand-50) 0%, #ffffff 70%);
+    position: relative;
+    -webkit-font-smoothing: antialiased;
+  }
+  .ring {
+    position: absolute; border-radius: 50%; border: 56px solid var(--brand-100);
+  }
+  .ring.a { top: -330px; right: -250px; width: 580px; height: 580px; }
+  .ring.b { top: -170px; right: -110px; width: 330px; height: 330px; border-width: 28px; border-color: var(--brand-200); opacity: .7; }
+  .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 16px; background: var(--brand-600); }
+  .frame {
+    position: absolute; inset: 0; padding: 64px 80px 56px 96px;
+    display: flex; flex-direction: column;
+  }
+  .brand { display: flex; align-items: center; gap: 18px; }
+  .brand img { height: 64px; width: auto; }
+  .brand .name { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; }
+  .brand .by { font-size: 24px; font-weight: 500; color: var(--stone-500); }
+  .content { flex: 1; display: flex; flex-direction: column; justify-content: center; padding-top: 8px; }
+  .eyebrow {
+    align-self: flex-start;
+    font-size: 24px; font-weight: 600; color: var(--brand-700);
+    background: rgba(255,255,255,.85); border: 2px solid var(--brand-200);
+    border-radius: 999px; padding: 8px 22px;
+  }
+  h1 {
+    margin-top: 24px; font-size: 66px; line-height: 1.08; font-weight: 700;
+    letter-spacing: -0.03em; max-width: 1000px;
+  }
+  h1 .accent { color: var(--brand-600); }
+  .sub {
+    margin-top: 22px; font-size: 30px; line-height: 1.35; color: var(--stone-600);
+    max-width: 1010px; font-weight: 400; text-wrap: pretty;
+  }
+  .chips { margin-top: 36px; display: flex; flex-wrap: wrap; gap: 12px; }
+  .chip {
+    font-size: 22px; font-weight: 500; color: var(--brand-900);
+    background: var(--brand-100); border-radius: 999px; padding: 8px 20px; white-space: nowrap;
+  }
+  .url { margin-left: auto; font-size: 24px; font-weight: 600; color: var(--stone-600); white-space: nowrap; }
+</style>
+</head>
+<body>
+  <div class="ring a"></div>
+  <div class="ring b"></div>
+  <div class="bar"></div>
+  <div class="frame">
+    <div class="brand">
+      <img src="../../frontend/public/smalltech-logo.png" alt="">
+      <span class="name">Workshop0</span>
+      <span class="by">by smallTech</span>
+      <span class="url">workshop0.smalltech.in</span>
+    </div>
+    <div class="content">
+      <p class="eyebrow" id="eyebrow"></p>
+      <h1 id="headline"></h1>
+      <p class="sub" id="sub"></p>
+      <div class="chips" id="chips"></div>
+    </div>
+  </div>
+<script>
+  // Copy is taken from the pages' own text (frontend/app/page.tsx and the
+  // board/directory metadata) — no claim that the site does not make itself.
+  const VARIANTS = {
+    landing: {
+      eyebrow: "For Gen AI, agentic AI & tech trainers",
+      headline: 'You teach AI. <span class="accent">We find you the rooms that need you.</span>',
+      sub: "Drop your CV and get matched to workshops, engagements and roles.",
+      chips: ["Free to join", "Sign in with Google", "Rates stay private"],
+    },
+    opportunities: {
+      eyebrow: "Opportunity Board",
+      headline: 'Opportunities for <span class="accent">AI &amp; tech trainers</span>',
+      sub: "Workshops, longer engagements and roles in Generative AI, agentic AI and modern tech, curated by smallTech.",
+      chips: ["Workshop / training", "Longer engagement", "Job / contract role", "Co-facilitator / TA"],
+    },
+    directory: {
+      eyebrow: "Trainer directory",
+      headline: 'Find <span class="accent">AI &amp; tech trainers</span>',
+      sub: "Browse trainers in Generative AI, agentic AI, data and modern tech from the smallTech Trainer Network.",
+      chips: ["Generative AI", "Agentic AI", "Data", "Tech"],
+    },
+    default: {
+      eyebrow: "smallTech Trainer Network",
+      headline: 'The Trainer Network for <span class="accent">Gen AI &amp; agentic AI trainers</span>',
+      sub: "Workshops, engagements and roles from smallTech’s partner network.",
+      chips: ["Opportunity Board", "Trainer directory", "Free workshop toolkit"],
+    },
+  };
+  const v = VARIANTS[location.hash.slice(1)] || VARIANTS.default;
+  document.getElementById("eyebrow").textContent = v.eyebrow;
+  document.getElementById("headline").innerHTML = v.headline;
+  const sub = document.getElementById("sub");
+  if (v.sub) sub.textContent = v.sub; else sub.remove();
+  const chips = document.getElementById("chips");
+  if (!v.chips.length) chips.remove();
+  for (const c of v.chips) {
+    const el = document.createElement("span");
+    el.className = "chip";
+    el.textContent = c;
+    chips.appendChild(el);
+  }
+</script>
+</body>
+</html>

@@ -93,8 +93,12 @@ def test_listed_trainer_page(client):
     url = f"http://testserver/trainers/{t['slug']}"
     assert f'<link rel="canonical" href="{url}">' in h
     assert '<meta property="og:type" content="profile">' in h
-    assert "og:image" not in h
-    assert 'name="twitter:card" content="summary"' in h
+    image = "http://testserver/app/og/default.png"
+    assert f'<meta property="og:image" content="{image}">' in h
+    assert '<meta property="og:image:width" content="1200">' in h
+    assert '<meta property="og:image:height" content="630">' in h
+    assert f'<meta name="twitter:image" content="{image}">' in h
+    assert 'name="twitter:card" content="summary_large_image"' in h
     desc = re.search(r'<meta name="description" content="([^"]*)">', h).group(1)
     assert desc.startswith("GenAI trainer") and len(desc) <= 160
     person = ld(h)
@@ -164,7 +168,8 @@ def test_sitemap_has_only_listed_trainers(client):
     r = client.get("/sitemap.xml")
     locs = [el.text for el in ET.fromstring(r.content).iter(f"{NS}loc")]
     assert locs == [
-        "http://testserver/opportunities", "http://testserver/trainers",
+        "http://testserver/", "http://testserver/app/opportunities/",
+        "http://testserver/app/network/directory/",
         f"http://testserver/trainers/{a['slug']}", f"http://testserver/trainers/{b['slug']}",
     ]
     for m in re.findall(r"<lastmod>(.*?)</lastmod>", r.text):

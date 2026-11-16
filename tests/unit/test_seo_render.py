@@ -60,8 +60,60 @@ def test_title_and_description_are_replaced_exactly_once():
     assert "Default site description" not in page
     assert '<link rel="canonical" href="https://example.test/opportunities/genai-workshop-bengaluru-a3f9">' in page
     assert '<meta property="og:url" content="https://example.test/opportunities/genai-workshop-bengaluru-a3f9">' in page
-    assert '<meta name="twitter:card" content="summary">' in page
+    assert '<meta name="twitter:card" content="summary_large_image">' in page
     assert "noindex" not in page
+
+
+SHARE_IMAGE_LINES = (
+    '<meta property="og:url" content="{url}">\n'
+    '<meta property="og:image" content="https://example.test/app/og/default.png">\n'
+    '<meta property="og:image:width" content="1200">\n'
+    '<meta property="og:image:height" content="630">\n'
+    '<meta property="og:image:alt" content="Workshop0 by smallTech — the Trainer Network for Gen AI &amp; agentic AI trainers">\n'
+    '<meta name="twitter:card" content="summary_large_image">\n'
+    '<meta name="twitter:title" content="{title}">\n'
+    '<meta name="twitter:description" content="{description}">\n'
+    '<meta name="twitter:image" content="https://example.test/app/og/default.png">\n'
+    '<meta name="twitter:image:alt" content="Workshop0 by smallTech — the Trainer Network for Gen AI &amp; agentic AI trainers">'
+)
+
+
+def test_listing_block_carries_the_generic_share_image():
+    """api.md §Phase 13b → Share images: same static image for every listing."""
+    for status in ("open", "closed", "expired"):
+        page = render(listing(status=status))
+        assert SHARE_IMAGE_LINES.format(
+            url="https://example.test/opportunities/genai-workshop-bengaluru-a3f9",
+            title="GenAI Workshop",
+            description="Hands-on LLM workshop for PMs.",
+        ) in page
+        assert page.count("og:image\"") == 1 and page.count("twitter:image\"") == 1
+        assert '"summary"' not in page
+
+
+def test_trainer_block_carries_the_generic_share_image_never_the_avatar():
+    trainer = {
+        "slug": "asha-rao-3f9c",
+        "display_name": "Asha Rao",
+        "headline": "GenAI trainer",
+        "bio_md": "Teaches agents.",
+        "avatar_url": "https://example.test/avatars/secret.png",
+        "topics": [],
+        "links": {},
+        "city": None,
+    }
+    page = seo.render_trainer_html(TEMPLATE, trainer, BASE)
+    assert SHARE_IMAGE_LINES.format(
+        url="https://example.test/trainers/asha-rao-3f9c",
+        title="Asha Rao — GenAI trainer — Workshop0",
+        description="GenAI trainer Teaches agents.",
+    ) in page
+    assert "avatars" not in page
+
+
+def test_not_found_blocks_have_no_share_image():
+    assert "og:image" not in render(None)
+    assert "og:image" not in seo.render_trainer_html(TEMPLATE, None, BASE)
 
 
 def test_block_sits_between_markers_just_before_head_close():
@@ -164,11 +216,39 @@ def test_template_without_head_close_still_gets_the_block():
 
 
 def test_sitemap_and_robots():
-    xml = seo.render_sitemap(BASE, [(f"{BASE}/opportunities/a-b-1234?x=1&y=2", NOW)])
-    assert "<loc>https://example.test/opportunities</loc>" in xml
+    xml = seo.render_sitemap(
+        BASE, [(f"{BASE}/opportunities/a-b-1234?x=1&y=2", NOW)], [("asha-rao-3f9c", NOW)]
+    )
+    locs = re.findall(r"<loc>(.*?)</loc>", xml)
+    # Phase 13b: the final 200 URLs of the index pages first, landing page leading.
+    assert locs == [
+        "https://example.test/",
+        "https://example.test/app/opportunities/",
+        "https://example.test/app/network/directory/",
+        "https://example.test/opportunities/a-b-1234?x=1&amp;y=2",
+        "https://example.test/trainers/asha-rao-3f9c",
+    ]
+    assert "<url><loc>https://example.test/</loc></url>" in xml  # index pages carry no lastmod
     assert "<loc>https://example.test/opportunities/a-b-1234?x=1&amp;y=2</loc><lastmod>2026-11-10</lastmod>" in xml
-    assert xml.index("/opportunities</loc>") < xml.index("/trainers</loc>") < xml.index("a-b-1234")
+    # Never the 307 pretty links.
+    assert "<loc>https://example.test/opportunities</loc>" not in xml
+    assert "<loc>https://example.test/trainers</loc>" not in xml
     robots = seo.render_robots(BASE)
     assert robots.splitlines()[0] == "User-agent: *"
     assert robots.splitlines()[-1] == "Sitemap: https://example.test/sitemap.xml"
     assert "Disallow: /network/me" in robots.splitlines()
+
+
+def test_robots_blocks_private_pages_but_not_the_indexable_ones():
+    lines = seo.render_robots(BASE).splitlines()
+    for private in (
+        "/app/signin/", "/app/create/", "/app/join/", "/app/network/join/",
+        "/app/network/applications/", "/app/network/matches/", "/j/", "/invite/",
+    ):
+        assert f"Disallow: {private}" in lines
+    rules = [line.split(": ", 1)[1] for line in lines if line.startswith("Disallow: ")]
+    for public in (
+        "/", "/app/opportunities/", "/app/network/directory/",
+        "/opportunities/genai-workshop-bengaluru-a3f9", "/trainers/asha-rao-3f9c",
+    ):
+        assert not any(public.startswith(rule) for rule in rules), public

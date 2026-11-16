@@ -24,6 +24,7 @@ Ground-up rebuild. The old `src/` and `frontend/` are **removed at scaffold**; n
 | 11e | Opportunity slug URLs, server-rendered listing SEO, `/sitemap.xml`, `/robots.txt` (C10 extended) | delivered (`0010`) |
 | 12 | Applications, matching & email outbox (C14–C16) | delivered (PR #13, `0011`) |
 | 13 | Alerts & digest, public directory, workshop tie-in (C17–C19) | specified — reconciled with the code at head `0011` on 2026-11-10; builds as migration `0012` |
+| 13b | Sitemap & page-head SEO: final (200) URLs in `/sitemap.xml` plus the landing page, robots for private pages, head metadata for landing, board and directory (C5/C10/C18 extended; SMA-26) | built — awaiting the human test (no migration) |
 
 > **Code truth — Phase 4 (verified 2026-11-10 by grepping `src/`):** the help-desk pipeline is not in code. `src/workshop0/ai/` exists but holds only the **Anthropic**-backed network AI (Phases 11–12); there is no help-desk module (no OpenRouter client, no `run_help_desk`) and no `POST /api/f/{t}/ai` or `/api/p/{token}/help/{id}/escalate` routes. Groundwork only: the `openrouter_api_key` setting, `help_request.ai_state`, `ai_usage.purpose = triage_answer`, `ai_enabled` in the facilitator payload, and the startup key-presence log. Phases 10–13 neither build nor depend on it.
 
@@ -1148,8 +1149,8 @@ kill %2 %1
 
 **Non-goals (explicit):**
 - no admin slug editing, slug history or alias table;
-- no `og:image`, and no server-side rendering of the listing body (the body still renders client-side; only the head is injected);
-- no SEO tags for the board page or the landing page beyond the sitemap entry;
+- no `og:image` (**lifted in Phase 13b**: a generic share image), and no server-side rendering of the listing body (the body still renders client-side; only the head is injected);
+- no SEO tags for the board page or the landing page beyond the sitemap entry (**lifted in Phase 13b**);
 - no change to the board's filters, no new setting and no new dependency;
 - no change to the JSON shape beyond the added `slug` and the new `public_url` value.
 
@@ -1535,7 +1536,7 @@ test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'X-Cron-Key: wrong' h
 test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8014/api/cron/weekly-digest)" = 404
 curl -fsS -X POST -H "X-Cron-Key: $WORKSHOP0_CRON_KEY" http://localhost:8001/api/cron/weekly-digest | grep -q '"enqueued"'
 curl -fsS http://localhost:8001/robots.txt | grep -qx 'Disallow: /app/network/trainer/'
-curl -fsS http://localhost:8001/sitemap.xml | grep -q '/trainers</loc>'
+curl -fsS http://localhost:8001/sitemap.xml | grep -q '/app/network/directory/</loc>'   # was '/trainers</loc>' before Phase 13b
 test "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:8001/trainers/no-such-trainer-0000)" = 404
 BASE_URL=http://localhost:8001 pnpm exec playwright test tests/e2e --reporter=line
 bash -n deploy/cloudrun/provision.sh
@@ -1572,6 +1573,50 @@ git diff --quiet origin/main -- .github/workflows/deploy-cloudrun.yml           
 > **Assumed (week boundary):** the ISO week is computed in IST (fixed UTC+05:30, no tz database needed).
 > **Assumed (unsubscribe is GET):** one click flips the preference, redirects 303 and never returns an error status. A mail scanner that prefetches the link would unsubscribe the user; the preferences card turns it back on. No `List-Unsubscribe` header is added (the SMTP sender has no extra-header support).
 > **Assumed (drain exposure):** `drain()` commits per row, which releases the `SKIP LOCKED` locks on the remaining claimed rows, so two overlapping drains could in principle both send one row. Phase 13 raises the drain batch to 100 for alert and digest bursts but does not change `drain`; the risk is accepted at current volume and noted for a follow-up (claim by a `sending` status).
+
+---
+
+### Phase 13b — Sitemap & page-head SEO
+
+*A small sub-phase after Phase 13 with its own human test, recorded like 11e. Linear SMA-26: "Update the sitemap for all websites (to working sub-pages/links)"; the goal is organic search for `workshop0.smalltech.in`. It lifts the 11e non-goal "no SEO tags for the board page or the landing page beyond the sitemap entry". No migration, no new setting, no new dependency, no JSON change.*
+
+**Goal:** every `/sitemap.xml` URL answers 200 itself (Google does not index sitemap URLs that redirect: "Page with redirect"), the landing page is in the sitemap, private client pages are kept out of crawlers, and the three indexable static pages (landing, board, directory) carry their own title, description, canonical, Open Graph and Twitter tags, with Organization/WebSite structured data on the landing page. Shared links show a large 1200×630 preview image (landing, board, directory, and a generic one for listing and trainer pages).
+
+**Capabilities extended (no new numbers):** C5 (landing), C10 (board) and C18 (directory) gain the head metadata; C10/C18's sitemap and robots bullets are updated. Contract: [api.md](api.md) §Phase 13b.
+
+**Changes:**
+- `src/workshop0/services/seo.py`: `SITEMAP_INDEX_PATHS = ("/", "/app/opportunities/", "/app/network/directory/")` replaces the `/opportunities` and `/trainers` index entries in `render_sitemap`; `ROBOTS_LINES` gains `/app/network/join/`, `/app/network/applications/`, `/app/network/matches/`, `/app/signin/`, `/app/create/`, `/app/join/`, `/j/`, `/invite/`. The `/opportunities` and `/trainers` 307s are unchanged.
+- `frontend/lib/site.ts` (new): `SITE_URL`, `publicPageMetadata`, `jsonLdScript`. `app/layout.tsx`: `metadataBase` and the new default description (no canonical/OG there). `app/page.tsx`: metadata via `publicPageMetadata` + Organization/WebSite JSON-LD. `app/opportunities/page.tsx` and `app/network/directory/page.tsx` become server pages exporting `metadata`; their client bodies move unchanged (minus the `document.title` effect) to `components/board/BoardPage.tsx` and `components/directory/DirectoryPage.tsx`.
+- **Share images:** `scripts/og/template.html` + `scripts/og/render.js` (Playwright) generate `frontend/public/og/{landing,opportunities,directory,default}.png` (1200×630). `publicPageMetadata` takes an `image` (`file`, `alt`) and emits `og:image` (+ width, height, alt), `twitter:card=summary_large_image` and `twitter:image` (+ alt) with absolute `{SITE_URL}/app/og/{file}` URLs. `services/seo.py` adds the `default.png` tags to the listing and trainer blocks and switches them to `summary_large_image` (api.md §Phase 13b → Share images).
+- Tests: `tests/unit/test_seo_render.py` (sitemap entry list, robots private/public rules, share-image tags of the listing and trainer blocks), `tests/integration/test_seo_routes.py` (exact robots text, the three index entries, no redirecting URL in the sitemap, configured base URL, share-image tags on a served listing), `tests/integration/seo_trainers/test_seo_trainers_pages.py` (sitemap entry list, share-image tags on a served trainer page).
+
+**Non-goals:** no per-listing or per-trainer generated images (one generic image serves all of them), no image generation at build or request time, no server-side rendering of the board or directory bodies, no change to the redirects, no `lastmod` on the index pages, no new sitemap entries for other pages.
+
+**Gate (repo root):**
+```bash
+uv run pytest tests/unit/test_seo_render.py tests/integration/test_seo_routes.py tests/integration/seo_trainers tests/integration/test_board_leak.py tests/integration/test_redirects.py -q
+uv run pytest tests/unit tests/integration -q
+(cd frontend && pnpm build)
+grep -q '<link rel="canonical" href="https://workshop0.smalltech.in/"/>' frontend/out/index.html
+grep -q '<link rel="canonical" href="https://workshop0.smalltech.in/app/opportunities/"/>' frontend/out/opportunities/index.html
+grep -q '<link rel="canonical" href="https://workshop0.smalltech.in/app/network/directory/"/>' frontend/out/network/directory/index.html
+grep -q '"@type":"Organization"' frontend/out/index.html
+! grep -q 'og:' frontend/out/opportunities/view/index.html frontend/out/network/trainer/index.html
+grep -q '<meta property="og:image" content="https://workshop0.smalltech.in/app/og/landing.png"/>' frontend/out/index.html
+grep -q '<meta property="og:image" content="https://workshop0.smalltech.in/app/og/opportunities.png"/>' frontend/out/opportunities/index.html
+grep -q '<meta name="twitter:image" content="https://workshop0.smalltech.in/app/og/directory.png"/>' frontend/out/network/directory/index.html
+grep -q '<meta name="twitter:card" content="summary_large_image"/>' frontend/out/index.html
+```
+
+**How the user tests it (repo root):**
+1. `(cd frontend && pnpm build)` then `uv run python -m src`.
+2. **http://localhost:8001/sitemap.xml** → the first three entries are `http://localhost:8001/`, `…/app/opportunities/` and `…/app/network/directory/`, then the open listings and listed trainers; there is no `…/opportunities</loc>` or `…/trainers</loc>`. Open each of the first three: none redirects.
+3. **http://localhost:8001/robots.txt** → also disallows `/app/signin/`, `/app/create/`, `/app/join/`, `/j/`, `/invite/` and the private network pages.
+4. View source of `/`, `/app/opportunities/` and `/app/network/directory/` → each has its own `<title>`, description, `canonical` on `https://workshop0.smalltech.in/…`, `og:*` and `twitter:*`; `/` also has one `application/ld+json` block with Organization (smallTech) and WebSite.
+5. **Share images:** open **http://localhost:8001/app/og/landing.png** (and `opportunities.png`, `directory.png`, `default.png`) → a 1200×630 card. View source of an open listing `/opportunities/{slug}` or a listed trainer `/trainers/{slug}` → `og:image` is `http://localhost:8001/app/og/default.png` and `twitter:card` is `summary_large_image`. After deploy, paste `https://workshop0.smalltech.in/` into a link-preview checker (e.g. LinkedIn Post Inspector or opengraph.xyz) → the large landing image shows.
+6. **Production:** no operator step. After deploy, resubmit `https://workshop0.smalltech.in/sitemap.xml` in Google Search Console; the "Page with redirect" entries for `/opportunities` and `/trainers` clear on the next crawl.
+
+**Labelled stubs (not bugs):** none.
 
 ---
 

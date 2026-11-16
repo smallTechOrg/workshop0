@@ -32,7 +32,7 @@ This is the contract both generators build against **in parallel** — the backe
 
 `GET /j/{join_slug}` → `/app/join/?s=…` · `GET /p/{participant_token}` → `/app/p/?t=…` · `GET /f/{admin_token}` → `/app/f/?t=…` — all 307. **Phase 1.**
 `GET /admin` → `/app/admin/` — 307. **Phase 6.**
-`GET /opportunities/{key}`, `/sitemap.xml` and `/robots.txt` are server-rendered public pages. **Phase 11e**, see §Phase 11e. **Phase 13** adds `GET /trainers` (307 → `/app/network/directory/`) and the server-rendered `GET /trainers/{slug}`, and extends the sitemap and robots (§Phase 13 endpoints → Server-rendered trainer pages).
+`GET /opportunities/{key}`, `/sitemap.xml` and `/robots.txt` are server-rendered public pages. **Phase 11e**, see §Phase 11e. **Phase 13** adds `GET /trainers` (307 → `/app/network/directory/`) and the server-rendered `GET /trainers/{slug}`, and extends the sitemap and robots (§Phase 13 endpoints → Server-rendered trainer pages). **Phase 13b** makes the sitemap list only final (200) URLs, adds the landing page to it, extends robots, and gives the landing, board and directory pages their own head metadata (§Phase 13b).
 `GET /` — **Phase 1:** 307 → `/app/`. **Phase 6:** no longer a redirect — it serves the public marketing landing page HTML directly (200, `text/html`). See architecture.md §Serving the landing page at `/`.
 
 ---
@@ -705,6 +705,7 @@ Trailing slash: `/opportunities/{key}/` → 301 to the slash-less URL.
 <meta name="twitter:description" content="{description}">
 <script type="application/ld+json">{jobposting}</script>
 ```
+**Superseded in Phase 13b:** `twitter:card` is `summary_large_image` and the generic share image follows `og:url` and `twitter:description` (§Phase 13b → Share images → Server-rendered pages).
 - `{description}` = `summary`, cut to 160 characters at a word boundary with `…` appended when cut.
 - `{public_url}` is as above, without any query string.
 - **Escaping:** every `{…}` interpolated into HTML goes through `html.escape(value, quote=True)`. `{jobposting}` is `json.dumps(obj, ensure_ascii=False)`, then `<`, `>` and `&` are replaced with `<`, `>` and `&`, and U+2028/U+2029 with ` `/` `. A title of `</script><script>alert(1)</script>"&` therefore never closes a tag or an attribute.
@@ -724,7 +725,7 @@ Trailing slash: `/opportunities/{key}/` → 301 to the slash-less URL.
 - Remote → no `jobLocation`; instead `"jobLocationType": "TELECOMMUTE"` and `"applicantLocationRequirements": {"@type": "Country", "name": "India"}`.
 - `baseSalary` only when an amount is set and the unit is `hour`/`day`/`month` (→ `HOUR`/`DAY`/`MONTH`). It is omitted for `course`. `minValue`/`maxValue` appear only when set, and min = max gives `"value"` only.
 
-> **Assumed:** `employmentType` is `CONTRACTOR` for all four types, because every listing is freelance or contract work through partners. Remote listings require India, which matches the board's audience. There is no `og:image`, since no image asset exists.
+> **Assumed:** `employmentType` is `CONTRACTOR` for all four types, because every listing is freelance or contract work through partners. Remote listings require India, which matches the board's audience. There is no `og:image`, since no image asset exists (**lifted in Phase 13b**: the generic share image, never a listing-specific one).
 
 ## Client page reading the key
 The view page keeps its static route `/app/opportunities/view/`, because a static export cannot have dynamic segments. It reads the key in this order:
@@ -735,7 +736,7 @@ The view page keeps its static route `/app/opportunities/view/`, because a stati
 It then calls `GET /api/public/opportunities/{key}`. When the page was reached at `/app/opportunities/view/?id=…` or `?slug=…`, it calls `window.location.replace("/opportunities/{slug}" + (from ? "?from=" + from : ""))` once loaded. One URL per listing is what users and crawlers see.
 
 ## `GET /sitemap.xml`
-`application/xml; charset=utf-8`. The body is a `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` with `{base}/opportunities` (no `lastmod`) and then one `<url>` per **effective-open** listing, ordered by `published_at` desc and `id` desc: `<loc>{public_url}</loc><lastmod>{updated_at, YYYY-MM-DD}</lastmod>`. All text is XML-escaped. Drafts, expired and closed listings are absent. `{base}` = `WORKSHOP0_BASE_URL` or the request origin, as for `public_url`. **Extended in Phase 13:** also `{base}/trainers` and one entry per listed (opted-in, ≥ 60 %) trainer, see §Phase 13 endpoints → Server-rendered trainer pages.
+`application/xml; charset=utf-8`. The body is a `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` with `{base}/opportunities` (no `lastmod`; **superseded in Phase 13b** by the final URLs `{base}/`, `{base}/app/opportunities/`, `{base}/app/network/directory/` — see §Phase 13b) and then one `<url>` per **effective-open** listing, ordered by `published_at` desc and `id` desc: `<loc>{public_url}</loc><lastmod>{updated_at, YYYY-MM-DD}</lastmod>`. All text is XML-escaped. Drafts, expired and closed listings are absent. `{base}` = `WORKSHOP0_BASE_URL` or the request origin, as for `public_url`. **Extended in Phase 13:** also `{base}/trainers` and one entry per listed (opted-in, ≥ 60 %) trainer, see §Phase 13 endpoints → Server-rendered trainer pages.
 
 ## `GET /robots.txt`
 `text/plain; charset=utf-8`, exactly:
@@ -753,7 +754,7 @@ Disallow: /app/f/
 Disallow: /app/p/
 Sitemap: {base}/sitemap.xml
 ```
-**Extended in Phase 13:** three more `Disallow` lines (`/app/network/trainer/`, `/app/network/searches/`, `/app/network/unsubscribed/`), see §Phase 13 endpoints → Server-rendered trainer pages.
+**Extended in Phase 13:** three more `Disallow` lines (`/app/network/trainer/`, `/app/network/searches/`, `/app/network/unsubscribed/`), see §Phase 13 endpoints → Server-rendered trainer pages. **Extended again in Phase 13b:** eight more `Disallow` lines for the sign-in, create, join and private network pages; the full current text is in §Phase 13b → `GET /robots.txt`.
 > **Assumed:** besides the three requested paths, the token-bearing facilitator and participant links and the duplicate `/app/opportunities/view/` URL are disallowed. Disallowing `/admin` also covers `/admin/…`.
 
 ## Hard rule extension (gate-tested)
@@ -852,8 +853,8 @@ A profile is **listed** iff `visibility = 'public'` **and** `public_slug` is set
 
 Registered with the 11e router (before the `/app` mount).
 - `GET /trainers` → **307** `/app/network/directory/` (like `/opportunities`).
-- `GET /trainers/{slug}/` → 301 to the slash-less path. `GET /trainers/{slug}`: slug not matching `^[A-Za-z0-9-]{1,80}$` or not listed → **404** with the same HTML shell and an SEO block of only `<title>Trainer not available — Workshop0</title>` and `<meta name="robots" content="noindex">`. A mixed-case key that lower-cases to a listed slug → 301 to the lower-case path. Listed → **200** with the exported `frontend/out/network/trainer/index.html`, its `<title>` and description meta removed, and, between `<!--w0-seo-->` and `<!--/w0-seo-->` before `</head>`: `<title>{display_name} — {headline} — Workshop0</title>`, `<meta name="description">` (the headline, then the bio, cut to 160 characters at a word boundary), `canonical` = `{base}/trainers/{slug}`, `og:type=profile`, `og:site_name`, `og:title`, `og:description`, `og:url`, `twitter:card=summary` and title/description, and one JSON-LD `Person`: `{"@context": "https://schema.org", "@type": "Person", "name", "jobTitle": <headline>, "url", "knowsAbout": [<topic names>], "sameAs": [<set links>], "address": {"@type": "PostalAddress", "addressLocality": <city>}}` (`address` only when a city is set). Escaping and `json_for_script` are the 11e rules. No `og:image` (the avatar is not embedded). The block is built only from the `directory.get_public` dict.
-- **Sitemap** (`GET /sitemap.xml`): after the Phase-11e entries (`{base}/opportunities`, then the open listings) the body gets `{base}/trainers` (no `lastmod`) **inserted right after `{base}/opportunities`**, and then one `<url>` per listed trainer from `directory.sitemap_entries`: `<loc>{base}/trainers/{slug}</loc><lastmod>{profile.updated_at, YYYY-MM-DD}</lastmod>`, ordered like the directory. Private, under-60 % and never-public profiles are absent; so are the numeric ids. This supersedes the "exactly the board and the open listings" wording of §Phase 11e.
+- `GET /trainers/{slug}/` → 301 to the slash-less path. `GET /trainers/{slug}`: slug not matching `^[A-Za-z0-9-]{1,80}$` or not listed → **404** with the same HTML shell and an SEO block of only `<title>Trainer not available — Workshop0</title>` and `<meta name="robots" content="noindex">`. A mixed-case key that lower-cases to a listed slug → 301 to the lower-case path. Listed → **200** with the exported `frontend/out/network/trainer/index.html`, its `<title>` and description meta removed, and, between `<!--w0-seo-->` and `<!--/w0-seo-->` before `</head>`: `<title>{display_name} — {headline} — Workshop0</title>`, `<meta name="description">` (the headline, then the bio, cut to 160 characters at a word boundary), `canonical` = `{base}/trainers/{slug}`, `og:type=profile`, `og:site_name`, `og:title`, `og:description`, `og:url`, `twitter:card=summary` (`summary_large_image` since Phase 13b) and title/description, the generic share-image tags (Phase 13b, §Phase 13b → Share images), and one JSON-LD `Person`: `{"@context": "https://schema.org", "@type": "Person", "name", "jobTitle": <headline>, "url", "knowsAbout": [<topic names>], "sameAs": [<set links>], "address": {"@type": "PostalAddress", "addressLocality": <city>}}` (`address` only when a city is set). Escaping and `json_for_script` are the 11e rules. The avatar is never embedded; until Phase 13b there was no `og:image`, since then it is only the generic share image. The block is built only from the `directory.get_public` dict.
+- **Sitemap** (`GET /sitemap.xml`; the index entries are **superseded in Phase 13b**, see §Phase 13b — the per-trainer entries below are unchanged): after the Phase-11e entries (`{base}/opportunities`, then the open listings) the body gets `{base}/trainers` (no `lastmod`) **inserted right after `{base}/opportunities`**, and then one `<url>` per listed trainer from `directory.sitemap_entries`: `<loc>{base}/trainers/{slug}</loc><lastmod>{profile.updated_at, YYYY-MM-DD}</lastmod>`, ordered like the directory. Private, under-60 % and never-public profiles are absent; so are the numeric ids. This supersedes the "exactly the board and the open listings" wording of §Phase 11e.
 - **Robots** gains `Disallow: /app/network/trainer/` (the duplicate client route) and `Disallow: /app/network/searches/` and `Disallow: /app/network/unsubscribed/`, inserted after `Disallow: /app/network/me/`; the `Sitemap:` line stays last. The §Phase 11e text is otherwise unchanged.
 - **Client page** `/app/network/trainer/` reads its key in this order: `?slug=`, then `window.location.pathname` matching `^/trainers/([^/]+)/?$` (read in an effect after mount, because the page is served outside `basePath`). It calls `GET /api/public/trainers/{slug}` and, when reached at `/app/network/trainer/?slug=…`, `location.replace`s to `/trainers/{slug}`.
 - **Hard rule extension (gate-tested):** no injected block, 404 HTML or sitemap ever contains an email address, a rate, a note, a tag, a numeric profile or user id, or any trainer who is not listed.
@@ -877,3 +878,83 @@ Linking grants the trainer the workshop's existing facilitator link and nothing 
 
 `network.alert` — subject `New opportunity: {{ title }}`; `network.digest` — subject `Your Workshop0 digest: {{ count }} new opportunities`. Both are plain-text + simple HTML with exactly one footer line (added by `render`), absolute links, no images, an unsubscribe line and a manage-preferences line in the body. The repeat section `{{#listings}}…{{/listings}}` renders each digest item (`title`, `partner`, `compensation`, `cities`, `url`). Mail whose context carries an absolute `unsubscribe_url` (alerts, digest) is sent with `List-Unsubscribe: <unsubscribe_url>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 2369/8058; the client's one-click POST hits `POST /api/email/unsubscribe?t=…`); other templates carry neither header. Alerts and digests honour the Phase-12 drain rules unchanged: SMTP unset → `recorded`; per-recipient and global limits → `recorded` with `rate_limited`; 3 attempts → `failed`.
 
+---
+
+# Phase 13b — Sitemap & page-head SEO (SMA-26; no new endpoint, no migration)
+
+Organic search for `workshop0.smalltech.in`. Google reports a sitemap URL that answers with a redirect as "Page with redirect" and does not index it, so the sitemap lists only URLs that answer **200** themselves. The pretty links `GET /opportunities` → 307 `/app/opportunities/` and `GET /trainers` → 307 `/app/network/directory/` are **unchanged**; they are simply no longer sitemap entries. `{base}` is as in §Phase 11e (`WORKSHOP0_BASE_URL` or the request origin).
+
+## `GET /sitemap.xml`
+Same media type, namespace, escaping and per-entry rules as §Phase 11e and §Phase 13. The entries, in order:
+1. `{base}/` — the landing page (served at `/` itself, its one canonical URL), no `lastmod`;
+2. `{base}/app/opportunities/` — the board, no `lastmod`;
+3. `{base}/app/network/directory/` — the trainer directory, no `lastmod`;
+4. one `<url>` per effective-open listing (`{base}/opportunities/{slug}` with `lastmod`), ordered as in §Phase 11e;
+5. one `<url>` per listed trainer (`{base}/trainers/{slug}` with `lastmod`), ordered as in §Phase 13.
+
+`{base}/opportunities` and `{base}/trainers` never appear as entries. The three index paths are the module constant `services/seo.SITEMAP_INDEX_PATHS`.
+
+## `GET /robots.txt`
+`text/plain; charset=utf-8`, exactly (this supersedes the texts of §Phase 11e and §Phase 13):
+```
+User-agent: *
+Disallow: /admin
+Disallow: /app/admin/
+Disallow: /api/
+Disallow: /network/me
+Disallow: /app/network/me/
+Disallow: /app/network/trainer/
+Disallow: /app/network/searches/
+Disallow: /app/network/unsubscribed/
+Disallow: /app/network/join/
+Disallow: /app/network/applications/
+Disallow: /app/network/matches/
+Disallow: /app/opportunities/view/
+Disallow: /app/signin/
+Disallow: /app/create/
+Disallow: /app/join/
+Disallow: /f/
+Disallow: /p/
+Disallow: /j/
+Disallow: /invite/
+Disallow: /app/f/
+Disallow: /app/p/
+Sitemap: {base}/sitemap.xml
+```
+New in 13b: `/app/network/join/` (onboarding), `/app/network/applications/` and `/app/network/matches/` (signed-in pages), `/app/signin/`, `/app/create/` (keyless workshop creation), `/app/join/` (participant join) and the pretty prefixes `/j/` (join code) and `/invite/` (invite token) that redirect to them. No rule matches `/`, `/app/opportunities/`, `/app/network/directory/`, `/opportunities/{slug}` or `/trainers/{slug}`.
+> **Assumed:** the network home `/app/network/` (only a sign-in prompt or a redirect into the private pages; the target of the pretty `/network`) is left crawlable: a `Disallow: /app/network/` prefix would also block the directory.
+
+## Static head metadata (frontend, Next.js `metadata`)
+The static export cannot know the request origin, so the public origin is the build-time constant `SITE_URL = "https://workshop0.smalltech.in"` in `frontend/lib/site.ts` (the domain `WORKSHOP0_BASE_URL` names in production); the root layout sets `metadataBase` to it. `publicPageMetadata({title, description, path})` emits, for each of the three indexable static pages: `<title>`, `<meta name="description">`, `<link rel="canonical" href="{SITE_URL}{path}">`, `og:type=website`, `og:site_name=Workshop0`, `og:locale=en_IN`, `og:title`, `og:description`, `og:url` (= canonical), the page's share image (`og:image` = `{SITE_URL}/app/og/{file}`, `og:image:width=1200`, `og:image:height=630`, `og:image:alt`), `twitter:card=summary_large_image`, `twitter:title`, `twitter:description`, `twitter:image` (the same absolute URL) and `twitter:image:alt`. The image file and alt text are arguments of `publicPageMetadata` (see Share images below).
+
+| Page | Path (canonical) | Title |
+|---|---|---|
+| Landing (`app/page.tsx`) | `/` | `Workshop0 — the Trainer Network for Gen AI & agentic AI trainers` |
+| Board (`app/opportunities/page.tsx`) | `/app/opportunities/` | `Opportunities for AI & tech trainers — Workshop0` |
+| Directory (`app/network/directory/page.tsx`) | `/app/network/directory/` | `Trainer directory — AI & tech trainers — Workshop0` |
+
+- The board and the directory pages are **server components that only export `metadata`** and render the client components `components/board/BoardPage.tsx` and `components/directory/DirectoryPage.tsx`; the client `document.title` effects are gone, so the static title is the only one. Metadata sits on the **page**, never in a segment layout, so the server-rewritten templates `opportunities/view/` and `network/trainer/` inherit nothing but the root title and description (which `services/seo.py` strips).
+- The **root layout** keeps only defaults: `metadataBase`, the title `Workshop0` and the description "Workshop0 by smallTech: the Trainer Network and Opportunity Board for Generative AI, agentic AI and tech trainers, plus a free toolkit for running hands-on workshops." It never sets canonical, Open Graph or Twitter tags.
+- The **landing page** also renders one `<script type="application/ld+json">` (`<`, `>`, `&` escaped as `\u003c`, `\u003e`, `\u0026`): `{"@context": "https://schema.org", "@graph": [{"@type": "Organization", "@id": "https://smalltech.in/#organization", "name": "smallTech", "url": "https://smalltech.in", "logo": "{SITE_URL}/app/smalltech-logo.png"}, {"@type": "WebSite", "@id": "{SITE_URL}/#website", "name": "Workshop0", "url": "{SITE_URL}/", "description", "inLanguage": "en", "publisher": {"@id": "https://smalltech.in/#organization"}}]}`.
+- The landing page is also reachable at `/app/` (307 → `/`); its canonical is always `{SITE_URL}/`.
+
+## Share images (Open Graph / Twitter)
+Four 1200×630 PNGs (each under 300 KB) in `frontend/public/og/`, served by the static mount at `{origin}/app/og/{file}`:
+
+| File | Used by | `og:image:alt` / `twitter:image:alt` |
+|---|---|---|
+| `landing.png` | landing `/` | `Workshop0 by smallTech — You teach AI. We find you the rooms that need you.` |
+| `opportunities.png` | board `/app/opportunities/` | `Workshop0 Opportunity Board — opportunities for AI & tech trainers` |
+| `directory.png` | directory `/app/network/directory/` | `Workshop0 trainer directory — find AI & tech trainers` |
+| `default.png` | server-rendered `/opportunities/{slug}` and `/trainers/{slug}` | `Workshop0 by smallTech — the Trainer Network for Gen AI & agentic AI trainers` |
+
+- **Content:** the Workshop0 name, "by smallTech" with the smallTech logo (`public/smalltech-logo.png`), `workshop0.smalltech.in`, a pill, a two-tone headline, one sub-line and topic/type chips, in Inter on the brand indigo palette of `app/globals.css`. All copy is taken from the page it represents (landing hero and the page metadata); no stock imagery, no counts, no claims the site does not already make.
+- **Source:** generated, not hand-drawn. `scripts/og/template.html` (one HTML/CSS template, variant chosen by the URL hash) is rendered by `scripts/og/render.js` with Playwright Chromium at viewport 1200×630, `deviceScaleFactor` 1. Run from the repo root: `node scripts/og/render.js` (needs Playwright with Chromium and the Inter font installed system-wide; it fails if Inter or the logo does not load). The PNGs are committed; the build does not regenerate them.
+- **Server-rendered pages:** every listing (open, closed or expired) and every listed trainer page block gains, right after `og:url`:
+  ```html
+  <meta property="og:image" content="{base}/app/og/default.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="{default_alt}">
+  ```
+  and its Twitter lines become `<meta name="twitter:card" content="summary_large_image">`, `twitter:title`, `twitter:description`, then `<meta name="twitter:image" content="{base}/app/og/default.png">` and `<meta name="twitter:image:alt" content="{default_alt}">`. `{base}` is the same base as the canonical; `{default_alt}` is the alt text above, HTML-escaped (`&` → `&amp;`). The image is a static, generic asset: it is never built from listing or trainer data (no title, partner, avatar or name), so the 11e/13 allow-lists and no-leak rules are unchanged. The 404 blocks (`<title>` + `noindex` only) get no image.
