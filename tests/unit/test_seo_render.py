@@ -164,11 +164,39 @@ def test_template_without_head_close_still_gets_the_block():
 
 
 def test_sitemap_and_robots():
-    xml = seo.render_sitemap(BASE, [(f"{BASE}/opportunities/a-b-1234?x=1&y=2", NOW)])
-    assert "<loc>https://example.test/opportunities</loc>" in xml
+    xml = seo.render_sitemap(
+        BASE, [(f"{BASE}/opportunities/a-b-1234?x=1&y=2", NOW)], [("asha-rao-3f9c", NOW)]
+    )
+    locs = re.findall(r"<loc>(.*?)</loc>", xml)
+    # Phase 13b: the final 200 URLs of the index pages first, landing page leading.
+    assert locs == [
+        "https://example.test/",
+        "https://example.test/app/opportunities/",
+        "https://example.test/app/network/directory/",
+        "https://example.test/opportunities/a-b-1234?x=1&amp;y=2",
+        "https://example.test/trainers/asha-rao-3f9c",
+    ]
+    assert "<url><loc>https://example.test/</loc></url>" in xml  # index pages carry no lastmod
     assert "<loc>https://example.test/opportunities/a-b-1234?x=1&amp;y=2</loc><lastmod>2026-11-10</lastmod>" in xml
-    assert xml.index("/opportunities</loc>") < xml.index("/trainers</loc>") < xml.index("a-b-1234")
+    # Never the 307 pretty links.
+    assert "<loc>https://example.test/opportunities</loc>" not in xml
+    assert "<loc>https://example.test/trainers</loc>" not in xml
     robots = seo.render_robots(BASE)
     assert robots.splitlines()[0] == "User-agent: *"
     assert robots.splitlines()[-1] == "Sitemap: https://example.test/sitemap.xml"
     assert "Disallow: /network/me" in robots.splitlines()
+
+
+def test_robots_blocks_private_pages_but_not_the_indexable_ones():
+    lines = seo.render_robots(BASE).splitlines()
+    for private in (
+        "/app/signin/", "/app/create/", "/app/join/", "/app/network/join/",
+        "/app/network/applications/", "/app/network/matches/", "/j/", "/invite/",
+    ):
+        assert f"Disallow: {private}" in lines
+    rules = [line.split(": ", 1)[1] for line in lines if line.startswith("Disallow: ")]
+    for public in (
+        "/", "/app/opportunities/", "/app/network/directory/",
+        "/opportunities/genai-workshop-bengaluru-a3f9", "/trainers/asha-rao-3f9c",
+    ):
+        assert not any(public.startswith(rule) for rule in rules), public

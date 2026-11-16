@@ -23,14 +23,27 @@ Disallow: /app/network/me/
 Disallow: /app/network/trainer/
 Disallow: /app/network/searches/
 Disallow: /app/network/unsubscribed/
+Disallow: /app/network/join/
+Disallow: /app/network/applications/
+Disallow: /app/network/matches/
 Disallow: /app/opportunities/view/
+Disallow: /app/signin/
+Disallow: /app/create/
+Disallow: /app/join/
 Disallow: /f/
 Disallow: /p/
+Disallow: /j/
+Disallow: /invite/
 Disallow: /app/f/
 Disallow: /app/p/
 Sitemap: {base}/sitemap.xml
 """
 SITEMAP_NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
+INDEX_LOCS = [  # Phase 13b: landing, board, directory — the final 200 URLs
+    "http://testserver/",
+    "http://testserver/app/opportunities/",
+    "http://testserver/app/network/directory/",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -172,24 +185,38 @@ def test_sitemap_lists_exactly_the_open_listings(client, admin_headers, create_o
     root = ET.fromstring(response.content)
     assert root.tag == f"{SITEMAP_NS}urlset"
     locs = [el.text for el in root.iter(f"{SITEMAP_NS}loc")]
-    assert locs[0] == "http://testserver/opportunities"
-    assert locs[1] == "http://testserver/trainers"
-    assert set(locs) == {
-        "http://testserver/opportunities", "http://testserver/trainers",
-        open_a["public_url"], open_b["public_url"],
-    }
-    assert len(locs) == 4
-    assert locs[2:] == [open_b["public_url"], open_a["public_url"]]  # newest published first
+    assert locs[:3] == INDEX_LOCS
+    assert set(locs) == {*INDEX_LOCS, open_a["public_url"], open_b["public_url"]}
+    assert len(locs) == 5
+    assert locs[3:] == [open_b["public_url"], open_a["public_url"]]  # newest published first
     for el in root.iter(f"{SITEMAP_NS}lastmod"):
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", el.text)
     for gone in (closed, expired, draft):
         assert gone["slug"] not in response.text
 
 
-def test_empty_sitemap_has_only_the_two_indexes(client):
+def test_empty_sitemap_has_only_the_three_index_pages(client):
     root = ET.fromstring(client.get("/sitemap.xml").content)
-    assert [el.text for el in root.iter(f"{SITEMAP_NS}loc")] == [
-        "http://testserver/opportunities", "http://testserver/trainers"]
+    assert [el.text for el in root.iter(f"{SITEMAP_NS}loc")] == INDEX_LOCS
+    # Index pages carry no lastmod.
+    assert list(root.iter(f"{SITEMAP_NS}lastmod")) == []
+
+
+def test_sitemap_lists_final_urls_not_redirects(client):
+    """Phase 13b: no sitemap URL may answer with a redirect (Google: "Page with redirect")."""
+    text = client.get("/sitemap.xml").text
+    assert "<loc>http://testserver/opportunities</loc>" not in text
+    assert "<loc>http://testserver/trainers</loc>" not in text
+    # The pretty links themselves are unchanged 307s to exactly the listed URLs.
+    for pretty, target in (("/opportunities", "/app/opportunities/"),
+                           ("/trainers", "/app/network/directory/")):
+        response = client.get(pretty, follow_redirects=False)
+        assert response.status_code == 307
+        assert response.headers["location"] == target
+        assert f"<loc>http://testserver{target}</loc>" in text
+    # The landing page is served at `/` itself (200 when the export exists, 503
+    # when it has not been built — never a redirect).
+    assert client.get("/", follow_redirects=False).status_code in (200, 503)
 
 
 def test_robots_is_exact(client):
@@ -212,7 +239,8 @@ def test_configured_base_url_is_used_everywhere(client, create_opportunity, monk
     assert f'<meta property="og:url" content="{url}">' in html
     sitemap = client.get("/sitemap.xml").text
     assert f"<loc>{url}</loc>" in sitemap
-    assert "<loc>https://workshop0.smalltech.in/opportunities</loc>" in sitemap
+    for path in ("/", "/app/opportunities/", "/app/network/directory/"):
+        assert f"<loc>https://workshop0.smalltech.in{path}</loc>" in sitemap
     assert client.get("/robots.txt").text == ROBOTS.format(base="https://workshop0.smalltech.in")
 
 

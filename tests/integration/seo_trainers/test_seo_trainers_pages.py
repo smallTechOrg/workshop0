@@ -164,7 +164,8 @@ def test_sitemap_has_only_listed_trainers(client):
     r = client.get("/sitemap.xml")
     locs = [el.text for el in ET.fromstring(r.content).iter(f"{NS}loc")]
     assert locs == [
-        "http://testserver/opportunities", "http://testserver/trainers",
+        "http://testserver/", "http://testserver/app/opportunities/",
+        "http://testserver/app/network/directory/",
         f"http://testserver/trainers/{a['slug']}", f"http://testserver/trainers/{b['slug']}",
     ]
     for m in re.findall(r"<lastmod>(.*?)</lastmod>", r.text):

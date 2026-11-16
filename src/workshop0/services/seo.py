@@ -1,4 +1,5 @@
-"""Server-rendered SEO for public listings, the sitemap and robots.txt (api.md §Phase 11e).
+"""Server-rendered SEO for public listings, the sitemap and robots.txt (api.md §Phase 11e,
+§Phase 13, §Phase 13b).
 
 Pure functions. Every listing input is the PUBLIC detail dict built by the allow-list
 serializer `services/opportunities.public_detail` — this module never sees an ORM row,
@@ -40,12 +41,24 @@ ROBOTS_LINES = (
     "Disallow: /app/network/trainer/",
     "Disallow: /app/network/searches/",
     "Disallow: /app/network/unsubscribed/",
+    "Disallow: /app/network/join/",
+    "Disallow: /app/network/applications/",
+    "Disallow: /app/network/matches/",
     "Disallow: /app/opportunities/view/",
+    "Disallow: /app/signin/",
+    "Disallow: /app/create/",
+    "Disallow: /app/join/",
     "Disallow: /f/",
     "Disallow: /p/",
+    "Disallow: /j/",
+    "Disallow: /invite/",
     "Disallow: /app/f/",
     "Disallow: /app/p/",
 )
+
+# The static index pages listed first in the sitemap (api.md §Phase 13b): their
+# final 200 URLs, never the 307 pretty links `/opportunities` and `/trainers`.
+SITEMAP_INDEX_PATHS = ("/", "/app/opportunities/", "/app/network/directory/")
 
 
 def _esc(value: str) -> str:
@@ -252,12 +265,12 @@ def render_sitemap(
     trainer_entries: list[tuple[str, date | datetime]] | None = None,
 ) -> str:
     """`entries` = (public_url, updated_at) per effective-open listing, already ordered.
-    `trainer_entries` = (slug, updated_at) per listed trainer, directory order."""
+    `trainer_entries` = (slug, updated_at) per listed trainer, directory order.
+    The landing page, the board and the directory come first, without `lastmod`."""
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-        f"<url><loc>{xml_escape(base_url + '/opportunities')}</loc></url>",
-        f"<url><loc>{xml_escape(base_url + '/trainers')}</loc></url>",
+        *(f"<url><loc>{xml_escape(base_url + path)}</loc></url>" for path in SITEMAP_INDEX_PATHS),
     ]
     for url, updated in [*entries, *((trainer_url(base_url, s), u) for s, u in trainer_entries or [])]:
         day = updated.date() if isinstance(updated, datetime) else updated
